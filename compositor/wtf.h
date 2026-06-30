@@ -73,6 +73,13 @@ void wtf_set_inactive_opacity(double opacity);
 void wtf_set_border_width(int width);
 /* Border color; active != 0 sets the focused color, 0 the unfocused. RGB 0..1. */
 void wtf_set_border_color(int active, double r, double g, double b);
+/* ---- E1 per-window style overrides (driven by the brain per window) ---- */
+/* Per-window border color override (RGBA 0..1); authoritative until cleared. */
+void wtf_set_window_border_color(int id, double r, double g, double b, double a);
+/* Per-window opacity target override (0..1); animates via the existing lerp. */
+void wtf_set_window_opacity(int id, double opacity);
+/* Clear both per-window overrides; window reverts to the global focus path. */
+void wtf_clear_window_style(int id);
 /* Rounded-corner radius in pixels (0 = sharp). */
 void wtf_set_corner_radius(int radius);
 /* Backdrop blur: enable/disable + radius and pass count (<=0 keeps current). */

@@ -61,6 +61,19 @@ module Ffi =
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_border_color(int active, double r, double g, double b)
 
+    // ---- E1 per-window appearance overrides ----
+    // These set a PER-WINDOW target by id that overrides the global active/inactive
+    // logic for that window only. Opacity still animates via the existing lerp.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_window_border_color(int id, double r, double g, double b, double a)
+
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_window_opacity(int id, double opacity)
+
+    /// Drop both per-window overrides for `id`, reverting it to the global path.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_clear_window_style(int id)
+
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_corner_radius(int radius)
 

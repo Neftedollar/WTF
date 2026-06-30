@@ -180,6 +180,12 @@ struct wtf_toplevel {
 	int cw, ch;                 /* configured content size (for border sizing) */
 	struct wlr_scene_rect *border;  /* colored frame behind the window */
 
+	/* --- E1 per-window style overrides (driven by the F# brain per window) --- */
+	float  win_border[4];       /* override border RGBA, used when has_win_border */
+	bool   has_win_border;      /* false (calloc) => fall back to global active/inactive */
+	double win_opacity;         /* override opacity target, used when has_win_opacity */
+	bool   has_win_opacity;     /* false (calloc) => fall back to global active/inactive */
+
 	struct wl_listener map;
 	struct wl_listener unmap;
 	struct wl_listener commit;
@@ -475,10 +481,12 @@ static void focus_toplevel(struct wtf_toplevel *toplevel) {
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		bool active = (t == toplevel);
-		t->target_opacity = active ? WTF_ACTIVE_OPACITY : g_inactive_opacity;
+		t->target_opacity = t->has_win_opacity ? t->win_opacity
+			: (active ? WTF_ACTIVE_OPACITY : g_inactive_opacity);
 		if (t->border != NULL) {
 			wlr_scene_rect_set_color(t->border,
-				active ? g_active_border : g_inactive_border);
+				t->has_win_border ? t->win_border
+					: (active ? g_active_border : g_inactive_border));
 		}
 	}
 	schedule_frame();
@@ -1888,6 +1896,7 @@ void wtf_set_inactive_opacity(double opacity) {
 	/* Re-target every currently-inactive window so the change is visible now. */
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
+		if (t->has_win_opacity) continue;  /* per-window override wins */
 		if (t->target_opacity < WTF_ACTIVE_OPACITY) {
 			t->target_opacity = g_inactive_opacity;
 		}
@@ -1915,6 +1924,54 @@ void wtf_set_border_color(int active, double r, double g, double b) {
 	dst[1] = (float)g;
 	dst[2] = (float)b;
 	dst[3] = 1.0f;
+	schedule_frame();
+}
+
+/* ---- E1: per-window style overrides (pushed by the brain per window) ---- */
+
+/* Set a per-window border color override (RGBA 0..1). Authoritative over the
+ * global active/inactive border until cleared. Border is INSTANT for E1. */
+void wtf_set_window_border_color(int id, double r, double g, double b, double a) {
+	struct wtf_toplevel *t = toplevel_by_id(id);
+	if (t == NULL) return;
+	float nr = (float)r, ng = (float)g, nb = (float)b, na = (float)a;
+	/* Cheap C-side de-dup: skip if already set to the same color. */
+	if (t->has_win_border &&
+		t->win_border[0] == nr && t->win_border[1] == ng &&
+		t->win_border[2] == nb && t->win_border[3] == na) {
+		return;
+	}
+	t->win_border[0] = nr;
+	t->win_border[1] = ng;
+	t->win_border[2] = nb;
+	t->win_border[3] = na;
+	t->has_win_border = true;
+	if (t->border != NULL) {
+		wlr_scene_rect_set_color(t->border, t->win_border);
+	}
+	schedule_frame();
+}
+
+/* Set a per-window opacity target override (0..1). Animates via the existing
+ * animate_toplevels() lerp, exactly like the global path. */
+void wtf_set_window_opacity(int id, double opacity) {
+	struct wtf_toplevel *t = toplevel_by_id(id);
+	if (t == NULL) return;
+	if (opacity < 0.0) opacity = 0.0;
+	if (opacity > 1.0) opacity = 1.0;
+	t->win_opacity = opacity;
+	t->has_win_opacity = true;
+	t->target_opacity = opacity;
+	schedule_frame();
+}
+
+/* Clear BOTH per-window overrides; the window reverts to the global
+ * active/inactive path on the next focus/style pass. */
+void wtf_clear_window_style(int id) {
+	struct wtf_toplevel *t = toplevel_by_id(id);
+	if (t == NULL) return;
+	t->has_win_border = false;
+	t->has_win_opacity = false;
 	schedule_frame();
 }
 

@@ -192,11 +192,66 @@ let private applyEffects effects =
 // ---- undo/redo history (Core owns the logic, Host owns the cell) ----
 let mutable history = History.create cfg.HistoryLimit world
 
+// ---- E1: per-window dynamic appearance (border color + opacity) ----
+// De-dup caches so re-evaluating on focus/map/arrange does not spam the FFI. Only
+// touched when a borderColor/windowOpacity FUNCTION is configured (gated below).
+let private lastBorder = System.Collections.Generic.Dictionary<int, float * float * float>()
+let private lastOpacity = System.Collections.Generic.Dictionary<int, float>()
+
+/// Re-evaluate the dynamic appearance functions for every window visible on the
+/// current workspace and push the per-window border-color / opacity overrides
+/// (de-duped). GATED: if neither borderColor nor windowOpacity is configured this
+/// is a NO-OP (zero FFI calls) and appearance stays fully on the C global path —
+/// byte-for-byte today's behavior, including the live SetInactiveOpacity/
+/// SetBorderColor knobs and legacy focus coloring. Per-knob gating means
+/// configuring only one leaves the other entirely on the global path.
+/// Runs on the loop thread (safe to call Ffi).
+let private restyleWindows (w: World) : unit =
+    let pushBorder = cfg.BorderColorOf.IsSome
+    let pushOpac = cfg.OpacityOf.IsSome
+    if pushBorder || pushOpac then
+        let focused = World.focusedWindow w
+        let ids =
+            (World.currentWorkspace w).Stack
+            |> Option.map Stack.toList
+            |> Option.defaultValue []
+        for id in ids do
+            match Map.tryFind id w.Windows with
+            | None -> ()
+            | Some info ->
+                let ctx = { Window = info; Workspace = w.Current; Focused = (focused = Some id) }
+                let style = Appearance.resolveWindowStyle cfg ctx
+                if pushBorder then
+                    let changed =
+                        match lastBorder.TryGetValue id with
+                        | true, v -> v <> style.BorderColor
+                        | _ -> true
+                    if changed then
+                        lastBorder[id] <- style.BorderColor
+                        let (r, g, b) = style.BorderColor
+                        Ffi.wtf_set_window_border_color (id, r, g, b, 1.0)
+                if pushOpac then
+                    let changed =
+                        match lastOpacity.TryGetValue id with
+                        | true, v -> v <> style.Opacity
+                        | _ -> true
+                    if changed then
+                        lastOpacity[id] <- style.Opacity
+                        Ffi.wtf_set_window_opacity (id, style.Opacity)
+
+/// Drop the de-dup cache entry for a window that is gone (its C toplevel is
+/// destroyed, so no FFI clear is needed — this just prevents a stale-id match if
+/// the compositor ever recycles the id).
+let private forgetStyle (id: int) : unit =
+    lastBorder.Remove id |> ignore
+    lastOpacity.Remove id |> ignore
+
 /// Re-sync the compositor to a world that was swapped in out-of-band (undo/redo
 /// /restore): re-tile and re-focus. Mirrors the onViewUnmap pattern exactly.
 let private resync (w: World) =
     applyEffects [ Arrange(World.arrange w) ]
     World.focusedWindow w |> Option.iter Ffi.wtf_focus
+    restyleWindows w
 
 /// Settings-only restore: adopt a saved session's Current / Nmaster / Ratio /
 /// Gaps and per-workspace layout names, but keep the *live* window set — a fresh
@@ -241,6 +296,7 @@ let private dispatch (cmd: Command) : unit =
             history <- History.push w' history
         world <- w'
         applyEffects effects
+        restyleWindows world
 
 // ---- callbacks invoked by the C compositor (C -> F#) ----
 
@@ -256,6 +312,7 @@ let onViewMap (id: int) (appId: nativeint) (title: nativeint) : unit =
     world <- w'
     applyEffects effects
     Ffi.wtf_focus id
+    restyleWindows world
     for (wid, r) in World.arrange world do
         eprintfn "WTF:   tile id=%d -> %d,%d %dx%d" wid r.X r.Y r.Width r.Height
 
@@ -263,9 +320,11 @@ let onViewUnmap (id: int) : unit =
     let w', effects = Reducer.apply (RemoveWindow id) world
     world <- w'
     applyEffects effects
+    forgetStyle id
     match World.focusedWindow world with
     | Some f -> Ffi.wtf_focus f
     | None -> ()
+    restyleWindows world
 
 let onKey (mods: uint32) (sym: uint32) : int =
     // Media keys are the one INPUT->DBus flow. Recognize XF86Audio* keysyms
@@ -297,6 +356,7 @@ let onOutputResize (x: int) (y: int) (width: int) (height: int) : unit =
     let toL (v: int) : int = Px.rawL (Px.toLogical cfg.Scale (v * 1<ppx>))
     world <- { world with Screen = Rect.create (toL x) (toL y) (toL width) (toL height) }
     applyEffects [ Arrange(World.arrange world) ]
+    restyleWindows world
     // Re-scale the wallpaper to the new output size (image re-scales from the
     // cached original; a solid color just re-sizes the C-side rect).
     Wallpaper.apply activeWallpaper (Px.rawL world.Screen.Width) (Px.rawL world.Screen.Height)
@@ -408,6 +468,20 @@ let applyConfig (c: WtfConfig) : unit =
     // it never throws here, so this can't block startup or a reload.
     activeWallpaper <- if safeMode then Color "#1e1e2e" else c.Wallpaper
     Wallpaper.apply activeWallpaper (Px.rawL world.Screen.Width) (Px.rawL world.Screen.Height)
+    // E1: reconcile dynamic appearance overrides. If a borderColor/windowOpacity
+    // FUNCTION was REMOVED on reload, clear the per-window style (both knobs, the
+    // only clear the ABI offers) for every window we previously pushed, wipe the
+    // de-dup caches, then re-push whichever knob is still configured. With no
+    // dynamic knobs configured (every legacy config), both caches are empty and
+    // this is a pure no-op — appearance stays fully on the C global path.
+    let borderDropped = c.BorderColorOf.IsNone && lastBorder.Count > 0
+    let opacDropped   = c.OpacityOf.IsNone && lastOpacity.Count > 0
+    if borderDropped || opacDropped then
+        let ids = Set.union (Set.ofSeq lastBorder.Keys) (Set.ofSeq lastOpacity.Keys)
+        for id in ids do Ffi.wtf_clear_window_style id
+        lastBorder.Clear()
+        lastOpacity.Clear()
+    restyleWindows world
 
 /// Apply a hot-swapped config (from the file watcher or a REPL eval) LIVE, on
 /// the loop thread. Swaps the live `cfg` (so keybinds / Manage.onAdd / Keymap

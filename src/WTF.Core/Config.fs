@@ -75,6 +75,25 @@ type Wallpaper =
     | Color of string
     | Image of path: string * mode: WallpaperMode
 
+// --- dynamic appearance model (E1: appearance as functions of context) ---
+
+/// The per-window context an appearance knob is evaluated against. A static
+/// value is just a function that ignores this. A future animation workflow ADDS
+/// a `Time`/`Phase` field here (additive — every caller defaults it), so leave
+/// room; do not add it now.
+type RenderContext =
+    { Window: WindowInfo
+      Workspace: string
+      Focused: bool }
+
+/// A context-dependent value: the heart of the effects engine. `Dyn<string>` is a
+/// border color that can vary per app/state; `Dyn<float>` a per-window opacity.
+type Dyn<'a> = RenderContext -> 'a
+
+module Dyn =
+    let constant (x: 'a) : Dyn<'a> = fun _ -> x
+    let map (f: 'a -> 'b) (d: Dyn<'a>) : Dyn<'b> = d >> f
+
 /// xMonad's XConfig analog.
 type WtfConfig =
     { ModKey: string                    // "Super" | "Alt"
@@ -95,7 +114,11 @@ type WtfConfig =
       Scale: float                      // HiDPI output scale (physical px per logical px); 1.0 = logical px (default)
       HistoryLimit: int                 // undo depth: max retained past states
       Input: InputConfig                // keyboard/mouse/touchpad device settings
-      Wallpaper: Wallpaper }            // background: solid color or decoded image
+      Wallpaper: Wallpaper              // background: solid color or decoded image
+      // --- E1 dynamic appearance overrides (None => fall through to the static
+      // ActiveBorder/InactiveBorder/InactiveOpacity fields, i.e. today's behavior) ---
+      BorderColorOf: Dyn<string> option // per-window border color (returns a #hex)
+      OpacityOf: Dyn<float> option }    // per-window opacity (0..1, clamped on resolve)
 
 module WtfConfig =
     let defaults =
@@ -126,7 +149,46 @@ module WtfConfig =
                 { Tap = true; TapDrag = true; NaturalScroll = true
                   DisableWhileTyping = true; ScrollMethod = "two-finger"
                   ClickMethod = "button-areas"; AccelSpeed = 0.0; AccelProfile = "" } }
-          Wallpaper = Color "#1e1e2e" }
+          Wallpaper = Color "#1e1e2e"
+          BorderColorOf = None
+          OpacityOf = None }
+
+// --- E1 appearance resolution (pure + total; the host calls this per window) ---
+
+/// The resolved, renderer-ready appearance for one window in one context.
+type WindowStyle =
+    { BorderColor: float * float * float   // RGB 0..1
+      Opacity: float }                     // 0..1, already clamped
+
+module Appearance =
+    /// The border color #hex for a window: the configured function if any, else the
+    /// existing focused?active:inactive behavior (reading the live cfg fields).
+    let resolveBorderHex (cfg: WtfConfig) (ctx: RenderContext) : string =
+        match cfg.BorderColorOf with
+        | Some f -> f ctx
+        | None   -> if ctx.Focused then cfg.ActiveBorder else cfg.InactiveBorder
+
+    /// The opacity for a window: the configured function if any, else focused?1.0:
+    /// InactiveOpacity. Clamped to [0,1] — matches the reducer's SetInactiveOpacity.
+    let resolveOpacity (cfg: WtfConfig) (ctx: RenderContext) : float =
+        let o =
+            match cfg.OpacityOf with
+            | Some f -> f ctx
+            | None   -> if ctx.Focused then 1.0 else cfg.InactiveOpacity
+        // Total clamp: NaN (a pathological user function) maps to fully opaque
+        // rather than escaping the [0,1] range. -inf -> 0, +inf -> 1 fall out of
+        // min/max naturally. For real values this is the reducer's SetInactiveOpacity clamp.
+        if System.Double.IsNaN o then 1.0 else min 1.0 (max 0.0 o)
+
+    /// Evaluate both knobs into a renderer-ready style. TOTAL: a bad hex never
+    /// throws — it falls back to the InactiveBorder color, then a Catppuccin grey.
+    let resolveWindowStyle (cfg: WtfConfig) (ctx: RenderContext) : WindowStyle =
+        let hex = resolveBorderHex cfg ctx
+        let rgb =
+            Protocol.hexColor hex
+            |> Option.orElse (Protocol.hexColor cfg.InactiveBorder)
+            |> Option.defaultValue (0.27, 0.28, 0.35)
+        { BorderColor = rgb; Opacity = resolveOpacity cfg ctx }
 
 // --- predicate helpers for manage rules (read like English) ---
 [<AutoOpen>]
@@ -186,6 +248,14 @@ type ConfigBuilder() =
     member _.ActiveBorder(c, v) = { c with ActiveBorder = v }
     [<CustomOperation "inactiveBorder">]
     member _.InactiveBorder(c, v) = { c with InactiveBorder = v }
+    /// Function-form border color: `borderColor (fun w -> if w.Window.AppId="firefox" then "#ff8800" else "#45475a")`.
+    /// Overrides the static active/inactive logic; returns a #hex parsed via Protocol.hexColor.
+    [<CustomOperation "borderColor">]
+    member _.BorderColor(c, f: RenderContext -> string) = { c with BorderColorOf = Some f }
+    /// Function-form per-window opacity: `windowOpacity (fun w -> if w.Window.AppId="foot" then 0.85 else 1.0)`.
+    /// Result is clamped to [0,1] on resolve.
+    [<CustomOperation "windowOpacity">]
+    member _.WindowOpacity(c, f: RenderContext -> float) = { c with OpacityOf = Some f }
     [<CustomOperation "cornerRadius">]
     member _.CornerRadius(c, v) = { c with CornerRadius = v }
     [<CustomOperation "blur">]

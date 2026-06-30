@@ -16,6 +16,7 @@
     <Compile Include="AgentToolsTests.fs" />
     <Compile Include="SessionTests.fs" />
     <Compile Include="ConfigTests.fs" />
+    <Compile Include="AppearanceTests.fs" />
     <Compile Include="FloatingTests.fs" />
     <Compile Include="ChordTests.fs" />
     <Compile Include="BridgeTests.fs" />
