@@ -75,6 +75,39 @@ layer_shell_code = custom_target(
 	command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 )
 
+# ---- libwtf_panel.so — the CLIENT-side "body" for WTF's bar + omnibox apps ----
+# Same vendored layer-shell XML, but the CLIENT header (proxy stubs the client
+# calls). The private-code .c (layer_shell_code above) is identical for both
+# client and server, so it is REUSED as a source here.
+wayland_client = dependency('wayland-client')
+
+layer_shell_client_header = custom_target(
+	'wlr-layer-shell-unstable-v1-client-protocol.h',
+	input: layer_shell_xml,
+	output: 'wlr-layer-shell-unstable-v1-client-protocol.h',
+	command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+shared_library(
+	'wtf_panel',
+	[
+		'wtf-panel.c',
+		layer_shell_client_header,
+		layer_shell_code,
+		# layer-shell's get_popup references xdg_popup_interface, which lives in
+		# the xdg-shell private-code (identical for client + server). Reuse it.
+		xdg_shell_code,
+	],
+	dependencies: [
+		wayland_client,
+		xkbcommon,            # keysym/utf32 from the seat keymap fd
+		m_dep,
+		cc.find_library('rt', required: false),  # shm
+	],
+	include_directories: include_directories('.'),
+	install: true,
+)
+
 # ---- the shared library the F# host P/Invokes (libwtf_shim.so) ----
 shared_library(
 	'wtf_shim',

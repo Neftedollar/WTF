@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- WTF.Bar — WTF's own status bar, a standalone Wayland-CLIENT app (like waybar
+       is to sway). The "F# brain, C body" split applied to a client: libwtf_panel
+       (the C body) does the Wayland/layer-shell/shm plumbing; ALL content +
+       rendering is F# here. It polls the WM agent socket for the snapshot, builds
+       the pure BarModel, and paints it with ImageSharp into the shm buffer. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>wtf-bar</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The shared client brain: Socket (snapshot), BarModel (pure content),
+         Panel (P/Invoke over libwtf_panel), Render (ImageSharp -> shm). Brings the
+         pinned SixLabors ImageSharp/Drawing/Fonts graph transitively. -->
+    <ProjectReference Include="..\WTF.Client\WTF.Client.fsproj" />
+  </ItemGroup>
+
+</Project>

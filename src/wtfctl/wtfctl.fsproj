@@ -9,4 +9,10 @@
     <Compile Include="Program.fs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Share the NDJSON socket client with the bar (factored into WTF.Client.Socket)
+         so both talk to the WM the same way. wtfctl's behavior stays byte-identical. -->
+    <ProjectReference Include="..\WTF.Client\WTF.Client.fsproj" />
+  </ItemGroup>
+
 </Project>

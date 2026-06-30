@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The shared CLIENT library for WTF's own Wayland-client apps (the status bar
+       and the omnibox launcher). It is the "F# brain" half of the client split:
+       the PURE, fully-testable logic (Socket / DesktopEntry / Fuzzy / BarModel) +
+       the P/Invoke wrapper over libwtf_panel (Panel) + the ImageSharp render path
+       (Render). No ProjectReference to WTF.Core — the clients re-read the snapshot
+       JSON themselves and stay decoupled from the brain. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Socket.fs" />
+    <Compile Include="DesktopEntry.fs" />
+    <Compile Include="Fuzzy.fs" />
+    <Compile Include="BarModel.fs" />
+    <Compile Include="Panel.fs" />
+    <Compile Include="Render.fs" />
+  </ItemGroup>
+
+  <!-- Pin all three SixLabors packages explicitly to lock the graph. ImageSharp
+       3.1.12 matches the host's pin; Drawing 2.1.7 is the 2.1.x line whose nuspec
+       targets ImageSharp >= 3.1.11 (NOT Drawing 3.0.0, which needs ImageSharp 4). -->
+  <ItemGroup>
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="2.1.7" />
+    <PackageReference Include="SixLabors.Fonts" Version="2.1.3" />
+  </ItemGroup>
+
+</Project>

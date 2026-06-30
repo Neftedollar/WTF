@@ -23,10 +23,9 @@ module wtfctl.Program
 //   wtfctl '{"cmd":"focus","by":"next"}'   raw JSON passthrough
 
 open System
-open System.IO
-open System.Net.Sockets
 open System.Text.Json
 open System.Text.Json.Nodes
+open WTF.Client
 
 let private jsonEsc (s: string) = s.Replace("\\", "\\\\").Replace("\"", "\\\"")
 
@@ -89,23 +88,10 @@ let toJson (args: string list) : string option =
     | [ "eval"; code ] -> Some(sprintf """{"eval":"%s"}""" (jsonEsc code))
     | _ -> None
 
-let socketPath () =
-    let dir =
-        match Environment.GetEnvironmentVariable "XDG_RUNTIME_DIR" with
-        | null | "" -> "/tmp"
-        | d -> d
-    Path.Combine(dir, "wtf.sock")
-
-let send (line: string) : string =
-    use sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified)
-    sock.Connect(UnixDomainSocketEndPoint(socketPath ()))
-    use stream = new NetworkStream(sock, true)
-    use w = new StreamWriter(stream, AutoFlush = true)
-    use r = new StreamReader(stream)
-    w.WriteLine line
-    match r.ReadLine() with
-    | null -> "(no response)"
-    | s -> s
+// The NDJSON socket client now lives in WTF.Client.Socket (shared with the status
+// bar). These thin aliases keep the call sites + behavior below byte-identical.
+let socketPath () = Socket.socketPath ()
+let send (line: string) : string = Socket.send line
 
 let pretty (json: string) =
     try

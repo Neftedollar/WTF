@@ -20,15 +20,33 @@ if [ ! -d build ]; then
 fi
 ninja -C build
 
-echo ">> 2/3  building F# host"
+echo ">> 2/3  building F# host + client apps (WTF.Bar / WTF.Omnibox if present)"
 cd "$ROOT"
 dotnet build src/WTF.Host/WTF.Host.fsproj -c Release
+# The shared client lib (status bar + omnibox brain). Building it restores the
+# pinned SixLabors ImageSharp/Drawing/Fonts the apps render with.
+dotnet build src/WTF.Client/WTF.Client.fsproj -c Release
+# The app executables are added by a later step; build them only once they exist.
+for app in WTF.Bar WTF.Omnibox; do
+  if [ -f "src/$app/$app.fsproj" ]; then
+    dotnet build "src/$app/$app.fsproj" -c Release
+  fi
+done
 
-echo ">> 3/3  placing libwtf_shim.so next to the host binary"
+echo ">> 3/3  placing libwtf_shim.so + libwtf_panel.so next to the binaries"
 HOSTDIR="$ROOT/src/WTF.Host/bin/Release/net10.0"
-SO=$(find "$ROOT/compositor/build" -name 'libwtf_shim.so' | head -1)
-if [ -z "$SO" ]; then echo "!! libwtf_shim.so not found — check the C build"; exit 1; fi
-cp -v "$SO" "$HOSTDIR/"
+SHIM=$(find "$ROOT/compositor/build" -name 'libwtf_shim.so' | head -1)
+if [ -z "$SHIM" ]; then echo "!! libwtf_shim.so not found — check the C build"; exit 1; fi
+cp -v "$SHIM" "$HOSTDIR/"
+
+# libwtf_panel.so is the CLIENT-side helper (built by the same ninja invocation).
+PANEL=$(find "$ROOT/compositor/build" -name 'libwtf_panel.so' | head -1)
+if [ -z "$PANEL" ]; then echo "!! libwtf_panel.so not found — check the C build"; exit 1; fi
+# Place it next to each app binary that exists so its DllImport("wtf_panel") resolves.
+for app in WTF.Bar WTF.Omnibox; do
+  APPDIR="$ROOT/src/$app/bin/Release/net10.0"
+  [ -d "$APPDIR" ] && cp -v "$PANEL" "$APPDIR/"
+done
 
 echo
 echo ">> Build complete. Run nested with:  bash scripts/run.sh"

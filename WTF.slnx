@@ -8,6 +8,9 @@
     <Project Path="src/WTF.Host/WTF.Host.fsproj" />
     <Project Path="src/wtfctl/wtfctl.fsproj" />
     <Project Path="src/WTF.TypeProviders/WTF.TypeProviders.fsproj" />
+    <Project Path="src/WTF.Client/WTF.Client.fsproj" />
+    <Project Path="src/WTF.Bar/WTF.Bar.fsproj" />
+    <Project Path="src/WTF.Omnibox/WTF.Omnibox.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/WTF.Core.Tests/WTF.Core.Tests.fsproj" />
@@ -16,5 +19,6 @@
     <Project Path="tests/WTF.Agent.Tests/WTF.Agent.Tests.fsproj" />
     <Project Path="tests/WTF.Plugins.Tests/WTF.Plugins.Tests.fsproj" />
     <Project Path="tests/WTF.TypeProviders.Tests/WTF.TypeProviders.Tests.fsproj" />
+    <Project Path="tests/WTF.Client.Tests/WTF.Client.Tests.fsproj" />
   </Folder>
 </Solution>

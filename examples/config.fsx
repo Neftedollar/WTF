@@ -18,7 +18,7 @@ open WTF.Core
 let myKeys =
     keymap {
         bind "M-Return"  (Spawn "foot")
-        bind "M-p"       (Spawn "wofi --show drun")
+        bind "M-p"       (Spawn "wtf-omnibox")
         bind "M-j"       (Focus NextWindow)
         bind "M-k"       (Focus PrevWindow)
         bind "M-S-j"     SwapNext
@@ -52,7 +52,7 @@ let wtfConfig =
         defaultLayout "tall"
         keys myKeys
         manageHook myManage
-        startup [ "waybar"; "foot" ]
+        startup [ "wtf-bar"; "foot" ]
 
         // ---- ricing: appearance (all also live-tunable via wtfctl) ----
         gaps 8

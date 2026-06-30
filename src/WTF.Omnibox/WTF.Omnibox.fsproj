@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- WTF.Omnibox — WTF's own application launcher, a standalone Wayland-CLIENT
+       app (like wofi is to sway). A centered OVERLAY layer-surface with EXCLUSIVE
+       keyboard interactivity. The "F# brain, C body" split: libwtf_panel does the
+       Wayland/layer-shell/shm/keyboard plumbing; ALL of the app discovery, fuzzy
+       ranking, rendering and launching is F# here, over the PURE DesktopEntry +
+       Fuzzy logic in WTF.Client. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>wtf-omnibox</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WTF.Client\WTF.Client.fsproj" />
+  </ItemGroup>
+
+</Project>
