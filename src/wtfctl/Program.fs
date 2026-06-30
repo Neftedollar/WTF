@@ -12,6 +12,9 @@ module wtfctl.Program
 //   wtfctl spawn kitty               launch a program
 //   wtfctl swap next|prev            move the focused window in the stack
 //   wtfctl master 2 | ratio 0.6      tweak the master area
+//   wtfctl float                     toggle floating on the focused window
+//   wtfctl fullscreen                toggle fullscreen on the focused window
+//   wtfctl sinkall                   clear all floating on the current workspace
 //   wtfctl close                     close the focused window
 //   wtfctl '{"cmd":"focus","by":"next"}'   raw JSON passthrough
 
@@ -59,6 +62,9 @@ let toJson (args: string list) : string option =
     | [ "corners"; n ] -> Some(sprintf """{"cmd":"corners","value":%s}""" n)
     | [ "blur"; "on" ] -> Some """{"cmd":"blur","on":true}"""
     | [ "blur"; "off" ] -> Some """{"cmd":"blur","on":false}"""
+    | [ "float" ] -> Some """{"cmd":"float"}"""
+    | [ "fullscreen" ] -> Some """{"cmd":"fullscreen"}"""
+    | [ "sinkall" ] -> Some """{"cmd":"sinkall"}"""
     | [ "close" ] -> Some """{"cmd":"close"}"""
     | _ -> None
 

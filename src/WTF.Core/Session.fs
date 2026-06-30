@@ -53,6 +53,17 @@ module Session =
                 so["focused"] <- JsonValue.Create s.Focus
                 wo["stack"] <- so
             | None -> wo["stack"] <- null
+            // Floating: an array of {id,x,y,w,h}; Fullscreen: an int or null.
+            let floating = JsonArray()
+            for KeyValue(id, r) in ws.Floating do
+                let fo = rectJson r :?> JsonObject
+                fo["id"] <- JsonValue.Create id
+                floating.Add fo
+            wo["floating"] <- floating
+            wo["fullscreen"] <-
+                match ws.Fullscreen with
+                | Some id -> JsonValue.Create id
+                | None -> null
             workspaces.Add wo
         root["workspaces"] <- workspaces
 
@@ -101,9 +112,21 @@ module Session =
                                   let ids = [ for i in sn["windows"].AsArray() -> i.GetValue<int>() ]
                                   let focused = sn["focused"].GetValue<int>()
                                   Stack.ofList ids |> Option.map (Stack.focus focused)
+                          // Guard with null-checks so an OLD session json (without these
+                          // additive keys) still loads with empty/None defaults.
+                          let floating =
+                              match wn["floating"] with
+                              | null -> Map.empty
+                              | fa -> [ for fn in fa.AsArray() -> fn["id"].GetValue<int>(), rect fn ] |> Map.ofList
+                          let fullscreen =
+                              match wn["fullscreen"] with
+                              | null -> None
+                              | v -> Some(v.GetValue<int>())
                           { Tag = wn["tag"].GetValue<string>()
                             Layout = wn["layout"].GetValue<string>()
-                            Stack = stack } ]
+                            Stack = stack
+                            Floating = floating
+                            Fullscreen = fullscreen } ]
 
                 let windows =
                     [ for wn in o["windows"].AsArray() ->

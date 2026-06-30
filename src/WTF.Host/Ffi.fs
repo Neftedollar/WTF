@@ -66,3 +66,6 @@ module Ffi =
 
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_blur(int enabled, int radius, int passes)
+
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_fullscreen(int id, int on)

@@ -17,6 +17,9 @@ type Command =
     | SwapNext                       // move focused window down the stack
     | SwapPrev
     | SwapMaster                     // promote the focused window to master
+    | ToggleFloat                    // float/sink the focused window (toggle)
+    | ToggleFullscreen               // fullscreen/restore the focused window (toggle)
+    | SinkAll                        // clear all floating on the current workspace
     | CloseFocused
     | Spawn of string                // launch a program (effect, run by C side)
     | SwitchWorkspace of string      // view another tag
@@ -53,6 +56,7 @@ type Effect =
     | SpawnProcess of string
     | CloseSurface of WindowId
     | Arrange of (WindowId * Rect) list   // place (and later animate) windows
+    | SetFullscreen of WindowId * bool    // flip a surface's fullscreen protocol flag (C)
     | RenderOpacity of float              // set inactive-window opacity (renderer)
     | RenderAnimSpeed of float            // set animation easing speed (renderer)
     | RenderBorderWidth of int            // set window border thickness
@@ -75,6 +79,7 @@ module Reducer =
         match cmd with
         | Focus _ | FocusMaster
         | SwapNext | SwapPrev | SwapMaster
+        | ToggleFloat | ToggleFullscreen | SinkAll
         | SwitchWorkspace _ | MoveToWorkspace _ | NextWorkspace | PrevWorkspace
         | SetLayout _ | NextLayout
         | SetMaster _ | IncMaster | DecMaster
@@ -146,6 +151,51 @@ module Reducer =
             let w' = World.mapStack Stack.swapUp w
             w', arrangeOf w'
 
+        | ToggleFloat ->
+            // Toggle the focused window's floating state, mirroring WindowInfo.Floating
+            // in lockstep. If it is also the fullscreen id it stays fullscreen (the
+            // fullscreen layer wins in arrange) — documented edge, no special-casing.
+            match World.focusedWindow w with
+            | None -> w, []
+            | Some id ->
+                let ws = World.currentWorkspace w
+                let isFloating = Map.containsKey id ws.Floating
+                let newFloating =
+                    if isFloating then Map.remove id ws.Floating
+                    else Map.add id (World.clampFloat w.Screen (World.defaultFloatRect w.Screen)) ws.Floating
+                let w' =
+                    w
+                    |> World.setFloatingOf w.Current newFloating
+                    |> World.setWindowFloating id (not isFloating)
+                w', arrangeOf w'
+
+        | ToggleFullscreen ->
+            // Toggle the focused window as the workspace's single fullscreen id.
+            // Emit SetFullscreen only when the protocol state actually flips.
+            match World.focusedWindow w with
+            | None -> w, []
+            | Some id ->
+                let ws = World.currentWorkspace w
+                match ws.Fullscreen with
+                | Some cur when cur = id ->
+                    let w' = World.setFullscreenOf w.Current None w
+                    w', SetFullscreen(id, false) :: arrangeOf w'
+                | Some old ->
+                    let w' = World.setFullscreenOf w.Current (Some id) w
+                    w', SetFullscreen(old, false) :: SetFullscreen(id, true) :: arrangeOf w'
+                | None ->
+                    let w' = World.setFullscreenOf w.Current (Some id) w
+                    w', SetFullscreen(id, true) :: arrangeOf w'
+
+        | SinkAll ->
+            // Clear all floating on the current workspace, restoring mirrors.
+            let ws = World.currentWorkspace w
+            let ids = ws.Floating |> Map.toList |> List.map fst
+            let w' =
+                (w |> World.setFloatingOf w.Current Map.empty, ids)
+                ||> List.fold (fun acc id -> World.setWindowFloating id false acc)
+            w', arrangeOf w'
+
         | CloseFocused ->
             match World.focusedWindow w with
             | Some id -> w, [ CloseSurface id ]   // C unmaps; RemoveWindow follows
@@ -168,11 +218,24 @@ module Reducer =
                     match World.stackOf tag w with
                     | Some s -> Stack.insertUp id s
                     | None -> Stack.singleton id
+                // Sink the moved window: drop it from the source workspace's floating
+                // set + clear its fullscreen if it was the one, and reset the mirror, so
+                // it lands plainly tiled on the destination.
+                let src = World.currentWorkspace w
+                let srcFloating = Map.remove id src.Floating
+                let srcFullscreen = if src.Fullscreen = Some id then None else src.Fullscreen
                 let w' =
                     w
                     |> World.setStackOf w.Current newCur
                     |> World.setStackOf tag (Some tgt)
-                w', arrangeOf w'
+                    |> World.setFloatingOf w.Current srcFloating
+                    |> World.setFullscreenOf w.Current srcFullscreen
+                    |> World.setWindowFloating id false
+                // If the moved window was fullscreen, clear the surface flag too —
+                // otherwise the client keeps rendering fullscreen on its new (tiled)
+                // home until something else toggles it.
+                let clearFs = if src.Fullscreen = Some id then [ SetFullscreen(id, false) ] else []
+                w', clearFs @ arrangeOf w'
             | _ -> w, []
 
         | SetLayout name ->
@@ -251,13 +314,19 @@ module Reducer =
         | RemoveWindow id ->
             // drop the window from whichever workspace holds it; an emptied
             // workspace becomes None (Stack.delete returns None on the last item).
+            // ALSO purge any dangling floating/fullscreen reference to the dead id,
+            // so arrange never references a non-stacked window.
             let workspaces =
                 w.Workspaces
                 |> List.map (fun ws ->
-                    match ws.Stack with
-                    | Some s when List.contains id (Stack.toList s) ->
-                        { ws with Stack = focusId id s |> Stack.delete }
-                    | _ -> ws)
+                    let stack =
+                        match ws.Stack with
+                        | Some s when List.contains id (Stack.toList s) -> focusId id s |> Stack.delete
+                        | other -> other
+                    { ws with
+                        Stack = stack
+                        Floating = Map.remove id ws.Floating
+                        Fullscreen = (if ws.Fullscreen = Some id then None else ws.Fullscreen) })
             let w' =
                 { w with Windows = Map.remove id w.Windows; Workspaces = workspaces }
             w', arrangeOf w'

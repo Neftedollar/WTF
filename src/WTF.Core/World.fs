@@ -16,7 +16,11 @@ type WindowInfo =
 type Workspace =
     { Tag: string
       Layout: string                 // name resolved via the layout Registry
-      Stack: Stack<WindowId> option } // None = empty workspace
+      Stack: Stack<WindowId> option   // None = empty workspace; holds ALL ids (tiled+floating+fullscreen)
+      // AUTHORITATIVE floating set: keyset = the floating members, value = stored geometry.
+      // WindowInfo.Floating is a strict mirror of this keyset, kept in lockstep by the mutators.
+      Floating: Map<WindowId, Rect>
+      Fullscreen: WindowId option }   // <=1 fullscreen id per workspace
 
 type World =
     { Workspaces: Workspace list
@@ -55,7 +59,7 @@ module Registry =
 module World =
 
     let empty screen =
-        { Workspaces = [ for t in 1..9 -> { Tag = string t; Layout = "tall"; Stack = None } ]
+        { Workspaces = [ for t in 1..9 -> { Tag = string t; Layout = "tall"; Stack = None; Floating = Map.empty; Fullscreen = None } ]
           Current = "1"
           Windows = Map.empty
           Screen = screen
@@ -89,12 +93,83 @@ module World =
                 w.Workspaces
                 |> List.map (fun ws -> if ws.Tag = tag then { ws with Stack = st } else ws) }
 
-    /// Run the current workspace's layout — the rectangles the compositor
-    /// applies — with the configured inner gaps folded in.
+    /// Set a workspace's authoritative Floating map.
+    let setFloatingOf tag m w =
+        { w with
+            Workspaces =
+                w.Workspaces
+                |> List.map (fun ws -> if ws.Tag = tag then { ws with Floating = m } else ws) }
+
+    /// Set a workspace's Fullscreen id (or None).
+    let setFullscreenOf tag fs w =
+        { w with
+            Workspaces =
+                w.Workspaces
+                |> List.map (fun ws -> if ws.Tag = tag then { ws with Fullscreen = fs } else ws) }
+
+    /// Update a window's Floating *mirror* flag (no-op if the window is absent).
+    /// Only the lockstep mutators call this, keeping the mirror == its workspace's
+    /// Floating keyset at all times.
+    let setWindowFloating id flag w =
+        match Map.tryFind id w.Windows with
+        | Some info -> { w with Windows = Map.add id { info with Floating = flag } w.Windows }
+        | None -> w
+
+    /// Default geometry for a newly-floated window: centered, ~60% of the screen.
+    let defaultFloatRect (screen: Rect) : Rect =
+        let width = screen.Width * 3 / 5
+        let height = screen.Height * 3 / 5
+        { X = screen.X + (screen.Width - width) / 2
+          Y = screen.Y + (screen.Height - height) / 2
+          Width = width
+          Height = height }
+
+    /// Clamp a floating rect to stay fully on-screen. Idempotent:
+    /// clampFloat s (clampFloat s r) = clampFloat s r.
+    let clampFloat (screen: Rect) (r: Rect) : Rect =
+        let width = min r.Width screen.Width
+        let height = min r.Height screen.Height
+        { X = max screen.X (min r.X (screen.X + screen.Width - width))
+          Y = max screen.Y (min r.Y (screen.Y + screen.Height - height))
+          Width = width
+          Height = height }
+
+    /// Run the current workspace's layout, in THREE z-layers (ascending z, later =
+    /// on top so the compositor can raise in list order):
+    ///   1. TILED      — the registered layout applied to the sub-stack of ids that
+    ///                   are neither floating nor the fullscreen id (with gaps).
+    ///   2. FLOATING   — each floating id at its clamped stored rect, above tiled,
+    ///                   in stack order (so stack order = z among floats).
+    ///   3. FULLSCREEN — the fullscreen id (if present + stacked) at the full Screen
+    ///                   rect, on top.
+    /// The three id-sets partition the stack, so every id gets exactly one rect.
     let arrange w : (WindowId * Rect) list =
         let ws = currentWorkspace w
-        match ws.Stack, Registry.resolve ws.Layout w.Nmaster w.Ratio with
-        | Some st, Some layout ->
-            let layout = if w.Gaps > 0 then Layout.withGaps (w.Gaps * 1<lpx>) layout else layout
-            layout w.Screen st
-        | _ -> []
+        match ws.Stack with
+        | None -> []
+        | Some st ->
+            let allIds = Stack.toList st
+            let isFs id = ws.Fullscreen = Some id
+            let tiledIds =
+                allIds
+                |> List.filter (fun id -> not (Map.containsKey id ws.Floating) && not (isFs id))
+            // LAYER 1 — TILED: build a sub-stack preserving order; focus = first tiled id
+            // (the built-in layouts read only Stack.toList order, never Focus identity).
+            let tiledRects =
+                match Stack.ofList tiledIds, Registry.resolve ws.Layout w.Nmaster w.Ratio with
+                | Some sub, Some layout ->
+                    let layout = if w.Gaps > 0 then Layout.withGaps (w.Gaps * 1<lpx>) layout else layout
+                    layout w.Screen sub
+                | _ -> []
+            // LAYER 2 — FLOATING: stack order = z; skip the fs id; clamp on-screen.
+            let floatRects =
+                allIds
+                |> List.choose (fun id ->
+                    if isFs id then None
+                    else ws.Floating |> Map.tryFind id |> Option.map (fun r -> id, clampFloat w.Screen r))
+            // LAYER 3 — FULLSCREEN: the fs id (guarded: must be stacked) at full Screen.
+            let fsRects =
+                match ws.Fullscreen with
+                | Some id when List.contains id allIds -> [ id, w.Screen ]
+                | _ -> []
+            tiledRects @ floatRects @ fsRects

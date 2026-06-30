@@ -176,5 +176,9 @@ module Manage =
         | ShiftToWorkspace tag ->
             let w2, e2 = Reducer.apply (MoveToWorkspace tag) w1
             w2, e1 @ e2
-        | FloatWindow -> w1, e1 // floating model lands with the renderer milestone
+        | FloatWindow ->
+            // The just-added window is the focus (AddWindow uses insertUp), so
+            // ToggleFloat floats it with a default rect + mirror in lockstep.
+            let w2, e2 = Reducer.apply ToggleFloat w1
+            w2, e1 @ e2
         | NoAction -> w1, e1

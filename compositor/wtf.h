@@ -51,6 +51,10 @@ void wtf_configure(int id, int x, int y, int width, int height);
 void wtf_focus(int id);
 /* Ask a view to close. */
 void wtf_close(int id);
+/* Flip a view's fullscreen protocol state (xdg or xwayland). on != 0 enters
+ * fullscreen and hides its border; 0 leaves it. Full-screen *positioning* is
+ * still driven by the brain via wtf_configure (it sends the Screen rect). */
+void wtf_set_fullscreen(int id, int on);
 /* Spawn a program via `/bin/sh -c cmd`. */
 void wtf_spawn(const char *cmd);
 /* Stop the compositor event loop. */

@@ -28,6 +28,8 @@ let private baseKeys =
         bind "M-b"       (SetLayout "bsp")
         bind "M-g"       (SetLayout "grid")
         bind "M-f"       (SetLayout "full")
+        bind "M-S-space" ToggleFloat
+        bind "M-S-f"     ToggleFullscreen
         bind "M-h"       (SetRatio 0.4)
         bind "M-l"       (SetRatio 0.6)
         bind "M-period"  IncMaster
@@ -73,6 +75,9 @@ let private applyEffects effects =
             Ffi.wtf_set_border_color ((if active then 1 else 0), r, g, b)
         | RenderCornerRadius radius -> Ffi.wtf_set_corner_radius radius
         | RenderBlur on -> Ffi.wtf_set_blur ((if on then 1 else 0), 0, 0)
+        // C side flips the surface's fullscreen protocol flag + hides its border;
+        // the full-Screen geometry still arrives via the accompanying Arrange.
+        | SetFullscreen (id, on) -> Ffi.wtf_set_fullscreen (id, (if on then 1 else 0))
 
 // ---- undo/redo history (Core owns the logic, Host owns the cell) ----
 let mutable history = History.create cfg.HistoryLimit world

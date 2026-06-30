@@ -50,6 +50,18 @@ module Protocol =
                 match focusedId with
                 | Some f -> JsonValue.Create f
                 | None -> null
+            // Additive: expose the floating members (with geometry) and the
+            // fullscreen id so the agent sees the full picture.
+            let floating = JsonArray()
+            for KeyValue(id, r) in ws.Floating do
+                let fo = rectJson r :?> JsonObject
+                fo["id"] <- JsonValue.Create id
+                floating.Add fo
+            wo["floating"] <- floating
+            wo["fullscreen"] <-
+                match ws.Fullscreen with
+                | Some id -> JsonValue.Create id
+                | None -> null
             workspaces.Add wo
         root["workspaces"] <- workspaces
 
@@ -132,6 +144,9 @@ module Protocol =
                 | Some "master" -> Some SwapMaster
                 | _ -> Some SwapNext
             | Some "swapmaster" -> Some SwapMaster
+            | Some "float" -> Some ToggleFloat
+            | Some "fullscreen" -> Some ToggleFullscreen
+            | Some "sinkall" -> Some SinkAll
             | Some "close" -> Some CloseFocused
             | Some "spawn" -> str o "run" |> Option.map Spawn
             | Some "workspace" ->

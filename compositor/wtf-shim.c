@@ -1450,6 +1450,19 @@ void wtf_configure(int id, int x, int y, int width, int height) {
 		t->anim_y = y + 40;
 		t->anim_init = true;
 	}
+	/* Honor the brain's ascending-z Arrange order: raise this node to the top of
+	 * the toplevel_tree as it is configured, so iterating the Arrange list in
+	 * order leaves the last entry (topmost floating, then the fullscreen window)
+	 * on top. Border first, window second, so the window ends directly above its
+	 * own border (the border was created via wlr_scene_node_place_below). Tiled
+	 * windows do not overlap, so their relative raise order is irrelevant. This
+	 * reorders within toplevel_tree only — the TOP/OVERLAY layer trees still sit
+	 * above it, so bars/popups/menus are unaffected. */
+	if (t->border != NULL) {
+		wlr_scene_node_raise_to_top(&t->border->node);
+	}
+	wlr_scene_node_raise_to_top(&t->scene_tree->node);
+
 	/* Size is applied immediately (clients can't smoothly resize); only the
 	 * scene-node position and opacity animate, in output_frame. */
 	if (t->is_xwayland) {
@@ -1476,6 +1489,31 @@ void wtf_close(int id) {
 			wlr_xdg_toplevel_send_close(t->xdg_toplevel);
 		}
 	}
+}
+
+void wtf_set_fullscreen(int id, int on) {
+	struct wtf_toplevel *t = toplevel_by_id(id);
+	if (t == NULL) {
+		return;
+	}
+	/* Flip the shell-specific fullscreen protocol flag. Positioning to the full
+	 * Screen rect is still the brain's job (its Arrange sends that rect), so this
+	 * only changes the client's fullscreen *state* + hides the chrome. */
+	if (t->is_xwayland) {
+		if (t->xwl_surface != NULL) {
+			wlr_xwayland_surface_set_fullscreen(t->xwl_surface, on != 0);
+		}
+	} else {
+		if (t->xdg_toplevel != NULL) {
+			wlr_xdg_toplevel_set_fullscreen(t->xdg_toplevel, on != 0);
+		}
+	}
+	/* Hide the colored border while fullscreen (a fullscreen window owns the whole
+	 * screen; a frame around it would be wrong); restore it when leaving. */
+	if (t->border != NULL) {
+		wlr_scene_node_set_enabled(&t->border->node, on == 0);
+	}
+	schedule_frame();
 }
 
 void wtf_spawn(const char *cmd) {
