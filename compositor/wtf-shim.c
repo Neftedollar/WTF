@@ -185,6 +185,8 @@ struct wtf_toplevel {
 	bool   has_win_border;      /* false (calloc) => fall back to global active/inactive */
 	double win_opacity;         /* override opacity target, used when has_win_opacity */
 	bool   has_win_opacity;     /* false (calloc) => fall back to global active/inactive */
+	bool   floating;            /* set by the brain; tiled (false) windows ignore
+	                               interactive move/resize (the layout owns their size) */
 
 	struct wl_listener map;
 	struct wl_listener unmap;
@@ -1268,6 +1270,11 @@ static void begin_interactive(struct wtf_toplevel *toplevel,
 			wlr_surface_get_root_surface(focused_surface)) {
 		return;
 	}
+	/* Tiled windows are sized by the layout — a free interactive move/resize fights
+	 * the tiler and collapses the window. Only floating windows may be grabbed. */
+	if (!toplevel->floating) {
+		return;
+	}
 	srv->grabbed_toplevel = toplevel;
 	srv->cursor_mode = mode;
 
@@ -1972,6 +1979,17 @@ void wtf_set_window_opacity(int id, double opacity) {
 	t->has_win_opacity = true;
 	t->target_opacity = opacity;
 	schedule_frame();
+}
+
+void wtf_set_floating(int id, int floating) {
+	struct wtf_toplevel *t = toplevel_by_id(id);
+	if (t == NULL) return;
+	t->floating = (floating != 0);
+	/* If a window was being interactively grabbed and is now tiled, drop the grab
+	 * so it can't keep collapsing. */
+	if (!t->floating && t->server->grabbed_toplevel == t) {
+		reset_cursor_mode(t->server);
+	}
 }
 
 /* Clear BOTH per-window overrides; the window reverts to the global

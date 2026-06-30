@@ -204,6 +204,7 @@ let mutable history = History.create cfg.HistoryLimit world
 // touched when a borderColor/windowOpacity FUNCTION is configured (gated below).
 let private lastBorder = System.Collections.Generic.Dictionary<int, float * float * float>()
 let private lastOpacity = System.Collections.Generic.Dictionary<int, float>()
+let private lastFloating = System.Collections.Generic.Dictionary<int, bool>()
 
 /// Re-evaluate the dynamic appearance functions for every window visible on the
 /// current workspace and push the per-window border-color / opacity overrides
@@ -214,14 +215,28 @@ let private lastOpacity = System.Collections.Generic.Dictionary<int, float>()
 /// configuring only one leaves the other entirely on the global path.
 /// Runs on the loop thread (safe to call Ffi).
 let private restyleWindows (w: World) : unit =
+    let curWs = World.currentWorkspace w
+    let ids =
+        curWs.Stack
+        |> Option.map Stack.toList
+        |> Option.defaultValue []
+    // Tell the C side which windows are FLOATING (de-duped). The compositor only
+    // allows interactive (mouse) move/resize on floating windows — a tiled window's
+    // size is owned by the layout, so free-resizing one collapses it. This runs
+    // ALWAYS (ungated): float state can change with zero appearance functions set.
+    for id in ids do
+        let isFloating = Map.containsKey id curWs.Floating
+        let changed =
+            match lastFloating.TryGetValue id with
+            | true, v -> v <> isFloating
+            | _ -> true
+        if changed then
+            lastFloating[id] <- isFloating
+            Ffi.wtf_set_floating (id, (if isFloating then 1 else 0))
     let pushBorder = cfg.BorderColorOf.IsSome
     let pushOpac = cfg.OpacityOf.IsSome
     if pushBorder || pushOpac then
         let focused = World.focusedWindow w
-        let ids =
-            (World.currentWorkspace w).Stack
-            |> Option.map Stack.toList
-            |> Option.defaultValue []
         for id in ids do
             match Map.tryFind id w.Windows with
             | None -> ()
@@ -252,6 +267,7 @@ let private restyleWindows (w: World) : unit =
 let private forgetStyle (id: int) : unit =
     lastBorder.Remove id |> ignore
     lastOpacity.Remove id |> ignore
+    lastFloating.Remove id |> ignore
 
 /// Re-sync the compositor to a world that was swapped in out-of-band (undo/redo
 /// /restore): re-tile and re-focus. Mirrors the onViewUnmap pattern exactly.

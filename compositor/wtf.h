@@ -83,6 +83,9 @@ void wtf_set_border_color(int active, double r, double g, double b);
 void wtf_set_window_border_color(int id, double r, double g, double b, double a);
 /* Per-window opacity target override (0..1); animates via the existing lerp. */
 void wtf_set_window_opacity(int id, double opacity);
+/* Mark a window floating (1) or tiled (0). Tiled windows ignore interactive
+ * (mouse) move/resize — the layout owns their size. */
+void wtf_set_floating(int id, int floating);
 /* Clear both per-window overrides; window reverts to the global focus path. */
 void wtf_clear_window_style(int id);
 /* Rounded-corner radius in pixels (0 = sharp). */

@@ -72,6 +72,11 @@ module Ffi =
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_window_opacity(int id, double opacity)
 
+    // Mark a window floating (1) or tiled (0). Tiled windows ignore interactive
+    // (mouse) move/resize — their size is owned by the layout.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_floating(int id, int floating)
+
     /// Drop both per-window overrides for `id`, reverting it to the global path.
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_clear_window_style(int id)
