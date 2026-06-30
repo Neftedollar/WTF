@@ -166,11 +166,13 @@ let onKey (mods: uint32) (sym: uint32) : int =
         | None -> 0
     | None -> 0
 
-let onOutputResize (width: int) (height: int) : unit =
-    // The compositor reports device (physical) px; fold the output scale back to
-    // logical so the brain stays in its single `lpx` coordinate space.
+let onOutputResize (x: int) (y: int) (width: int) (height: int) : unit =
+    // The compositor reports device (physical) px for the usable area (output
+    // minus layer-shell exclusive zones); fold the output scale back to logical
+    // so the brain stays in its single `lpx` coordinate space. x,y may be
+    // non-zero for a top/left bar.
     let toL (v: int) : int = Px.rawL (Px.toLogical cfg.Scale (v * 1<ppx>))
-    world <- { world with Screen = Rect.create 0 0 (toL width) (toL height) }
+    world <- { world with Screen = Rect.create (toL x) (toL y) (toL width) (toL height) }
     applyEffects [ Arrange(World.arrange world) ]
 
 // ---- agent-first IPC, marshalled onto the loop thread by the bridge ----

@@ -43,6 +43,7 @@
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_layer_shell_v1.h>
 #include <wlr/util/box.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
@@ -72,6 +73,18 @@ struct wtf_server {
 	struct wl_listener new_xdg_popup;
 	struct wl_list toplevels;
 
+	/* Layer-shell (bars, wallpaper, launchers, notifications). */
+	struct wlr_layer_shell_v1 *layer_shell;
+	struct wl_listener new_layer_surface;
+	struct wl_list layer_surfaces;
+	/* The layer surface currently holding an EXCLUSIVE keyboard grab, if any. */
+	struct wlr_layer_surface_v1 *focused_layer;
+
+	/* Scene-graph z-order trees: BACKGROUND < BOTTOM < toplevels < TOP < OVERLAY.
+	 * layer_tree is indexed by enum zwlr_layer_shell_v1_layer (0..3). */
+	struct wlr_scene_tree *layer_tree[4];
+	struct wlr_scene_tree *toplevel_tree;
+
 	struct wlr_cursor *cursor;
 	struct wlr_xcursor_manager *cursor_mgr;
 	struct wl_listener cursor_motion;
@@ -97,7 +110,7 @@ struct wtf_server {
 
 	/* The output whose size we report up to the brain. First one wins. */
 	struct wlr_output *primary_output;
-	int reported_width, reported_height;
+	int reported_x, reported_y, reported_width, reported_height;
 
 	/* Stable id allocation for mapped toplevels. */
 	int next_id;
@@ -146,6 +159,20 @@ struct wtf_popup {
 	struct wlr_xdg_popup *xdg_popup;
 	struct wl_listener commit;
 	struct wl_listener destroy;
+};
+
+struct wtf_layer_surface {
+	struct wl_list link;
+	struct wtf_server *server;
+	struct wlr_layer_surface_v1 *layer_surface;
+	struct wlr_scene_layer_surface_v1 *scene;
+	struct wlr_output *output;
+
+	struct wl_listener map;
+	struct wl_listener unmap;
+	struct wl_listener commit;
+	struct wl_listener destroy;
+	/* NOTE: layer-shell popups (new_popup) are deferred — see CONSTRAINTS. */
 };
 
 struct wtf_keyboard {
@@ -345,27 +372,50 @@ static void focus_toplevel(struct wtf_toplevel *toplevel) {
 	schedule_frame();
 }
 
-/* Report the primary output's effective (layout) size to the brain, but only
- * when it actually changed. */
-static void report_output_size(struct wlr_output *wlr_output) {
-	if (wlr_output == NULL || wlr_output != server.primary_output) {
+/* Report the primary output's usable area (full output minus layer-shell
+ * exclusive zones) to the brain, but only when it actually changed. */
+static void report_usable_area(struct wtf_server *srv, struct wlr_box *usable) {
+	if (usable->x == srv->reported_x && usable->y == srv->reported_y &&
+			usable->width == srv->reported_width &&
+			usable->height == srv->reported_height) {
 		return;
 	}
-	struct wlr_box box;
-	wlr_output_layout_get_box(server.output_layout, wlr_output, &box);
-	if (box.width == 0 && box.height == 0) {
-		/* Output not in the layout (yet); fall back to effective res. */
-		wlr_output_effective_resolution(wlr_output, &box.width, &box.height);
-	}
-	if (box.width == server.reported_width &&
-			box.height == server.reported_height) {
-		return;
-	}
-	server.reported_width = box.width;
-	server.reported_height = box.height;
+	srv->reported_x = usable->x;
+	srv->reported_y = usable->y;
+	srv->reported_width = usable->width;
+	srv->reported_height = usable->height;
 	if (g_cb.output_resize) {
-		g_cb.output_resize(box.width, box.height);
+		g_cb.output_resize(usable->x, usable->y, usable->width, usable->height);
 	}
+}
+
+/* Arrange every layer surface on the primary output, letting wlroots' scene
+ * helper apply anchors/margins/exclusive zones and shrink the usable area; then
+ * report the resulting usable rectangle to the brain so tiling reflows. */
+static void arrange_layers(struct wtf_server *srv) {
+	if (srv->primary_output == NULL) {
+		return;
+	}
+	struct wlr_box full_area;
+	wlr_output_layout_get_box(srv->output_layout, srv->primary_output, &full_area);
+	if (full_area.width == 0 && full_area.height == 0) {
+		/* Output not in the layout (yet); fall back to effective res at 0,0. */
+		full_area.x = 0;
+		full_area.y = 0;
+		wlr_output_effective_resolution(srv->primary_output,
+			&full_area.width, &full_area.height);
+	}
+
+	struct wlr_box usable = full_area;
+	struct wtf_layer_surface *ls;
+	wl_list_for_each(ls, &srv->layer_surfaces, link) {
+		if (ls->output != srv->primary_output) {
+			continue;
+		}
+		wlr_scene_layer_surface_v1_configure(ls->scene, &full_area, &usable);
+	}
+
+	report_usable_area(srv, &usable);
 }
 
 /* ------------------------------------------------------------------ */
@@ -677,8 +727,11 @@ static void output_request_state(struct wl_listener *listener, void *data) {
 	struct wtf_output *output = wl_container_of(listener, output, request_state);
 	const struct wlr_output_event_request_state *event = data;
 	wlr_output_commit_state(output->wlr_output, event->state);
-	/* Nested Wayland/X11 window was resized: tell the brain the new size. */
-	report_output_size(output->wlr_output);
+	/* Nested Wayland/X11 window was resized: re-arrange layers and tell the
+	 * brain the new usable area. */
+	if (output->wlr_output == output->server->primary_output) {
+		arrange_layers(output->server);
+	}
 }
 
 static void output_destroy(struct wl_listener *listener, void *data) {
@@ -692,13 +745,14 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 
 	if (srv->primary_output == output->wlr_output) {
 		srv->primary_output = NULL;
+		srv->reported_x = srv->reported_y = 0;
 		srv->reported_width = srv->reported_height = 0;
 		/* Promote another output to primary if one remains. */
 		if (!wl_list_empty(&srv->outputs)) {
 			struct wtf_output *next =
 				wl_container_of(srv->outputs.next, next, link);
 			srv->primary_output = next->wlr_output;
-			report_output_size(next->wlr_output);
+			arrange_layers(srv);
 		}
 	}
 	free(output);
@@ -744,7 +798,7 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	/* First output to appear becomes the one we report to the brain. */
 	if (srv->primary_output == NULL) {
 		srv->primary_output = wlr_output;
-		report_output_size(wlr_output);
+		arrange_layers(srv);
 	}
 }
 
@@ -891,12 +945,12 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
 	toplevel->xdg_toplevel = xdg_toplevel;
 	/* Create the view at 0,0; the brain places it later via wtf_configure. */
 	toplevel->scene_tree =
-		wlr_scene_xdg_surface_create(&srv->scene->tree, xdg_toplevel->base);
+		wlr_scene_xdg_surface_create(srv->toplevel_tree, xdg_toplevel->base);
 	toplevel->scene_tree->node.data = toplevel;
 	xdg_toplevel->base->data = toplevel->scene_tree;
 
 	/* Colored focus border: a rect sibling kept just behind the window. */
-	toplevel->border = wlr_scene_rect_create(&srv->scene->tree, 0, 0, g_inactive_border);
+	toplevel->border = wlr_scene_rect_create(srv->toplevel_tree, 0, 0, g_inactive_border);
 	wlr_scene_node_place_below(&toplevel->border->node, &toplevel->scene_tree->node);
 
 	toplevel->map.notify = xdg_toplevel_map;
@@ -949,6 +1003,129 @@ static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
 	wl_signal_add(&xdg_popup->base->surface->events.commit, &popup->commit);
 	popup->destroy.notify = xdg_popup_destroy;
 	wl_signal_add(&xdg_popup->events.destroy, &popup->destroy);
+}
+
+/* ------------------------------------------------------------------ */
+/* layer-shell (bars, wallpaper, launchers, notifications)            */
+/* ------------------------------------------------------------------ */
+
+static void layer_surface_map(struct wl_listener *listener, void *data) {
+	struct wtf_layer_surface *ls = wl_container_of(listener, ls, map);
+	struct wtf_server *srv = ls->server;
+
+	arrange_layers(srv);
+
+	/* An EXCLUSIVE layer surface (e.g. a launcher / lockscreen) grabs the
+	 * keyboard. ON_DEMAND (focus-on-click) is deferred. */
+	if (ls->layer_surface->current.keyboard_interactive ==
+			ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE) {
+		struct wlr_keyboard *kb = wlr_seat_get_keyboard(srv->seat);
+		if (kb != NULL) {
+			wlr_seat_keyboard_notify_enter(srv->seat,
+				ls->layer_surface->surface, kb->keycodes,
+				kb->num_keycodes, &kb->modifiers);
+		}
+		srv->focused_layer = ls->layer_surface;
+	}
+}
+
+static void layer_surface_unmap(struct wl_listener *listener, void *data) {
+	struct wtf_layer_surface *ls = wl_container_of(listener, ls, unmap);
+	struct wtf_server *srv = ls->server;
+
+	if (srv->focused_layer == ls->layer_surface) {
+		srv->focused_layer = NULL;
+		/* Restore keyboard focus to any mapped toplevel. */
+		struct wtf_toplevel *t;
+		wl_list_for_each(t, &srv->toplevels, link) {
+			if (t->mapped) {
+				focus_toplevel(t);
+				break;
+			}
+		}
+	}
+
+	arrange_layers(srv);
+}
+
+static void layer_surface_commit(struct wl_listener *listener, void *data) {
+	struct wtf_layer_surface *ls = wl_container_of(listener, ls, commit);
+	struct wtf_server *srv = ls->server;
+	struct wlr_layer_surface_v1 *layer_surface = ls->layer_surface;
+
+	/* If the client changed its layer after the initial commit, reparent the
+	 * scene node into the matching z-order tree. */
+	if (ls->scene != NULL) {
+		enum zwlr_layer_shell_v1_layer l = layer_surface->current.layer;
+		if ((int)l >= 0 && (int)l <= 3) {
+			wlr_scene_node_reparent(&ls->scene->tree->node, srv->layer_tree[l]);
+		}
+	}
+
+	arrange_layers(srv);
+}
+
+static void layer_surface_destroy(struct wl_listener *listener, void *data) {
+	struct wtf_layer_surface *ls = wl_container_of(listener, ls, destroy);
+	/* Capture the server pointer BEFORE freeing (use-after-free guard). Do NOT
+	 * touch ls->scene here — the scene helper installs its own destroy listener
+	 * that tears down its tree. */
+	struct wtf_server *srv = ls->server;
+
+	if (srv->focused_layer == ls->layer_surface) {
+		srv->focused_layer = NULL;
+	}
+
+	wl_list_remove(&ls->map.link);
+	wl_list_remove(&ls->unmap.link);
+	wl_list_remove(&ls->commit.link);
+	wl_list_remove(&ls->destroy.link);
+	wl_list_remove(&ls->link);
+	free(ls);
+
+	arrange_layers(srv);
+}
+
+static void server_new_layer_surface(struct wl_listener *listener, void *data) {
+	struct wtf_server *srv = wl_container_of(listener, srv, new_layer_surface);
+	struct wlr_layer_surface_v1 *layer_surface = data;
+
+	/* The output may be NULL on new_surface; we must assign one before
+	 * returning. */
+	if (layer_surface->output == NULL) {
+		layer_surface->output = srv->primary_output;
+	}
+	if (layer_surface->output == NULL) {
+		/* No output exists yet; we cannot place this surface. */
+		wlr_layer_surface_v1_destroy(layer_surface);
+		return;
+	}
+
+	struct wtf_layer_surface *ls = calloc(1, sizeof(*ls));
+	ls->server = srv;
+	ls->layer_surface = layer_surface;
+	ls->output = layer_surface->output;
+
+	/* Initial placement uses the pending layer (current isn't set until the
+	 * first commit). Clamp to a valid tree index. */
+	enum zwlr_layer_shell_v1_layer l = layer_surface->pending.layer;
+	int li = (int)l;
+	if (li < 0) li = 0;
+	if (li > 3) li = 3;
+	ls->scene = wlr_scene_layer_surface_v1_create(srv->layer_tree[li],
+		layer_surface);
+	ls->scene->tree->node.data = ls;
+
+	ls->map.notify = layer_surface_map;
+	wl_signal_add(&layer_surface->surface->events.map, &ls->map);
+	ls->unmap.notify = layer_surface_unmap;
+	wl_signal_add(&layer_surface->surface->events.unmap, &ls->unmap);
+	ls->commit.notify = layer_surface_commit;
+	wl_signal_add(&layer_surface->surface->events.commit, &ls->commit);
+	ls->destroy.notify = layer_surface_destroy;
+	wl_signal_add(&layer_surface->events.destroy, &ls->destroy);
+
+	wl_list_insert(&srv->layer_surfaces, &ls->link);
 }
 
 /* ================================================================== */
@@ -1127,6 +1304,25 @@ int wtf_run(struct wtf_callbacks cbs) {
 	/* scenefx: seed default blur parameters (off until wtf_set_blur enables). */
 	g_blur = blur_data_get_default();
 	wlr_scene_set_blur_data(server.scene, g_blur);
+
+	/* Scene z-order trees, created bottom-to-top so later siblings render above
+	 * earlier ones: BACKGROUND < BOTTOM < toplevels < TOP < OVERLAY. */
+	server.layer_tree[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND] =
+		wlr_scene_tree_create(&server.scene->tree);
+	server.layer_tree[ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM] =
+		wlr_scene_tree_create(&server.scene->tree);
+	server.toplevel_tree = wlr_scene_tree_create(&server.scene->tree);
+	server.layer_tree[ZWLR_LAYER_SHELL_V1_LAYER_TOP] =
+		wlr_scene_tree_create(&server.scene->tree);
+	server.layer_tree[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY] =
+		wlr_scene_tree_create(&server.scene->tree);
+
+	/* Layer-shell: bars, wallpaper, launchers, notification daemons. */
+	wl_list_init(&server.layer_surfaces);
+	server.layer_shell = wlr_layer_shell_v1_create(server.wl_display, 4);
+	server.new_layer_surface.notify = server_new_layer_surface;
+	wl_signal_add(&server.layer_shell->events.new_surface,
+		&server.new_layer_surface);
 
 	/* xdg-shell version 3, matching the canonical 0.18 tinywl. */
 	wl_list_init(&server.toplevels);

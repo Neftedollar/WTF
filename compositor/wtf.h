@@ -26,8 +26,10 @@ struct wtf_callbacks {
     /* A key was pressed. mods = wlr modifier mask, sym = xkb keysym.
      * Return 1 if the brain handled it (compositor swallows it), 0 to forward. */
     int  (*key)(uint32_t mods, uint32_t sym);
-    /* The active output's usable size changed (also fired once at startup). */
-    void (*output_resize)(int width, int height);
+    /* The active output's usable area changed (also fired once at startup).
+     * This is the output minus layer-shell exclusive zones; x,y may be non-zero
+     * for a top/left bar. */
+    void (*output_resize)(int x, int y, int width, int height);
     /* The compositor is up and its WAYLAND_DISPLAY is live. The brain can now
      * spawn startup clients into it. Fired once, just before the event loop. */
     void (*ready)(void);

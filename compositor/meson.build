@@ -50,6 +50,28 @@ xdg_shell_code = custom_target(
 	command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 )
 
+# ---- generate wlr-layer-shell protocol code via wayland-scanner ----
+# wlr-protocols pkg-config is not present on this box and wlroots does not
+# install the generated header, so we vendor the XML and generate the glue
+# ourselves. <wlr/types/wlr_layer_shell_v1.h> #includes
+# "wlr-layer-shell-unstable-v1-protocol.h", so the server-header output name
+# must match exactly.
+layer_shell_xml = meson.current_source_dir() / 'protocols/wlr-layer-shell-unstable-v1.xml'
+
+layer_shell_server_header = custom_target(
+	'wlr-layer-shell-unstable-v1-protocol.h',
+	input: layer_shell_xml,
+	output: 'wlr-layer-shell-unstable-v1-protocol.h',
+	command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
+)
+
+layer_shell_code = custom_target(
+	'wlr-layer-shell-unstable-v1-protocol.c',
+	input: layer_shell_xml,
+	output: 'wlr-layer-shell-unstable-v1-protocol.c',
+	command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
 # ---- the shared library the F# host P/Invokes (libwtf_shim.so) ----
 shared_library(
 	'wtf_shim',
@@ -57,6 +79,8 @@ shared_library(
 		'wtf-shim.c',
 		xdg_shell_server_header,
 		xdg_shell_code,
+		layer_shell_server_header,
+		layer_shell_code,
 	],
 	dependencies: [
 		scenefx,

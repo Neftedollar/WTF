@@ -21,7 +21,7 @@ module Ffi =
     type ViewMapDelegate = delegate of int * nativeint * nativeint -> unit
     type ViewUnmapDelegate = delegate of int -> unit
     type KeyDelegate = delegate of uint32 * uint32 -> int
-    type OutputResizeDelegate = delegate of int * int -> unit
+    type OutputResizeDelegate = delegate of int * int * int * int -> unit
     type ReadyDelegate = delegate of unit -> unit
     type DrainDelegate = delegate of unit -> unit
 
