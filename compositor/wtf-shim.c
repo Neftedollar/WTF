@@ -61,6 +61,18 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include "wtf.h"
+#include <stddef.h>  /* offsetof, for the ABI static asserts below */
+
+/* ABI GUARD: struct wtf_libinput_config is passed BY VALUE across the FFI and is
+ * mirrored field-for-field by the F# [<StructLayout(Sequential)>] LibinputConfig in
+ * src/WTF.Host/Ffi.fs (the single riskiest interop element: mixed double/int). These
+ * compile-time asserts lock the C layout (size 56, doubles at 0 and 40) so any
+ * accidental reorder/resize here BREAKS THE BUILD, forcing the F# mirror to be
+ * updated in lockstep instead of silently corrupting every input setting. */
+_Static_assert(sizeof(struct wtf_libinput_config) == 56, "wtf_libinput_config size drifted from the F# Ffi.fs mirror");
+_Static_assert(offsetof(struct wtf_libinput_config, mouse_accel) == 0, "mouse_accel offset drifted");
+_Static_assert(offsetof(struct wtf_libinput_config, tp_accel) == 40, "tp_accel offset drifted");
+_Static_assert(offsetof(struct wtf_libinput_config, tp_accel_profile) == 48, "tp_accel_profile offset drifted");
 
 /* ------------------------------------------------------------------ */
 /* state                                                              */
@@ -247,8 +259,9 @@ static struct wtf_callbacks g_cb;
 /* Held for the graceful signal handler so it can break the run-loop without
  * reaching into the (possibly half-built) server struct. Set after the display
  * is created; cleared before teardown so a late SIGINT/SIGTERM cannot call
- * wl_display_terminate on a being-destroyed display. */
-static struct wl_display *g_display = NULL;
+ * wl_display_terminate on a being-destroyed display. `volatile` since it is
+ * read by the async signal handler. */
+static struct wl_display *volatile g_display = NULL;
 
 /* Cross-thread wakeup: an external thread (the F# IPC server) writes to this
  * eventfd via wtf_command_notify(); the event loop wakes and calls g_cb.drain()
@@ -441,6 +454,12 @@ static void focus_toplevel(struct wtf_toplevel *toplevel) {
 		}
 	}
 	struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
+	/* Raise the border first, then the window on top of it (same order as
+	 * wtf_configure) so a focused floating window's border isn't left occluded
+	 * behind an adjacent window. */
+	if (toplevel->border != NULL) {
+		wlr_scene_node_raise_to_top(&toplevel->border->node);
+	}
 	wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
 	if (toplevel->is_xwayland) {
 		wlr_xwayland_surface_activate(toplevel->xwl_surface, true);
@@ -683,6 +702,11 @@ static void keyboard_handle_destroy(struct wl_listener *listener, void *data) {
  * Used both on attach and when wtf_set_keymap re-applies to existing kbds. */
 static void apply_keymap_to(struct wlr_keyboard *wlr_keyboard) {
 	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+	if (context == NULL) {
+		wlr_log(WLR_ERROR, "xkb_context_new failed; keeping previous keymap");
+		wlr_keyboard_set_repeat_info(wlr_keyboard, g_repeat_rate, g_repeat_delay);
+		return;
+	}
 	struct xkb_rule_names names = {
 		.rules   = g_kb_rules,
 		.model   = g_kb_model,
@@ -1189,6 +1213,20 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
 	struct wtf_toplevel *toplevel = wl_container_of(listener, toplevel, destroy);
 
+	/* Defensive: wlroots normally delivers unmap BEFORE destroy, but if a destroy
+	 * ever arrives while still mapped, replicate the unmap so the brain and the
+	 * toplevels list don't desync (mapped==true implies link is still listed). */
+	if (toplevel->mapped) {
+		if (toplevel == toplevel->server->grabbed_toplevel) {
+			reset_cursor_mode(toplevel->server);
+		}
+		toplevel->mapped = false;
+		if (g_cb.view_unmap) {
+			g_cb.view_unmap(toplevel->id);
+		}
+		wl_list_remove(&toplevel->link);
+	}
+
 	wl_list_remove(&toplevel->map.link);
 	wl_list_remove(&toplevel->unmap.link);
 	wl_list_remove(&toplevel->commit.link);
@@ -1413,6 +1451,19 @@ static void xwl_request_configure(struct wl_listener *listener, void *data) {
 static void xwl_destroy(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct wtf_toplevel *toplevel = wl_container_of(listener, toplevel, xwl_destroy);
+
+	/* Defensive: replicate unmap if destroyed while still mapped (see the xdg
+	 * path) so the brain + toplevels list stay consistent. */
+	if (toplevel->mapped) {
+		if (toplevel == toplevel->server->grabbed_toplevel) {
+			reset_cursor_mode(toplevel->server);
+		}
+		toplevel->mapped = false;
+		if (g_cb.view_unmap) {
+			g_cb.view_unmap(toplevel->id);
+		}
+		wl_list_remove(&toplevel->link);
+	}
 
 	wl_list_remove(&toplevel->associate.link);
 	wl_list_remove(&toplevel->dissociate.link);
@@ -1750,9 +1801,15 @@ void wtf_configure(int id, int x, int y, int width, int height) {
 	 * scene-node position and opacity animate, in output_frame. */
 	if (t->is_xwayland) {
 		/* X11 has no smooth resize; configure with the final geometry. The
-		 * scene-node move is still handled generically by animate_toplevels. */
-		wlr_xwayland_surface_configure(t->xwl_surface,
-			(int16_t)x, (int16_t)y, (uint16_t)width, (uint16_t)height);
+		 * scene-node move is still handled generically by animate_toplevels.
+		 * X11 wire types are int16 pos / uint16 size — CLAMP (don't wrap) so a
+		 * brain-driven off-screen position (x = -10000) or a large virtual
+		 * multi-monitor coordinate can't overflow into a bogus on-screen spot. */
+		int16_t cx = (int16_t)(x < INT16_MIN ? INT16_MIN : (x > INT16_MAX ? INT16_MAX : x));
+		int16_t cy = (int16_t)(y < INT16_MIN ? INT16_MIN : (y > INT16_MAX ? INT16_MAX : y));
+		uint16_t cw = (uint16_t)(width  < 0 ? 0 : (width  > UINT16_MAX ? UINT16_MAX : width));
+		uint16_t ch = (uint16_t)(height < 0 ? 0 : (height > UINT16_MAX ? UINT16_MAX : height));
+		wlr_xwayland_surface_configure(t->xwl_surface, cx, cy, cw, ch);
 	} else {
 		wlr_xdg_toplevel_set_size(t->xdg_toplevel, width, height);
 	}
@@ -2062,6 +2119,7 @@ int wtf_run(struct wtf_callbacks cbs) {
 	server.renderer = fx_renderer_create(server.backend);
 	if (server.renderer == NULL) {
 		wlr_log(WLR_ERROR, "failed to create fx_renderer");
+		wlr_backend_destroy(server.backend); /* drop the DRM master / restore the VT */
 		return 1;
 	}
 	wlr_renderer_init_wl_display(server.renderer, server.wl_display);
@@ -2069,6 +2127,8 @@ int wtf_run(struct wtf_callbacks cbs) {
 	server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
 	if (server.allocator == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_allocator");
+		wlr_renderer_destroy(server.renderer);
+		wlr_backend_destroy(server.backend); /* drop the DRM master / restore the VT */
 		return 1;
 	}
 
