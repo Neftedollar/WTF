@@ -44,6 +44,7 @@
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
+#include <wlr/xwayland.h>
 #include <wlr/util/box.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
@@ -112,6 +113,12 @@ struct wtf_server {
 	struct wlr_output *primary_output;
 	int reported_x, reported_y, reported_width, reported_height;
 
+	/* XWayland: managed toplevels join the same brain id-space as xdg; override-
+	 * redirect surfaces are unmanaged scene nodes never reported to the brain. */
+	struct wlr_xwayland *xwayland;
+	struct wl_listener xwayland_ready;
+	struct wl_listener new_xwayland_surface;
+
 	/* Stable id allocation for mapped toplevels. */
 	int next_id;
 };
@@ -129,6 +136,10 @@ struct wtf_toplevel {
 	struct wl_list link;
 	struct wtf_server *server;
 	struct wlr_xdg_toplevel *xdg_toplevel;
+	/* XWayland dual-shell: when is_xwayland, xwl_surface is the backing surface
+	 * and xdg_toplevel is NULL (and vice-versa). The brain only ever sees ids. */
+	bool is_xwayland;
+	struct wlr_xwayland_surface *xwl_surface;
 	struct wlr_scene_tree *scene_tree;
 
 	int id;          /* stable handle handed to the brain; 0 = unmapped */
@@ -153,6 +164,29 @@ struct wtf_toplevel {
 	struct wl_listener request_resize;
 	struct wl_listener request_maximize;
 	struct wl_listener request_fullscreen;
+
+	/* XWayland-only lifecycle listeners (associate/dissociate model). map/unmap
+	 * (above) are registered on xwl_surface->surface->events only while
+	 * associated; the rest live for the whole wtf_toplevel lifetime. */
+	struct wl_listener associate;
+	struct wl_listener dissociate;
+	struct wl_listener xwl_destroy;
+	struct wl_listener request_configure;
+};
+
+/* Override-redirect XWayland surfaces (menus, tooltips, DnD): unmanaged, never
+ * given a wtf id, never reported to the brain. Placed verbatim in OVERLAY. */
+struct wtf_xwayland_unmanaged {
+	struct wl_list link;
+	struct wtf_server *server;
+	struct wlr_xwayland_surface *xsurface;
+	struct wlr_scene_tree *scene_tree;
+	struct wl_listener associate;
+	struct wl_listener dissociate;
+	struct wl_listener destroy;
+	struct wl_listener request_configure;
+	struct wl_listener map;
+	struct wl_listener unmap;
 };
 
 struct wtf_popup {
@@ -339,7 +373,9 @@ static void focus_toplevel(struct wtf_toplevel *toplevel) {
 		return;
 	}
 	struct wlr_seat *seat = server.seat;
-	struct wlr_surface *surface = toplevel->xdg_toplevel->base->surface;
+	struct wlr_surface *surface = toplevel->is_xwayland
+		? toplevel->xwl_surface->surface
+		: toplevel->xdg_toplevel->base->surface;
 	struct wlr_surface *prev_surface = seat->keyboard_state.focused_surface;
 	if (prev_surface == surface) {
 		return;
@@ -349,11 +385,21 @@ static void focus_toplevel(struct wtf_toplevel *toplevel) {
 			wlr_xdg_toplevel_try_from_wlr_surface(prev_surface);
 		if (prev_toplevel != NULL) {
 			wlr_xdg_toplevel_set_activated(prev_toplevel, false);
+		} else {
+			struct wlr_xwayland_surface *prev_xwl =
+				wlr_xwayland_surface_try_from_wlr_surface(prev_surface);
+			if (prev_xwl != NULL) {
+				wlr_xwayland_surface_activate(prev_xwl, false);
+			}
 		}
 	}
 	struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
 	wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
-	wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
+	if (toplevel->is_xwayland) {
+		wlr_xwayland_surface_activate(toplevel->xwl_surface, true);
+	} else {
+		wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
+	}
 	if (keyboard != NULL) {
 		wlr_seat_keyboard_notify_enter(seat, surface,
 			keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
@@ -973,6 +1019,255 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
 	wl_signal_add(&xdg_toplevel->events.request_fullscreen, &toplevel->request_fullscreen);
 }
 
+/* ------------------------------------------------------------------ */
+/* XWayland (managed toplevels + override-redirect unmanaged surfaces)  */
+/* ------------------------------------------------------------------ */
+
+/* --- managed X11 toplevels: join the same brain id-space as xdg --- */
+
+static void xwl_map(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_toplevel *toplevel = wl_container_of(listener, toplevel, map);
+	struct wtf_server *srv = toplevel->server;
+
+	wl_list_insert(&srv->toplevels, &toplevel->link);
+
+	/* Assign a stable id from the SHARED counter so X11 ids never collide with
+	 * xdg ids; the brain then drives placement/focus exactly as for xdg. */
+	toplevel->id = ++srv->next_id;
+	toplevel->mapped = true;
+
+	/* Start transparent so the first wtf_configure fades + slides it in. */
+	toplevel->opacity = 0.0;
+	toplevel->target_opacity = g_inactive_opacity;
+	toplevel->applied_opacity = -1.0;
+	toplevel->anim_init = false;
+
+	if (g_cb.view_map) {
+		g_cb.view_map(toplevel->id,
+			toplevel->xwl_surface->class,
+			toplevel->xwl_surface->title);
+	}
+}
+
+static void xwl_unmap(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_toplevel *toplevel = wl_container_of(listener, toplevel, unmap);
+
+	if (toplevel == toplevel->server->grabbed_toplevel) {
+		reset_cursor_mode(toplevel->server);
+	}
+
+	if (toplevel->mapped) {
+		toplevel->mapped = false;
+		if (g_cb.view_unmap) {
+			g_cb.view_unmap(toplevel->id);
+		}
+	}
+
+	wl_list_remove(&toplevel->link);
+}
+
+/* Tear down the scene node + border created in associate. Safe to call when
+ * already torn down (NULL-guarded). */
+static void xwl_destroy_scene(struct wtf_toplevel *toplevel) {
+	if (toplevel->border != NULL) {
+		wlr_scene_node_destroy(&toplevel->border->node);
+		toplevel->border = NULL;
+	}
+	if (toplevel->scene_tree != NULL) {
+		wlr_scene_node_destroy(&toplevel->scene_tree->node);
+		toplevel->scene_tree = NULL;
+	}
+}
+
+static void xwl_associate(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_toplevel *toplevel = wl_container_of(listener, toplevel, associate);
+	struct wtf_server *srv = toplevel->server;
+	struct wlr_xwayland_surface *xsurface = toplevel->xwl_surface;
+
+	/* The wlr_surface only exists between associate and dissociate; build the
+	 * scene node now. The subsurface tree does NOT auto-destroy on dissociate. */
+	toplevel->scene_tree =
+		wlr_scene_subsurface_tree_create(srv->toplevel_tree, xsurface->surface);
+	/* Back-pointer so desktop_toplevel_at() resolves clicks to this toplevel,
+	 * exactly like the xdg path. */
+	toplevel->scene_tree->node.data = toplevel;
+
+	toplevel->border =
+		wlr_scene_rect_create(srv->toplevel_tree, 0, 0, g_inactive_border);
+	wlr_scene_node_place_below(&toplevel->border->node, &toplevel->scene_tree->node);
+
+	/* map/unmap listeners live ONLY while associated (the #1 UAF guard). */
+	toplevel->map.notify = xwl_map;
+	wl_signal_add(&xsurface->surface->events.map, &toplevel->map);
+	toplevel->unmap.notify = xwl_unmap;
+	wl_signal_add(&xsurface->surface->events.unmap, &toplevel->unmap);
+}
+
+static void xwl_dissociate(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_toplevel *toplevel = wl_container_of(listener, toplevel, dissociate);
+
+	wl_list_remove(&toplevel->map.link);
+	wl_list_remove(&toplevel->unmap.link);
+	xwl_destroy_scene(toplevel);
+}
+
+static void xwl_request_configure(struct wl_listener *listener, void *data) {
+	struct wtf_toplevel *toplevel =
+		wl_container_of(listener, toplevel, request_configure);
+	struct wlr_xwayland_surface_configure_event *ev = data;
+
+	/* Ack so the client isn't stuck. Before the brain has placed the window
+	 * (anim_init == false) we honor the requested geometry; once placed, the
+	 * brain's layout wins (wtf_configure re-issues a configure). Simplification:
+	 * we always ack the request here; the next wtf_configure overrides it. */
+	wlr_xwayland_surface_configure(ev->surface, ev->x, ev->y, ev->width, ev->height);
+}
+
+static void xwl_destroy(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_toplevel *toplevel = wl_container_of(listener, toplevel, xwl_destroy);
+
+	wl_list_remove(&toplevel->associate.link);
+	wl_list_remove(&toplevel->dissociate.link);
+	wl_list_remove(&toplevel->xwl_destroy.link);
+	wl_list_remove(&toplevel->request_configure.link);
+
+	/* If destroyed while still associated, the scene node may still exist. */
+	xwl_destroy_scene(toplevel);
+	free(toplevel);
+}
+
+/* --- override-redirect (unmanaged) X11 surfaces: never reach the brain --- */
+
+static void unmanaged_request_configure(struct wl_listener *listener, void *data) {
+	struct wtf_xwayland_unmanaged *u =
+		wl_container_of(listener, u, request_configure);
+	struct wlr_xwayland_surface_configure_event *ev = data;
+
+	/* Honor the requested geometry verbatim (menus/tooltips position themselves). */
+	wlr_xwayland_surface_configure(ev->surface, ev->x, ev->y, ev->width, ev->height);
+	if (u->scene_tree != NULL) {
+		wlr_scene_node_set_position(&u->scene_tree->node, ev->x, ev->y);
+	}
+}
+
+static void unmanaged_map(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_xwayland_unmanaged *u = wl_container_of(listener, u, map);
+	if (u->scene_tree != NULL) {
+		wlr_scene_node_set_enabled(&u->scene_tree->node, true);
+	}
+}
+
+static void unmanaged_unmap(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_xwayland_unmanaged *u = wl_container_of(listener, u, unmap);
+	if (u->scene_tree != NULL) {
+		wlr_scene_node_set_enabled(&u->scene_tree->node, false);
+	}
+}
+
+static void unmanaged_associate(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_xwayland_unmanaged *u = wl_container_of(listener, u, associate);
+	struct wtf_server *srv = u->server;
+	struct wlr_xwayland_surface *xsurface = u->xsurface;
+
+	/* Place unmanaged surfaces in the OVERLAY layer at their requested geometry. */
+	u->scene_tree = wlr_scene_subsurface_tree_create(
+		srv->layer_tree[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], xsurface->surface);
+	/* No wtf_toplevel back-pointer: hit-tests resolve to the surface, not a
+	 * managed toplevel (node.data stays NULL so desktop_toplevel_at skips it). */
+	wlr_scene_node_set_position(&u->scene_tree->node, xsurface->x, xsurface->y);
+
+	u->map.notify = unmanaged_map;
+	wl_signal_add(&xsurface->surface->events.map, &u->map);
+	u->unmap.notify = unmanaged_unmap;
+	wl_signal_add(&xsurface->surface->events.unmap, &u->unmap);
+}
+
+static void unmanaged_dissociate(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_xwayland_unmanaged *u = wl_container_of(listener, u, dissociate);
+
+	wl_list_remove(&u->map.link);
+	wl_list_remove(&u->unmap.link);
+	if (u->scene_tree != NULL) {
+		wlr_scene_node_destroy(&u->scene_tree->node);
+		u->scene_tree = NULL;
+	}
+}
+
+static void unmanaged_destroy(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_xwayland_unmanaged *u = wl_container_of(listener, u, destroy);
+
+	wl_list_remove(&u->associate.link);
+	wl_list_remove(&u->dissociate.link);
+	wl_list_remove(&u->destroy.link);
+	wl_list_remove(&u->request_configure.link);
+	if (u->scene_tree != NULL) {
+		wlr_scene_node_destroy(&u->scene_tree->node);
+		u->scene_tree = NULL;
+	}
+	wl_list_remove(&u->link);
+	free(u);
+}
+
+static void server_new_xwayland_surface(struct wl_listener *listener, void *data) {
+	struct wtf_server *srv =
+		wl_container_of(listener, srv, new_xwayland_surface);
+	struct wlr_xwayland_surface *xsurface = data;
+
+	if (xsurface->override_redirect) {
+		/* Unmanaged: never given an id, never reported to the brain. */
+		struct wtf_xwayland_unmanaged *u = calloc(1, sizeof(*u));
+		u->server = srv;
+		u->xsurface = xsurface;
+		/* Self-referential link: not tracked on any server list (the brain never
+		 * sees these), so wl_list_remove() in unmanaged_destroy is a safe no-op. */
+		wl_list_init(&u->link);
+
+		u->associate.notify = unmanaged_associate;
+		wl_signal_add(&xsurface->events.associate, &u->associate);
+		u->dissociate.notify = unmanaged_dissociate;
+		wl_signal_add(&xsurface->events.dissociate, &u->dissociate);
+		u->destroy.notify = unmanaged_destroy;
+		wl_signal_add(&xsurface->events.destroy, &u->destroy);
+		u->request_configure.notify = unmanaged_request_configure;
+		wl_signal_add(&xsurface->events.request_configure, &u->request_configure);
+		return;
+	}
+
+	/* Managed: a real tiled toplevel sharing the xdg brain id-space. The scene
+	 * node + map/unmap listeners are deferred to the associate event. */
+	struct wtf_toplevel *toplevel = calloc(1, sizeof(*toplevel));
+	toplevel->server = srv;
+	toplevel->is_xwayland = true;
+	toplevel->xwl_surface = xsurface;
+
+	toplevel->associate.notify = xwl_associate;
+	wl_signal_add(&xsurface->events.associate, &toplevel->associate);
+	toplevel->dissociate.notify = xwl_dissociate;
+	wl_signal_add(&xsurface->events.dissociate, &toplevel->dissociate);
+	toplevel->xwl_destroy.notify = xwl_destroy;
+	wl_signal_add(&xsurface->events.destroy, &toplevel->xwl_destroy);
+	toplevel->request_configure.notify = xwl_request_configure;
+	wl_signal_add(&xsurface->events.request_configure, &toplevel->request_configure);
+}
+
+static void server_xwayland_ready(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_server *srv = wl_container_of(listener, srv, xwayland_ready);
+	/* DISPLAY is set at create time (see wtf_run). The seat needs the xwm, which
+	 * only exists once the server is ready — so set it here. */
+	wlr_xwayland_set_seat(srv->xwayland, srv->seat);
+}
+
 static void xdg_popup_commit(struct wl_listener *listener, void *data) {
 	struct wtf_popup *popup = wl_container_of(listener, popup, commit);
 	if (popup->xdg_popup->base->initial_commit) {
@@ -1157,7 +1452,14 @@ void wtf_configure(int id, int x, int y, int width, int height) {
 	}
 	/* Size is applied immediately (clients can't smoothly resize); only the
 	 * scene-node position and opacity animate, in output_frame. */
-	wlr_xdg_toplevel_set_size(t->xdg_toplevel, width, height);
+	if (t->is_xwayland) {
+		/* X11 has no smooth resize; configure with the final geometry. The
+		 * scene-node move is still handled generically by animate_toplevels. */
+		wlr_xwayland_surface_configure(t->xwl_surface,
+			(int16_t)x, (int16_t)y, (uint16_t)width, (uint16_t)height);
+	} else {
+		wlr_xdg_toplevel_set_size(t->xdg_toplevel, width, height);
+	}
 	schedule_frame();
 }
 
@@ -1168,7 +1470,11 @@ void wtf_focus(int id) {
 void wtf_close(int id) {
 	struct wtf_toplevel *t = toplevel_by_id(id);
 	if (t != NULL) {
-		wlr_xdg_toplevel_send_close(t->xdg_toplevel);
+		if (t->is_xwayland) {
+			wlr_xwayland_surface_close(t->xwl_surface);
+		} else {
+			wlr_xdg_toplevel_send_close(t->xdg_toplevel);
+		}
 	}
 }
 
@@ -1287,7 +1593,8 @@ int wtf_run(struct wtf_callbacks cbs) {
 		return 1;
 	}
 
-	wlr_compositor_create(server.wl_display, 5, server.renderer);
+	struct wlr_compositor *compositor =
+		wlr_compositor_create(server.wl_display, 5, server.renderer);
 	wlr_subcompositor_create(server.wl_display);
 	wlr_data_device_manager_create(server.wl_display);
 
@@ -1359,6 +1666,28 @@ int wtf_run(struct wtf_callbacks cbs) {
 	wl_signal_add(&server.seat->events.request_set_selection,
 		&server.request_set_selection);
 
+	/* XWayland (lazy: the X server starts on first client connect). Managed X11
+	 * toplevels reuse the xdg view_map/view_unmap/wtf_configure/wtf_focus paths;
+	 * override-redirect surfaces are unmanaged scene nodes. */
+	server.xwayland =
+		wlr_xwayland_create(server.wl_display, compositor, true);
+	if (server.xwayland == NULL) {
+		wlr_log(WLR_ERROR, "failed to create wlr_xwayland; X11 apps unavailable");
+	} else {
+		/* Set DISPLAY NOW, not in the ready handler: display_name is valid right
+		 * after create, but `ready` only fires once Xwayland actually starts —
+		 * and in lazy mode that start is triggered BY a client connecting to the
+		 * X socket, which can only happen if DISPLAY is already in the env. So
+		 * deferring DISPLAY to ready is a chicken-and-egg deadlock for the first
+		 * X11 client. Children spawned via wtf_spawn inherit this. */
+		setenv("DISPLAY", server.xwayland->display_name, true);
+		server.xwayland_ready.notify = server_xwayland_ready;
+		wl_signal_add(&server.xwayland->events.ready, &server.xwayland_ready);
+		server.new_xwayland_surface.notify = server_new_xwayland_surface;
+		wl_signal_add(&server.xwayland->events.new_surface,
+			&server.new_xwayland_surface);
+	}
+
 	const char *socket = wl_display_add_socket_auto(server.wl_display);
 	if (!socket) {
 		wlr_backend_destroy(server.backend);
@@ -1390,6 +1719,9 @@ int wtf_run(struct wtf_callbacks cbs) {
 	wl_display_run(server.wl_display);
 
 	/* Teardown. */
+	if (server.xwayland != NULL) {
+		wlr_xwayland_destroy(server.xwayland);
+	}
 	wl_display_destroy_clients(server.wl_display);
 	wlr_scene_node_destroy(&server.scene->tree.node);
 	wlr_xcursor_manager_destroy(server.cursor_mgr);
