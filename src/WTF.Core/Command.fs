@@ -22,6 +22,8 @@ type Command =
     | SinkAll                        // clear all floating on the current workspace
     | CloseFocused
     | Spawn of string                // launch a program (effect, run by C side)
+    | SpawnOnce of string            // launch only if no live instance of this exact
+                                     // command string is already running (singleton)
     | SwitchWorkspace of string      // view another tag
     | MoveToWorkspace of string      // send focused window to a tag
     | NextWorkspace                  // view the next/previous tag in order
@@ -54,6 +56,7 @@ type Command =
 /// Side effects the pure reducer requests; the C compositor carries them out.
 type Effect =
     | SpawnProcess of string
+    | SpawnProcessOnce of string          // launch iff no live instance (host tracks)
     | CloseSurface of WindowId
     | Arrange of (WindowId * Rect) list   // place (and later animate) windows
     | SetFullscreen of WindowId * bool    // flip a surface's fullscreen protocol flag (C)
@@ -63,6 +66,20 @@ type Effect =
     | RenderBorderColor of bool * float * float * float  // active?, r, g, b
     | RenderCornerRadius of int           // rounded corners (scenefx)
     | RenderBlur of bool                  // backdrop blur (scenefx)
+
+/// Command combinators usable directly in a config (auto-opened with WTF.Core).
+[<AutoOpen>]
+module CommandHelpers =
+
+    /// Wrap a launch so repeated triggers don't stack instances:
+    /// `bind "M-p" (once (Spawn "wtf-omnibox"))`. The host skips the launch while
+    /// a previous instance of the SAME command string is still alive — so mashing
+    /// Super+p a hundred times yields ONE omnibox, not a hundred. Any non-Spawn
+    /// command passes through unchanged, so `once` is safe to apply anywhere.
+    let once (cmd: Command) : Command =
+        match cmd with
+        | Spawn s -> SpawnOnce s
+        | other -> other
 
 module Reducer =
 
@@ -85,7 +102,7 @@ module Reducer =
         | SetMaster _ | IncMaster | DecMaster
         | SetRatio _
         | SetGaps _ | IncGaps | DecGaps -> true
-        | CloseFocused | Spawn _
+        | CloseFocused | Spawn _ | SpawnOnce _
         | SetInactiveOpacity _ | SetAnimationSpeed _ | SetBorderWidth _
         | SetBorderColor _ | SetCornerRadius _ | SetBlur _
         | Undo | Redo | SaveSession | LoadSession
@@ -202,6 +219,7 @@ module Reducer =
             | None -> w, []
 
         | Spawn prog -> w, [ SpawnProcess prog ]
+        | SpawnOnce prog -> w, [ SpawnProcessOnce prog ]
 
         | SwitchWorkspace tag ->
             if List.exists (fun ws -> ws.Tag = tag) w.Workspaces then

@@ -176,6 +176,31 @@ let mutable private activeWallpaper : Wallpaper = cfg.Wallpaper
 // default so it is valid before the first applyConfig wires the real one.
 let mutable private activePalette : WTF.Core.Palette.Palette = WTF.Core.Palette.defaultPalette
 
+// ---- singleton spawns (SpawnOnce) ------------------------------------------
+// Skip a launch while a prior instance of the SAME command is still alive, so
+// mashing a launcher keybind (Super+p) can't stack a hundred omniboxes. Liveness
+// is tracked via the managed child handle (HasExited is accurate — the runtime
+// reaps), keyed by the exact command string. Routed through /bin/sh -c so the
+// command keeps its shell semantics, inheriting the host's WAYLAND_DISPLAY etc.
+let private onceProcs = System.Collections.Generic.Dictionary<string, System.Diagnostics.Process>()
+let private spawnOnce (cmd: string) =
+    let alive =
+        match onceProcs.TryGetValue cmd with
+        | true, p -> (try not p.HasExited with _ -> false)
+        | _ -> false
+    if alive then
+        eprintfn "WTF: SpawnOnce '%s' skipped — instance already running" cmd
+    else
+        try
+            let psi = System.Diagnostics.ProcessStartInfo("/bin/sh")
+            psi.ArgumentList.Add "-c"
+            psi.ArgumentList.Add cmd
+            psi.UseShellExecute <- false
+            match System.Diagnostics.Process.Start psi with
+            | null -> ()
+            | p -> onceProcs[cmd] <- p
+        with ex -> eprintfn "WTF: SpawnOnce '%s' failed: %O" cmd ex
+
 let private applyEffects effects =
     for e in effects do
         match e with
@@ -184,6 +209,7 @@ let private applyEffects effects =
                 let x, y, w, h = Scaling.configure cfg.Scale r
                 Ffi.wtf_configure (id, x, y, w, h)
         | SpawnProcess cmd -> Ffi.wtf_spawn cmd
+        | SpawnProcessOnce cmd -> spawnOnce cmd
         | CloseSurface id -> Ffi.wtf_close id
         | RenderOpacity o -> Ffi.wtf_set_inactive_opacity o
         | RenderAnimSpeed s -> Ffi.wtf_set_anim_speed s

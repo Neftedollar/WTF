@@ -304,6 +304,24 @@ let ``spawn emits a SpawnProcess and leaves the world unchanged`` () =
     Assert.Equal<World>(w, w')
     Assert.Equal<Effect list>([ SpawnProcess "foot" ], e)
 
+[<Fact>]
+let ``spawnOnce emits a SpawnProcessOnce and leaves the world unchanged`` () =
+    let w = worldWith 1
+    let w', e = Reducer.apply (SpawnOnce "wtf-omnibox") w
+    Assert.Equal<World>(w, w')
+    Assert.Equal<Effect list>([ SpawnProcessOnce "wtf-omnibox" ], e)
+
+[<Fact>]
+let ``once wraps a Spawn into a SpawnOnce, passes other commands through`` () =
+    Assert.Equal<Command>(SpawnOnce "wtf-omnibox", once (Spawn "wtf-omnibox"))
+    // non-Spawn commands are returned unchanged
+    Assert.Equal<Command>(CloseFocused, once CloseFocused)
+    Assert.Equal<Command>(Focus NextWindow, once (Focus NextWindow))
+
+[<Fact>]
+let ``spawnOnce is not undoable`` () =
+    Assert.False(Reducer.isUndoable (SpawnOnce "x"))
+
 // ---- SwitchWorkspace invalid / idempotent ---------------------------
 
 [<Fact>]
