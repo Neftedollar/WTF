@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- D-Bus introspection Type Provider (Phase 3 #14).
+
+       This is a COMBINED design-time + runtime Type Provider assembly:
+       - TargetFramework netstandard2.0 so the F# COMPILER (the design-time host)
+         can load it when a consumer writes DBusIntrospection<"...">.
+       - The erased provided types reference the RuntimeTypes records, which live
+         in THIS assembly — so a net10 consumer that references this dll gets the
+         runtime erasure target for free.
+
+       Type Providers are a COMPILE-TIME feature: the provided members erase to
+       constants at build time, so this is fully NativeAOT compatible (unlike the
+       JIT-based FCS config / reflective layout-plugin features). -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <!-- This dll IS a type-provider design-time component. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NoWarn>$(NoWarn);NU1701</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 1. Runtime erasure target FIRST (records the provided types erase to). -->
+    <Compile Include="RuntimeTypes.fs" />
+    <!-- 2. The SDK's ProvidedTypes API, compiled INTO the provider (the intended
+            consumption model: copied from the package's src/, .fsi before .fs). -->
+    <Compile Include="ProvidedTypes.fsi" />
+    <Compile Include="ProvidedTypes.fs" />
+    <!-- 3. The provider itself. -->
+    <Compile Include="DBusIntrospectionProvider.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pin the SDK version (restore the package) but DO NOT take its compile
+         assets — we compile ProvidedTypes.fs from source ourselves. -->
+    <PackageReference Include="FSharp.TypeProviders.SDK" Version="8.10.0">
+      <ExcludeAssets>compile</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

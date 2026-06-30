@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Consumer / proof project for the D-Bus introspection Type Provider.
+       net10 consumer references the netstandard2.0 TP dll; the F# compiler loads
+       the provider at design time and surfaces typed members from the XML.
+       If this project COMPILES, the TP genuinely read real introspection XML at
+       build time and produced typed members. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Tests.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Hermetic COPY of a real introspection XML so the test never depends on
+         /usr/share/dbus-1 being present (e.g. in CI). The design-time TP resolves
+         the relative path against the project's ResolutionFolder; the file is
+         also copied to output so any runtime use can find it. -->
+    <None Include="data/org.freedesktop.Accounts.xml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\WTF.TypeProviders\WTF.TypeProviders.fsproj" />
+  </ItemGroup>
+
+</Project>
