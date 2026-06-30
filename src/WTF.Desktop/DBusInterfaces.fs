@@ -16,6 +16,7 @@ module DBus =
     // -- org.freedesktop.Notifications (SERVER: we own & implement this) --------
     [<DBusInterface("org.freedesktop.Notifications")>]
     type IFreedesktopNotifications =
+        inherit IDBusObject
         abstract member NotifyAsync:
             appName: string *
             replacesId: uint32 *
@@ -40,6 +41,7 @@ module DBus =
     // -- org.freedesktop.DBus (bus daemon: watch arbitrary name owner changes) --
     [<DBusInterface("org.freedesktop.DBus")>]
     type IBusDaemon =
+        inherit IDBusObject
         /// NameOwnerChanged(name, oldOwner, newOwner) — used to track MPRIS players
         /// appearing/disappearing (their bus names are dynamic, so a single
         /// ResolveServiceOwner is not enough; we filter this firehose by prefix).
@@ -49,6 +51,7 @@ module DBus =
     // -- org.freedesktop.login1 (CLIENT) ---------------------------------------
     [<DBusInterface("org.freedesktop.login1.Manager")>]
     type ILogindManager =
+        inherit IDBusObject
         abstract member GetSessionAsync: sessionId: string -> Task<ObjectPath>
         abstract member WatchPrepareForSleepAsync: handler: Action<bool> -> Task<IDisposable>
         /// Delay-inhibitor fd (released to let sleep proceed). Optional hook.
@@ -56,6 +59,7 @@ module DBus =
 
     [<DBusInterface("org.freedesktop.login1.Session")>]
     type ILogindSession =
+        inherit IDBusObject
         abstract member WatchLockAsync: handler: Action -> Task<IDisposable>
         abstract member WatchUnlockAsync: handler: Action -> Task<IDisposable>
 
@@ -68,6 +72,7 @@ module DBus =
 
     [<DBusInterface("org.freedesktop.UPower.Device")>]
     type IUPowerDevice =
+        inherit IDBusObject
         abstract member GetAllAsync: unit -> Task<BatteryProps>
         abstract member WatchPropertiesAsync: handler: Action<PropertyChanges> -> Task<IDisposable>
 
@@ -80,17 +85,20 @@ module DBus =
 
     [<DBusInterface("org.freedesktop.NetworkManager")>]
     type INetworkManager =
+        inherit IDBusObject
         abstract member GetAllAsync: unit -> Task<NetworkProps>
         abstract member WatchPropertiesAsync: handler: Action<PropertyChanges> -> Task<IDisposable>
 
     // -- org.mpris.MediaPlayer2.* (CLIENT) -------------------------------------
     [<DBusInterface("org.mpris.MediaPlayer2")>]
     type IMprisRoot =
+        inherit IDBusObject
         /// Property getter (org.freedesktop.DBus.Properties.Get for this iface).
         abstract member GetAsync: prop: string -> Task<obj>
 
     [<DBusInterface("org.mpris.MediaPlayer2.Player")>]
     type IMprisPlayer =
+        inherit IDBusObject
         abstract member PlayPauseAsync: unit -> Task
         abstract member PlayAsync: unit -> Task
         abstract member PauseAsync: unit -> Task
