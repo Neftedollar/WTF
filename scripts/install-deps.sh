@@ -10,6 +10,11 @@ PKGS=(
   libdrm-dev libgbm-dev libpixman-1-dev
   libinput-dev libseat-dev libudev-dev
   libgles2-mesa-dev libegl1-mesa-dev
+  # runtime desktop-shell tooling: portals (screenshots/screencast/file-picker)
+  # + screenshot CLIs. The compositor exports the screencopy/dmabuf protocols
+  # these rely on (Phase 2 #9).
+  xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk
+  grim slurp
 )
 
 echo ">> apt-get update"

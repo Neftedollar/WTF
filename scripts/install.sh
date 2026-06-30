@@ -55,6 +55,9 @@ install -Dm755 scripts/wtf-session "$BINWTF/wtf-session"
 # TTY smoke test the user can run from a free VT to verify DRM/KMS startup.
 install -Dm755 scripts/smoke-drm.sh "$BINWTF/wtf-smoke-drm"
 install -Dm644 packaging/wtf.desktop "$SESS/wtf.desktop"
+# xdg-desktop-portal routing (screenshots/screencast -> wlr, file-picker -> gtk),
+# selected when XDG_CURRENT_DESKTOP=wtf. Needs the portal packages installed.
+install -Dm644 packaging/wtf-portals.conf "$STAGE/usr/share/xdg-desktop-portal/wtf-portals.conf"
 
 echo ">> 4/5  copying into / (needs root)"
 if [ "$(id -u)" -eq 0 ]; then

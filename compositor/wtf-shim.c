@@ -31,6 +31,11 @@
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_data_control_v1.h>
+#include <wlr/types/wlr_export_dmabuf_v1.h>
+#include <wlr/types/wlr_gamma_control_v1.h>
+#include <wlr/types/wlr_primary_selection_v1.h>
+#include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_output.h>
@@ -1885,6 +1890,21 @@ int wtf_run(struct wtf_callbacks cbs) {
 		wlr_compositor_create(server.wl_display, 5, server.renderer);
 	wlr_subcompositor_create(server.wl_display);
 	wlr_data_device_manager_create(server.wl_display);
+
+	/* Desktop-shell protocols (Phase 2 #9). These managers are self-contained —
+	 * wlroots implements the protocol internally, so creating them is all that is
+	 * needed to enable the matching client tooling:
+	 *   - screencopy + export-dmabuf: screenshots (grim) + screencast, which is
+	 *     what xdg-desktop-portal-wlr uses to serve the Screenshot/ScreenCast
+	 *     portals (file-picker portal comes from xdg-desktop-portal-gtk).
+	 *   - data-control: clipboard managers (wl-clipboard / clipman).
+	 *   - primary-selection: middle-click paste.
+	 *   - gamma-control: night light (gammastep / wlsunset). */
+	wlr_screencopy_manager_v1_create(server.wl_display);
+	wlr_export_dmabuf_manager_v1_create(server.wl_display);
+	wlr_data_control_manager_v1_create(server.wl_display);
+	wlr_primary_selection_v1_device_manager_create(server.wl_display);
+	wlr_gamma_control_manager_v1_create(server.wl_display);
 
 	server.output_layout = wlr_output_layout_create(server.wl_display);
 
