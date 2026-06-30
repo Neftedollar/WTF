@@ -376,9 +376,12 @@ let onKey (mods: uint32) (sym: uint32) : int =
     | Some chord ->
         match Keymap.lookup cfg chord with
         | Some cmd ->
+            eprintfn "WTF: key %s -> %A" chord cmd
             dispatch cmd
             1
-        | None -> 0
+        | None ->
+            eprintfn "WTF: key %s -> (unbound)" chord
+            0
     | None -> 0
 
 let onOutputResize (x: int) (y: int) (width: int) (height: int) : unit =

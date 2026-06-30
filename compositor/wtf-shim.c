@@ -1188,8 +1188,11 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 	toplevel->id = ++toplevel->server->next_id;
 	toplevel->mapped = true;
 
-	/* Start transparent so the first wtf_configure fades + slides it in. */
-	toplevel->opacity = 0.0;
+	/* Start at the target opacity (NOT a 0->fade): the border is a solid color
+	 * rect behind the window, so an opacity fade-in reveals it as a bright flash
+	 * until the window paints over it. Position still animates via anim_init. A
+	 * proper non-flashing open animation lands with the animation engine. */
+	toplevel->opacity = g_inactive_opacity;
 	toplevel->target_opacity = g_inactive_opacity;
 	toplevel->applied_opacity = -1.0;
 	toplevel->anim_init = false;
@@ -1382,8 +1385,11 @@ static void xwl_map(struct wl_listener *listener, void *data) {
 	toplevel->id = ++srv->next_id;
 	toplevel->mapped = true;
 
-	/* Start transparent so the first wtf_configure fades + slides it in. */
-	toplevel->opacity = 0.0;
+	/* Start at the target opacity (NOT a 0->fade): the border is a solid color
+	 * rect behind the window, so an opacity fade-in reveals it as a bright flash
+	 * until the window paints over it. Position still animates via anim_init. A
+	 * proper non-flashing open animation lands with the animation engine. */
+	toplevel->opacity = g_inactive_opacity;
 	toplevel->target_opacity = g_inactive_opacity;
 	toplevel->applied_opacity = -1.0;
 	toplevel->anim_init = false;
