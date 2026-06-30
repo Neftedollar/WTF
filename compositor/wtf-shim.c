@@ -47,6 +47,8 @@
 #include <wlr/xwayland.h>
 #include <wlr/util/box.h>
 #include <wlr/util/log.h>
+#include <wlr/backend/libinput.h>
+#include <libinput.h>
 #include <xkbcommon/xkbcommon.h>
 
 #include "wtf.h"
@@ -99,6 +101,7 @@ struct wtf_server {
 	struct wl_listener request_cursor;
 	struct wl_listener request_set_selection;
 	struct wl_list keyboards;
+	struct wl_list pointers;
 	enum wtf_cursor_mode cursor_mode;
 	struct wtf_toplevel *grabbed_toplevel;
 	double grab_x, grab_y;
@@ -219,6 +222,14 @@ struct wtf_keyboard {
 	struct wl_listener destroy;
 };
 
+/* A pointer-class device (mouse OR touchpad). Tracked so libinput config that
+ * arrives after attach can be re-applied to already-present devices. */
+struct wtf_pointer {
+	struct wl_list link;
+	struct wlr_input_device *device;
+	struct wl_listener destroy;
+};
+
 /* The single global compositor instance and the brain's callbacks. The event
  * loop is single-threaded, so plain globals are correct here. */
 static struct wtf_server server;
@@ -274,6 +285,27 @@ static float g_inactive_border[4] = {0.27f, 0.28f, 0.35f, 1.0f};  /* unfocused *
 static int g_corner_radius = 0;           /* rounded corners (0 = sharp) */
 static bool g_blur_enabled = false;       /* backdrop blur behind windows */
 static struct blur_data g_blur;           /* blur params (init in wtf_run) */
+
+/* ---- input config (xkb keymap + key repeat, set via wtf_set_keymap) ---- */
+/* Each xkb field is NULL => let xkb pick its compile default for that field. */
+static char *g_kb_rules   = NULL;
+static char *g_kb_model   = NULL;
+static char *g_kb_layout  = NULL;
+static char *g_kb_variant = NULL;
+static char *g_kb_options = NULL;
+static int   g_repeat_rate  = 25;   /* keys/sec (xkb default-ish) */
+static int   g_repeat_delay = 600;  /* ms before repeat kicks in */
+
+/* ---- libinput config (mouse/touchpad, set via wtf_set_libinput_config) ---- */
+/* int fields: -1 = leave libinput's own default; 0/1 = off/on; 2 = 3rd option.
+ * accel speeds are always applied (0.0 is neutral). Mirrors struct
+ * wtf_libinput_config in wtf.h byte-for-byte. */
+static struct wtf_libinput_config g_li = {
+	.mouse_accel = 0.0, .mouse_accel_profile = -1, .mouse_natural_scroll = -1,
+	.tap = -1, .tap_drag = -1, .tp_natural_scroll = -1, .dwt = -1,
+	.scroll_method = -1, .click_method = -1,
+	.tp_accel = 0.0, .tp_accel_profile = -1,
+};
 
 /* Wake the primary output so an animation that isn't otherwise damaging the
  * scene (e.g. a focus-only opacity change) still gets stepped next frame. */
@@ -517,6 +549,34 @@ static void keyboard_handle_destroy(struct wl_listener *listener, void *data) {
 	free(keyboard);
 }
 
+/* Build an xkb keymap from the configured rule-names (NULL fields => xkb
+ * default) and apply it plus the configured key-repeat info to one keyboard.
+ * Used both on attach and when wtf_set_keymap re-applies to existing kbds. */
+static void apply_keymap_to(struct wlr_keyboard *wlr_keyboard) {
+	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+	struct xkb_rule_names names = {
+		.rules   = g_kb_rules,
+		.model   = g_kb_model,
+		.layout  = g_kb_layout,
+		.variant = g_kb_variant,
+		.options = g_kb_options,
+	};
+	struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, &names,
+		XKB_KEYMAP_COMPILE_NO_FLAGS);
+	if (keymap != NULL) {
+		wlr_keyboard_set_keymap(wlr_keyboard, keymap);
+		xkb_keymap_unref(keymap);
+	} else {
+		wlr_log(WLR_ERROR, "xkb keymap compile failed for layout '%s' "
+			"variant '%s' options '%s'; keeping previous keymap",
+			g_kb_layout ? g_kb_layout : "(default)",
+			g_kb_variant ? g_kb_variant : "",
+			g_kb_options ? g_kb_options : "");
+	}
+	xkb_context_unref(context);
+	wlr_keyboard_set_repeat_info(wlr_keyboard, g_repeat_rate, g_repeat_delay);
+}
+
 static void server_new_keyboard(struct wtf_server *srv,
 		struct wlr_input_device *device) {
 	struct wlr_keyboard *wlr_keyboard = wlr_keyboard_from_input_device(device);
@@ -525,14 +585,7 @@ static void server_new_keyboard(struct wtf_server *srv,
 	keyboard->server = srv;
 	keyboard->wlr_keyboard = wlr_keyboard;
 
-	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-	struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, NULL,
-		XKB_KEYMAP_COMPILE_NO_FLAGS);
-
-	wlr_keyboard_set_keymap(wlr_keyboard, keymap);
-	xkb_keymap_unref(keymap);
-	xkb_context_unref(context);
-	wlr_keyboard_set_repeat_info(wlr_keyboard, 25, 600);
+	apply_keymap_to(wlr_keyboard);
 
 	keyboard->modifiers.notify = keyboard_handle_modifiers;
 	wl_signal_add(&wlr_keyboard->events.modifiers, &keyboard->modifiers);
@@ -546,9 +599,110 @@ static void server_new_keyboard(struct wtf_server *srv,
 	wl_list_insert(&srv->keyboards, &keyboard->link);
 }
 
+/* Apply the stored libinput config to one pointer-class device. Touchpad vs
+ * mouse is distinguished by tap finger count (a mouse reports 0), NOT by the
+ * wlr device type (a touchpad is also WLR_INPUT_DEVICE_POINTER). Each knob is
+ * guarded by libinput's own _is_available / _has_* / _get_methods probe and by
+ * the -1 leave-default sentinel. In the nested wayland/X11 backend the device
+ * is NOT libinput-backed, so we early-return before touching the handle. */
+static void apply_libinput_to(struct wlr_input_device *device) {
+	if (!wlr_input_device_is_libinput(device)) {
+		return;
+	}
+	struct libinput_device *li = wlr_libinput_get_device_handle(device);
+	if (li == NULL) {
+		return;
+	}
+	bool is_touchpad = libinput_device_config_tap_get_finger_count(li) > 0;
+
+	if (is_touchpad) {
+		if (g_li.tap >= 0) {
+			libinput_device_config_tap_set_enabled(li, g_li.tap
+				? LIBINPUT_CONFIG_TAP_ENABLED
+				: LIBINPUT_CONFIG_TAP_DISABLED);
+		}
+		if (g_li.tap_drag >= 0) {
+			libinput_device_config_tap_set_drag_enabled(li, g_li.tap_drag
+				? LIBINPUT_CONFIG_DRAG_ENABLED
+				: LIBINPUT_CONFIG_DRAG_DISABLED);
+		}
+		if (g_li.tp_natural_scroll >= 0 &&
+				libinput_device_config_scroll_has_natural_scroll(li)) {
+			libinput_device_config_scroll_set_natural_scroll_enabled(li,
+				g_li.tp_natural_scroll);
+		}
+		if (g_li.dwt >= 0 && libinput_device_config_dwt_is_available(li)) {
+			libinput_device_config_dwt_set_enabled(li, g_li.dwt
+				? LIBINPUT_CONFIG_DWT_ENABLED
+				: LIBINPUT_CONFIG_DWT_DISABLED);
+		}
+		if (g_li.scroll_method >= 0) {
+			uint32_t avail = libinput_device_config_scroll_get_methods(li);
+			enum libinput_config_scroll_method m =
+				g_li.scroll_method == 1 ? LIBINPUT_CONFIG_SCROLL_2FG :
+				g_li.scroll_method == 2 ? LIBINPUT_CONFIG_SCROLL_EDGE :
+				LIBINPUT_CONFIG_SCROLL_NO_SCROLL;
+			if (m == LIBINPUT_CONFIG_SCROLL_NO_SCROLL || (avail & m)) {
+				libinput_device_config_scroll_set_method(li, m);
+			}
+		}
+		if (g_li.click_method >= 0) {
+			uint32_t avail = libinput_device_config_click_get_methods(li);
+			enum libinput_config_click_method m =
+				g_li.click_method == 1 ? LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS :
+				g_li.click_method == 2 ? LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER :
+				LIBINPUT_CONFIG_CLICK_METHOD_NONE;
+			if (m == LIBINPUT_CONFIG_CLICK_METHOD_NONE || (avail & m)) {
+				libinput_device_config_click_set_method(li, m);
+			}
+		}
+		if (libinput_device_config_accel_is_available(li)) {
+			libinput_device_config_accel_set_speed(li, g_li.tp_accel);
+			if (g_li.tp_accel_profile >= 0) {
+				libinput_device_config_accel_set_profile(li,
+					g_li.tp_accel_profile == 1
+						? LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE
+						: LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT);
+			}
+		}
+	} else {
+		if (g_li.mouse_natural_scroll >= 0 &&
+				libinput_device_config_scroll_has_natural_scroll(li)) {
+			libinput_device_config_scroll_set_natural_scroll_enabled(li,
+				g_li.mouse_natural_scroll);
+		}
+		if (libinput_device_config_accel_is_available(li)) {
+			libinput_device_config_accel_set_speed(li, g_li.mouse_accel);
+			if (g_li.mouse_accel_profile >= 0) {
+				libinput_device_config_accel_set_profile(li,
+					g_li.mouse_accel_profile == 1
+						? LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE
+						: LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT);
+			}
+		}
+	}
+}
+
+static void pointer_handle_destroy(struct wl_listener *listener, void *data) {
+	struct wtf_pointer *pointer = wl_container_of(listener, pointer, destroy);
+	wl_list_remove(&pointer->destroy.link);
+	wl_list_remove(&pointer->link);
+	free(pointer);
+}
+
 static void server_new_pointer(struct wtf_server *srv,
 		struct wlr_input_device *device) {
 	wlr_cursor_attach_input_device(srv->cursor, device);
+
+	/* Track it so a later wtf_set_libinput_config can re-apply, then apply the
+	 * config we have right now. */
+	struct wtf_pointer *pointer = calloc(1, sizeof(*pointer));
+	pointer->device = device;
+	pointer->destroy.notify = pointer_handle_destroy;
+	wl_signal_add(&device->events.destroy, &pointer->destroy);
+	wl_list_insert(&srv->pointers, &pointer->link);
+
+	apply_libinput_to(device);
 }
 
 static void server_new_input(struct wl_listener *listener, void *data) {
@@ -1600,6 +1754,44 @@ void wtf_set_blur(int enabled, int radius, int passes) {
 	schedule_frame();
 }
 
+/* Replace g_kb_* with a freshly dup'd copy of s, or NULL when s is empty
+ * (""), which makes xkb fall back to its compile default for that field. */
+static char *kb_dup_or_null(const char *s) {
+	return (s != NULL && s[0] != '\0') ? strdup(s) : NULL;
+}
+
+void wtf_set_keymap(const char *rules, const char *model, const char *layout,
+		const char *variant, const char *options,
+		int repeat_rate, int repeat_delay) {
+	free(g_kb_rules);
+	free(g_kb_model);
+	free(g_kb_layout);
+	free(g_kb_variant);
+	free(g_kb_options);
+	g_kb_rules   = kb_dup_or_null(rules);
+	g_kb_model   = kb_dup_or_null(model);
+	g_kb_layout  = kb_dup_or_null(layout);
+	g_kb_variant = kb_dup_or_null(variant);
+	g_kb_options = kb_dup_or_null(options);
+	g_repeat_rate  = repeat_rate;
+	g_repeat_delay = repeat_delay;
+
+	/* Re-apply to keyboards that attached before the config arrived. */
+	struct wtf_keyboard *kb;
+	wl_list_for_each(kb, &server.keyboards, link) {
+		apply_keymap_to(kb->wlr_keyboard);
+	}
+}
+
+void wtf_set_libinput_config(struct wtf_libinput_config cfg) {
+	g_li = cfg;
+	/* Re-apply to pointer devices that attached before the config arrived. */
+	struct wtf_pointer *pointer;
+	wl_list_for_each(pointer, &server.pointers, link) {
+		apply_libinput_to(pointer->device);
+	}
+}
+
 int wtf_run(struct wtf_callbacks cbs) {
 	g_cb = cbs;
 
@@ -1695,6 +1887,7 @@ int wtf_run(struct wtf_callbacks cbs) {
 	wl_signal_add(&server.cursor->events.frame, &server.cursor_frame);
 
 	wl_list_init(&server.keyboards);
+	wl_list_init(&server.pointers);
 	server.new_input.notify = server_new_input;
 	wl_signal_add(&server.backend->events.new_input, &server.new_input);
 	server.seat = wlr_seat_create(server.wl_display, "seat0");

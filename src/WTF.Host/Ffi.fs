@@ -69,3 +69,35 @@ module Ffi =
 
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_fullscreen(int id, int on)
+
+    // ---- input configuration (keyboard xkb/repeat + libinput pointer/touchpad) ----
+
+    /// Mirrors `struct wtf_libinput_config` in compositor/wtf.h EXACTLY. Fully
+    /// blittable (only int/double) so it passes by value with no custom marshaller.
+    /// int sentinels: -1 = leave libinput default; 0/1 = off/on; 2 = third option.
+    /// Field ORDER and TYPES must match the C struct byte-for-byte.
+    [<StructLayout(LayoutKind.Sequential)>]
+    type LibinputConfig =
+        struct
+            val mutable MouseAccel: float          // off 0  : -1.0..1.0 (0.0 neutral)
+            val mutable MouseAccelProfile: int     // off 8  : -1 / 0 flat / 1 adaptive
+            val mutable MouseNaturalScroll: int    // off 12 : -1 / 0 / 1
+            val mutable Tap: int                   // off 16 : -1 / 0 / 1
+            val mutable TapDrag: int               // off 20 : -1 / 0 / 1
+            val mutable TpNaturalScroll: int       // off 24 : -1 / 0 / 1
+            val mutable Dwt: int                   // off 28 : -1 / 0 / 1
+            val mutable ScrollMethod: int          // off 32 : -1 / 0 none / 1 2fg / 2 edge
+            val mutable ClickMethod: int           // off 36 : -1 / 0 none / 1 areas / 2 clickfinger
+            val mutable TpAccel: float             // off 40 : -1.0..1.0
+            val mutable TpAccelProfile: int        // off 48 : -1 / 0 flat / 1 adaptive
+        end
+
+    /// Empty string ("") => that xkb_rule_names field is NULL (xkb default) on the
+    /// C side. repeat_rate keys/sec, repeat_delay ms. Ansi like wtf_spawn (ASCII).
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)>]
+    extern void wtf_set_keymap(string rules, string model, string layout,
+                               string variant, string options,
+                               int repeat_rate, int repeat_delay)
+
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_libinput_config(LibinputConfig cfg)

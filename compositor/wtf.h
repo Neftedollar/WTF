@@ -78,6 +78,40 @@ void wtf_set_corner_radius(int radius);
 /* Backdrop blur: enable/disable + radius and pass count (<=0 keeps current). */
 void wtf_set_blur(int enabled, int radius, int passes);
 
+/* ---- input configuration (keyboard xkb/repeat + libinput pointer/touchpad) ---- */
+
+/* Set the xkb rule-names and key-repeat applied to every keyboard (existing and
+ * future). An empty string ("") for any of rules/model/layout/variant/options
+ * means "use the xkb compile default for that field" (passed as NULL). The
+ * layout-switch behaviour (e.g. options "grp:alt_shift_toggle" with layout
+ * "us,ru") is handled entirely inside xkb once the options reach it.
+ * repeat_rate is keys/sec, repeat_delay is the ms before repeat starts. */
+void wtf_set_keymap(const char *rules, const char *model, const char *layout,
+                    const char *variant, const char *options,
+                    int repeat_rate, int repeat_delay);
+
+/* Per-device libinput knobs, applied to each matching pointer/touchpad on
+ * attach and re-applied to already-attached devices when this is called.
+ * int fields use a sentinel: -1 = leave libinput's default; 0/1 = off/on; for
+ * scroll_method 0=none/1=two-finger/2=edge; for click_method 0=none/
+ * 1=button-areas/2=clickfinger; for *_accel_profile 0=flat/1=adaptive. The
+ * accel speeds are doubles in -1.0..1.0 and are always applied (0.0 neutral).
+ * Field order/types MUST match the F# [<StructLayout(Sequential)>] mirror. */
+struct wtf_libinput_config {
+    double mouse_accel;          /* -1.0..1.0 (always applied; 0.0 neutral) */
+    int    mouse_accel_profile;  /* -1 leave / 0 flat / 1 adaptive */
+    int    mouse_natural_scroll; /* -1 leave / 0 off / 1 on */
+    int    tap;                  /* -1 / 0 / 1 (tap-to-click; touchpad) */
+    int    tap_drag;             /* -1 / 0 / 1 (tap-and-drag; touchpad) */
+    int    tp_natural_scroll;    /* -1 / 0 / 1 (touchpad) */
+    int    dwt;                  /* -1 / 0 / 1 (disable-while-typing) */
+    int    scroll_method;        /* -1 leave / 0 none / 1 two-finger / 2 edge */
+    int    click_method;         /* -1 leave / 0 none / 1 button-areas / 2 clickfinger */
+    double tp_accel;             /* -1.0..1.0 (touchpad) */
+    int    tp_accel_profile;     /* -1 leave / 0 flat / 1 adaptive */
+};
+void wtf_set_libinput_config(struct wtf_libinput_config cfg);
+
 #ifdef __cplusplus
 }
 #endif

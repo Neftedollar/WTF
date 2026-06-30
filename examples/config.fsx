@@ -52,6 +52,42 @@ let myConfig =
         animSpeed 0.30              // window slide/fade speed
         cornerRadius 10             // rounded corners (scenefx)
         blur true                   // backdrop blur behind windows (scenefx)
+
+        // ---- input devices: applied per device type as each attaches ----
+        // `input` plugs an InputConfig; build it with the `inputDevices { ... }`
+        // CE composing keyboard/mouse/touchpad sub-blocks (any may be omitted).
+        input (inputDevices {
+            // KEYBOARD: xkb layout/variant/options/model/rules + key repeat.
+            //   layout "us,ru" + options "grp:alt_shift_toggle" => switch layouts
+            //   with Alt+Shift. "ctrl:nocaps" => CapsLock acts as Ctrl. Empty
+            //   string on any field => use the xkb default for that field.
+            keyboard {
+                layout "us,ru"
+                options "grp:alt_shift_toggle"
+                repeatRate 25           // keys/sec
+                repeatDelay 600         // ms before repeat kicks in
+            }
+            // MOUSE / pointer.
+            //   accelProfile: "flat" | "adaptive" | "" (leave libinput default)
+            //   accelSpeed:   -1.0..1.0 (0.0 = neutral)
+            mouse {
+                accelProfile "flat"
+                accelSpeed 0.2
+                naturalScroll false
+            }
+            // TOUCHPAD.
+            //   scrollMethod: "two-finger" | "edge" | "none" | "" (leave default)
+            //   clickMethod:  "button-areas" | "clickfinger" | "" (leave default)
+            //   accelProfile: "flat" | "adaptive" | "" (leave default)
+            touchpad {
+                tap true
+                tapDrag true
+                naturalScroll true
+                disableWhileTyping true
+                scrollMethod "two-finger"
+                clickMethod "button-areas"
+            }
+        })
     }
 
 printfn "Loaded WTF config:"

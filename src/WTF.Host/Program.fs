@@ -213,6 +213,44 @@ let onReady () : unit =
     border false cfg.InactiveBorder
     Ffi.wtf_set_corner_radius cfg.CornerRadius
     Ffi.wtf_set_blur ((if cfg.Blur then 1 else 0), 0, 0)
+    // Push the configured input devices: keyboard xkb/repeat + libinput knobs.
+    // Empty xkb fields stay "" — the C side converts those to NULL for xkb defaults.
+    let kb = cfg.Input.Keyboard
+    Ffi.wtf_set_keymap (kb.Rules, kb.Model, kb.Layout, kb.Variant, kb.Options, kb.RepeatRate, kb.RepeatDelay)
+    // string profile/method -> int sentinel (-1 = leave libinput default).
+    let profileInt =
+        function
+        | "flat" -> 0
+        | "adaptive" -> 1
+        | _ -> -1
+    let scrollMethodInt =
+        function
+        | "none" -> 0
+        | "two-finger" -> 1
+        | "edge" -> 2
+        | _ -> -1
+    let clickMethodInt =
+        function
+        | "none" -> 0
+        | "button-areas" -> 1
+        | "clickfinger" -> 2
+        | _ -> -1
+    let b (v: bool) = if v then 1 else 0
+    let m = cfg.Input.Mouse
+    let t = cfg.Input.Touchpad
+    let mutable li = Ffi.LibinputConfig()
+    li.MouseAccel <- m.AccelSpeed
+    li.MouseAccelProfile <- profileInt m.AccelProfile
+    li.MouseNaturalScroll <- b m.NaturalScroll
+    li.Tap <- b t.Tap
+    li.TapDrag <- b t.TapDrag
+    li.TpNaturalScroll <- b t.NaturalScroll
+    li.Dwt <- b t.DisableWhileTyping
+    li.ScrollMethod <- scrollMethodInt t.ScrollMethod
+    li.ClickMethod <- clickMethodInt t.ClickMethod
+    li.TpAccel <- t.AccelSpeed
+    li.TpAccelProfile <- profileInt t.AccelProfile
+    Ffi.wtf_set_libinput_config li
     // Restore saved settings (current tag, nmaster, ratio, gaps, per-workspace
     // layouts). Settings-only: the saved window set is dropped, since a fresh
     // compositor has no surfaces backing those ids. Re-base history afterwards.

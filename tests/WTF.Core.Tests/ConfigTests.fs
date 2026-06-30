@@ -62,6 +62,35 @@ let ``manage hook leaves unmatched windows on the current workspace`` () =
     Assert.Equal<int list>([ 9 ], World.stackOf "1" world' |> Option.get |> Stack.toList)
 
 [<Fact>]
+let ``input defaults are sane`` () =
+    let i = WtfConfig.defaults.Input
+    Assert.Equal("us", i.Keyboard.Layout)
+    Assert.Equal(25, i.Keyboard.RepeatRate)
+    Assert.Equal(600, i.Keyboard.RepeatDelay)
+    Assert.True(i.Touchpad.Tap)
+    Assert.True(i.Touchpad.NaturalScroll)
+    Assert.True(i.Touchpad.DisableWhileTyping)
+    Assert.Equal("two-finger", i.Touchpad.ScrollMethod)
+    Assert.Equal("button-areas", i.Touchpad.ClickMethod)
+    Assert.Equal("", i.Mouse.AccelProfile)
+
+[<Fact>]
+let ``input CE round-trips into WtfConfig.Input`` () =
+    let cfg =
+        config {
+            input (inputDevices {
+                keyboard { layout "us,ru"; options "grp:alt_shift_toggle" }
+                touchpad { tap true; naturalScroll true; disableWhileTyping true }
+                mouse { accelProfile "flat"; accelSpeed 0.2 }
+            })
+        }
+    Assert.Equal("us,ru", cfg.Input.Keyboard.Layout)
+    Assert.Equal("grp:alt_shift_toggle", cfg.Input.Keyboard.Options)
+    Assert.True(cfg.Input.Touchpad.Tap)
+    Assert.Equal("flat", cfg.Input.Mouse.AccelProfile)
+    Assert.Equal(0.2, cfg.Input.Mouse.AccelSpeed)
+
+[<Fact>]
 let ``agent CE builds an ordered command program`` () =
     let program =
         agent {

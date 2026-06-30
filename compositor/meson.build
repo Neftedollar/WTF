@@ -18,6 +18,9 @@ wlroots      = dependency('wlroots-0.18')
 wayland_server = dependency('wayland-server')
 xkbcommon    = dependency('xkbcommon')
 pixman       = dependency('pixman-1')
+# libinput: the shim calls libinput_device_config_* directly to apply per-device
+# pointer/touchpad settings, and uses <wlr/backend/libinput.h> to get the handle.
+libinput     = dependency('libinput')
 
 # ---- generate xdg-shell protocol code via wayland-scanner ----
 # wlroots requires the compositor to generate and provide the protocol glue
@@ -88,6 +91,7 @@ shared_library(
 		wayland_server,
 		xkbcommon,
 		pixman,
+		libinput,
 		m_dep,
 	],
 	# wtf.h lives next to this meson.build; the generated header lands in the

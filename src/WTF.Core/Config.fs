@@ -13,6 +13,44 @@ type ManageAction =
 
 type ManageRule = WindowInfo -> ManageAction
 
+// --- input device configuration (pure data; applied by the C shim) ---
+
+/// Per-keyboard xkb + repeat settings. Empty-string fields fall back to the xkb
+/// default (the C side passes NULL to xkb_rule_names for those).
+type KeyboardConfig =
+    { Layout: string        // "us" or "us,ru"  ("" => xkb default => NULL)
+      Variant: string       // "" => default
+      Options: string       // "grp:alt_shift_toggle,ctrl:nocaps"; "" => default
+      Model: string         // "" => default
+      Rules: string         // "" => default
+      RepeatRate: int       // keys/sec (was hardcoded 25)
+      RepeatDelay: int }    // ms before repeat (was hardcoded 600)
+
+/// Per-mouse libinput pointer settings.
+type MouseConfig =
+    { AccelSpeed: float      // -1.0..1.0 ; 0.0 = libinput neutral default
+      AccelProfile: string   // "flat" | "adaptive" | "" => leave default
+      NaturalScroll: bool }
+
+/// Per-touchpad libinput settings.
+type TouchpadConfig =
+    { Tap: bool
+      TapDrag: bool
+      NaturalScroll: bool
+      DisableWhileTyping: bool
+      ScrollMethod: string   // "two-finger" | "edge" | "none" | "" => leave
+      ClickMethod: string    // "button-areas" | "clickfinger" | "" => leave
+      AccelSpeed: float      // -1.0..1.0
+      AccelProfile: string } // "flat" | "adaptive" | "" => leave default
+
+/// The whole input surface: applied per device TYPE as it attaches.
+type InputConfig =
+    { Keyboard: KeyboardConfig
+      Mouse: MouseConfig
+      Touchpad: TouchpadConfig }
+      // DeviceOverrides deferred — per-name match would be
+      // (NameSubstring:string * InputConfig) list applied after the type config.
+
 /// xMonad's XConfig analog.
 type WtfConfig =
     { ModKey: string                    // "Super" | "Alt"
@@ -31,7 +69,8 @@ type WtfConfig =
       CornerRadius: int                 // appearance: rounded corners (scenefx)
       Blur: bool                        // appearance: backdrop blur (scenefx)
       Scale: float                      // HiDPI output scale (physical px per logical px); 1.0 = logical px (default)
-      HistoryLimit: int }               // undo depth: max retained past states
+      HistoryLimit: int                 // undo depth: max retained past states
+      Input: InputConfig }              // keyboard/mouse/touchpad device settings
 
 module WtfConfig =
     let defaults =
@@ -51,7 +90,17 @@ module WtfConfig =
           CornerRadius = 0
           Blur = false
           Scale = 1.0
-          HistoryLimit = 64 }
+          HistoryLimit = 64
+          Input =
+            { Keyboard =
+                { Layout = "us"; Variant = ""; Options = ""; Model = ""; Rules = ""
+                  RepeatRate = 25; RepeatDelay = 600 }
+              Mouse =
+                { AccelSpeed = 0.0; AccelProfile = ""; NaturalScroll = false }
+              Touchpad =
+                { Tap = true; TapDrag = true; NaturalScroll = true
+                  DisableWhileTyping = true; ScrollMethod = "two-finger"
+                  ClickMethod = "button-areas"; AccelSpeed = 0.0; AccelProfile = "" } } }
 
 // --- predicate helpers for manage rules (read like English) ---
 [<AutoOpen>]
@@ -119,6 +168,65 @@ type ConfigBuilder() =
     member _.Scale(c, v) = { c with Scale = v }
     [<CustomOperation "historyLimit">]
     member _.HistoryLimit(c, v) = { c with HistoryLimit = v }
+    [<CustomOperation "input">]
+    member _.Input(c, i: InputConfig) = { c with Input = i }
+
+// --- input sub-builders ---
+// Member params are type-annotated because some field names (e.g. Layout) collide
+// with other records (Workspace.Layout), so `{ c with Layout = v }` would otherwise
+// be ambiguous. Each sub-builder yields its own record; `inputDevices { ... }`
+// composes the three via Yield-overloads + Combine (NOT custom operations) so the
+// keyboard/mouse/touchpad builder names stay usable, unshadowed, inside it.
+
+/// `keyboard { layout "us,ru"; options "grp:alt_shift_toggle" }` -> KeyboardConfig
+type KeyboardBuilder() =
+    member _.Yield(_) = WtfConfig.defaults.Input.Keyboard
+    member _.Zero() = WtfConfig.defaults.Input.Keyboard
+    member _.Run(c: KeyboardConfig) = c
+    [<CustomOperation "layout">]      member _.Layout(c: KeyboardConfig, v)      = { c with Layout = v }
+    [<CustomOperation "variant">]     member _.Variant(c: KeyboardConfig, v)     = { c with Variant = v }
+    [<CustomOperation "options">]     member _.Options(c: KeyboardConfig, v)     = { c with Options = v }
+    [<CustomOperation "model">]       member _.Model(c: KeyboardConfig, v)       = { c with Model = v }
+    [<CustomOperation "rules">]       member _.Rules(c: KeyboardConfig, v)       = { c with Rules = v }
+    [<CustomOperation "repeatRate">]  member _.RepeatRate(c: KeyboardConfig, v)  = { c with RepeatRate = v }
+    [<CustomOperation "repeatDelay">] member _.RepeatDelay(c: KeyboardConfig, v) = { c with RepeatDelay = v }
+
+/// `mouse { accelProfile "flat"; accelSpeed 0.2 }` -> MouseConfig
+type MouseBuilder() =
+    member _.Yield(_) = WtfConfig.defaults.Input.Mouse
+    member _.Zero() = WtfConfig.defaults.Input.Mouse
+    member _.Run(c: MouseConfig) = c
+    [<CustomOperation "accelSpeed">]    member _.AccelSpeed(c: MouseConfig, v)    = { c with AccelSpeed = v }
+    [<CustomOperation "accelProfile">]  member _.AccelProfile(c: MouseConfig, v)  = { c with AccelProfile = v }
+    [<CustomOperation "naturalScroll">] member _.NaturalScroll(c: MouseConfig, v) = { c with NaturalScroll = v }
+
+/// `touchpad { tap true; naturalScroll true; disableWhileTyping true }` -> TouchpadConfig
+type TouchpadBuilder() =
+    member _.Yield(_) = WtfConfig.defaults.Input.Touchpad
+    member _.Zero() = WtfConfig.defaults.Input.Touchpad
+    member _.Run(c: TouchpadConfig) = c
+    [<CustomOperation "tap">]                member _.Tap(c: TouchpadConfig, v)       = { c with Tap = v }
+    [<CustomOperation "tapDrag">]           member _.TapDrag(c: TouchpadConfig, v)   = { c with TapDrag = v }
+    [<CustomOperation "naturalScroll">]     member _.NatScroll(c: TouchpadConfig, v) = { c with NaturalScroll = v }
+    [<CustomOperation "disableWhileTyping">]member _.Dwt(c: TouchpadConfig, v)       = { c with DisableWhileTyping = v }
+    [<CustomOperation "scrollMethod">]      member _.Scroll(c: TouchpadConfig, v)    = { c with ScrollMethod = v }
+    [<CustomOperation "clickMethod">]       member _.Click(c: TouchpadConfig, v)     = { c with ClickMethod = v }
+    [<CustomOperation "accelSpeed">]        member _.Accel(c: TouchpadConfig, v)     = { c with AccelSpeed = v }
+    [<CustomOperation "accelProfile">]      member _.Profile(c: TouchpadConfig, v)   = { c with AccelProfile = v }
+
+/// `inputDevices { keyboard {...}; mouse {...}; touchpad {...} }` -> InputConfig.
+/// Each sub-block yields an `InputConfig -> InputConfig` updater; Combine composes
+/// them left-to-right and Run applies the chain to the defaults. A sub-block may be
+/// omitted (keeps its default) and order does not matter.
+type InputBuilder() =
+    member _.Yield(_: unit) : InputConfig -> InputConfig = id
+    member _.Yield(k: KeyboardConfig) : InputConfig -> InputConfig = fun i -> { i with Keyboard = k }
+    member _.Yield(m: MouseConfig) : InputConfig -> InputConfig = fun i -> { i with Mouse = m }
+    member _.Yield(t: TouchpadConfig) : InputConfig -> InputConfig = fun i -> { i with Touchpad = t }
+    member _.Zero() : InputConfig -> InputConfig = id
+    member _.Combine(f: InputConfig -> InputConfig, g: InputConfig -> InputConfig) = f >> g
+    member _.Delay(f: unit -> InputConfig -> InputConfig) = f ()
+    member _.Run(f: InputConfig -> InputConfig) = f WtfConfig.defaults.Input
 
 /// `agent { focusApp "firefox"; layout "bsp"; moveTo "2" }` -> Command list.
 /// Agent-first: an LLM (or a script) expresses a *program of intents* declaratively,
@@ -154,6 +262,12 @@ module Builders =
     let manage = ManageBuilder()
     let config = ConfigBuilder()
     let agent = AgentBuilder()
+    let keyboard = KeyboardBuilder()
+    let mouse = MouseBuilder()
+    let touchpad = TouchpadBuilder()
+    // Named `inputDevices` (not `input`) because the ConfigBuilder `input` custom
+    // operation would otherwise shadow it inside a `config { ... }` block.
+    let inputDevices = InputBuilder()
 
 // =====================  applying the config  =====================
 
