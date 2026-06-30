@@ -1,3 +1,7 @@
+// Shares the module-level decoded-image cache in WTF.Host.Wallpaper with
+// WallpaperPaletteTests; the cache is single-threaded in production, so both test
+// classes join one xUnit Collection to run serially (not in parallel).
+[<Xunit.Collection("Wallpaper")>]
 module WTF.Core.Tests.WallpaperTests
 
 // The wallpaper module is best-effort and FFI-bound, but its pure helpers are

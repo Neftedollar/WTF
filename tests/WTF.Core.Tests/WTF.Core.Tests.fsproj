@@ -16,6 +16,8 @@
     <Compile Include="AgentToolsTests.fs" />
     <Compile Include="SessionTests.fs" />
     <Compile Include="ConfigTests.fs" />
+    <Compile Include="ColorTests.fs" />
+    <Compile Include="PaletteTests.fs" />
     <Compile Include="AppearanceTests.fs" />
     <Compile Include="FloatingTests.fs" />
     <Compile Include="ChordTests.fs" />
@@ -23,6 +25,12 @@
     <Compile Include="IpcTests.fs" />
     <Compile Include="SessionIOTests.fs" />
     <Compile Include="WallpaperTests.fs" />
+    <Compile Include="WallpaperPaletteTests.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Committed fixture image for the deterministic extraction test. -->
+    <None Include="fixtures\quadrants.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

@@ -84,7 +84,12 @@ type Wallpaper =
 type RenderContext =
     { Window: WindowInfo
       Workspace: string
-      Focused: bool }
+      Focused: bool
+      /// The active wallpaper-derived palette (pure data). Defaults to
+      /// `Palette.defaultPalette` at every construction site (F# records have no
+      /// per-field default), so legacy/E1 behavior is byte-identical when no knob
+      /// reads it. The host computes the real value from the image and passes it in.
+      Palette: Palette.Palette }
 
 /// A context-dependent value: the heart of the effects engine. `Dyn<string>` is a
 /// border color that can vary per app/state; `Dyn<float>` a per-window opacity.

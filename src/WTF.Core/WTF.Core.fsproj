@@ -26,6 +26,10 @@
     <Compile Include="Command.fs" />
     <Compile Include="Agent.fs" />
     <Compile Include="Protocol.fs" />
+    <!-- Color.fs needs Protocol.hexColor; Palette.fs needs Color; RenderContext in
+         Config.fs needs the Palette type — so both land AFTER Protocol, BEFORE Config. -->
+    <Compile Include="Color.fs" />
+    <Compile Include="Palette.fs" />
     <Compile Include="Session.fs" />
     <Compile Include="Config.fs" />
   </ItemGroup>

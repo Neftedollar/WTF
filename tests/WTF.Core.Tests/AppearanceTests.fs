@@ -18,7 +18,8 @@ open WTF.Core
 let private ctx app floating focused : RenderContext =
     { Window = { Id = 1; AppId = app; Title = ""; Floating = floating }
       Workspace = "1"
-      Focused = focused }
+      Focused = focused
+      Palette = Palette.defaultPalette }
 
 let private cfg0 = WtfConfig.defaults
 
@@ -121,7 +122,7 @@ let ``resolveOpacity clamps a focused-split function into [0,1]`` (a: float) (b:
 
 [<Property>]
 let ``resolveWindowStyle opacity always in [0,1] and total`` (app: string) (title: string) (floating: bool) (focused: bool) =
-    let c : RenderContext = { Window = { Id = 1; AppId = app; Title = title; Floating = floating }; Workspace = "1"; Focused = focused }
+    let c : RenderContext = { Window = { Id = 1; AppId = app; Title = title; Floating = floating }; Workspace = "1"; Focused = focused; Palette = Palette.defaultPalette }
     let style = Appearance.resolveWindowStyle cfg0 c
     style.Opacity >= 0.0 && style.Opacity <= 1.0
 

@@ -169,6 +169,13 @@ let mutable world = { World.empty (Rect.create 0 0 1280 720) with Gaps = cfg.Gap
 // mode). Held so onOutputResize can re-scale + re-push it to the new output size.
 let mutable private activeWallpaper : Wallpaper = cfg.Wallpaper
 
+// The STRUCTURED palette derived from the active wallpaper (E2: ricing configs
+// read colors off it via RenderContext.Palette). Computed ONCE per wallpaper —
+// recomputed in applyConfig on a wallpaper change / hot-reload — NOT per window
+// per frame (extraction decodes + quantizes an image). Starts at the built-in
+// default so it is valid before the first applyConfig wires the real one.
+let mutable private activePalette : WTF.Core.Palette.Palette = WTF.Core.Palette.defaultPalette
+
 let private applyEffects effects =
     for e in effects do
         match e with
@@ -219,7 +226,7 @@ let private restyleWindows (w: World) : unit =
             match Map.tryFind id w.Windows with
             | None -> ()
             | Some info ->
-                let ctx = { Window = info; Workspace = w.Current; Focused = (focused = Some id) }
+                let ctx = { Window = info; Workspace = w.Current; Focused = (focused = Some id); Palette = activePalette }
                 let style = Appearance.resolveWindowStyle cfg ctx
                 if pushBorder then
                     let changed =
@@ -478,6 +485,12 @@ let applyConfig (c: WtfConfig) : unit =
     // it never throws here, so this can't block startup or a reload.
     activeWallpaper <- if safeMode then Color "#1e1e2e" else c.Wallpaper
     Wallpaper.apply activeWallpaper (Px.rawL world.Screen.Width) (Px.rawL world.Screen.Height)
+    // E2: recompute the STRUCTURED palette from the (possibly changed) wallpaper
+    // ONCE here — on startup, a wallpaper change, or a hot-reload — so restyleWindows
+    // can read it per window WITHOUT re-decoding the image each frame. Reuses the
+    // wallpaper's cached decode (Wallpaper.loadOriginal); best-effort (falls back to
+    // the built-in default for a solid color / missing image).
+    activePalette <- Wallpaper.paletteOf activeWallpaper
     // E1: reconcile dynamic appearance overrides. If a borderColor/windowOpacity
     // FUNCTION was REMOVED on reload, clear the per-window style (both knobs, the
     // only clear the ABI offers) for every window we previously pushed, wipe the
