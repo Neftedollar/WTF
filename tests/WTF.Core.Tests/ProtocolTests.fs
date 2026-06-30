@@ -52,6 +52,7 @@ let ``parseRequest distinguishes queries from actions`` () =
     Assert.Equal(Some Protocol.Query, Protocol.parseRequest "")
     Assert.Equal(Some Protocol.Query, Protocol.parseRequest """{"cmd":"state"}""")
     Assert.Equal(Some(Protocol.Act(SetLayout "bsp")), Protocol.parseRequest """{"cmd":"layout","name":"bsp"}""")
+    Assert.Equal(Some(Protocol.Act ReloadConfig), Protocol.parseRequest """{"cmd":"reload"}""")
     Assert.Equal(None, Protocol.parseRequest """{"cmd":"explode"}""")
 
 [<Fact>]

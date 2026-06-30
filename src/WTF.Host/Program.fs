@@ -323,14 +323,23 @@ let private restoreSettings (saved: World) (live: World) : World =
                 | Some l -> { ws with Layout = l }
                 | None -> ws) }
 
+/// Forward hook for ReloadConfig (M-S-r / `wtfctl reload`): re-read config.fsx
+/// from disk and apply it live — the same path the save-triggered watcher uses.
+/// A cell because dispatch() is defined here but applyConfigReload + loadConfig
+/// compose further down (they depend on the appearance/effect machinery); it is
+/// wired once, at module init, right after applyConfigReload is defined. Until
+/// then it is a safe no-op, so an early dispatch can't NRE.
+let mutable private reloadConfigFromDisk : unit -> unit = ignore
+
 /// The single choke point for every command. History is recorded here and
-/// nowhere else, so it can never desync. Undo/Redo/Save/LoadSession are
-/// intercepted (the pure reducer can't see history); everything else runs
-/// through the reducer and records an undo point iff it actually changed World.
+/// nowhere else, so it can never desync. Undo/Redo/Save/LoadSession/ReloadConfig
+/// are intercepted (the pure reducer can't see history/config); everything else
+/// runs through the reducer and records an undo point iff it actually changed World.
 let private dispatch (cmd: Command) : unit =
     match cmd with
     | Undo -> History.undo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
     | Redo -> History.redo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
+    | ReloadConfig -> reloadConfigFromDisk ()
     | SaveSession -> SessionIO.save world
     | LoadSession ->
         match SessionIO.load () with
@@ -574,6 +583,13 @@ let applyConfigReload (newCfg: WtfConfig) : unit =
     applyConfig cfg
     applyEffects [ Arrange(World.arrange world) ]
     eprintfn "WTF: config reloaded (mod=%s, %d keybinds)" cfg.ModKey cfg.Keys.Length
+
+// Wire the ReloadConfig hook now that loadConfig + applyConfigReload both exist:
+// re-read config.fsx from disk (FCS re-eval) and apply it live. Runs on the loop
+// thread (dispatch is only invoked from onKey / the socket drain, both on-loop).
+// A broken config makes loadConfig return the last-good/default, so reload never
+// throws the session away.
+reloadConfigFromDisk <- fun () -> applyConfigReload (loadConfig ())
 
 /// Handle an {"eval":"<code>"} socket request. JIT: routes the code to the FSI
 /// worker via the config engine, marshalling any produced config/commands back

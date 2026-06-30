@@ -37,6 +37,7 @@ let myKeys =
         bind "M-S-j"     SwapNext
         bind "M-S-k"     SwapPrev
         bind "M-S-c"     CloseFocused
+        bind "M-S-r"     ReloadConfig   // re-read this config live (also auto on save)
         // Layout names come from the `Layouts` Type Provider — autocompleted and
         // typo-proof. `Layouts.Bsp` is the literal "bsp"; a wrong name won't compile.
         bind "M-space"   (SetLayout Layouts.Bsp)

@@ -49,6 +49,8 @@ type Command =
     | Redo                           // re-apply an undone change
     | SaveSession                    // persist the canonical World to disk
     | LoadSession                    // restore a saved session
+    | ReloadConfig                   // re-read ~/.config/wtf/config.fsx and apply it live
+                                     // (host-handled, like the save-triggered hot-reload)
     // emitted by the compositor, not the agent:
     | AddWindow of WindowInfo        // a surface was mapped
     | RemoveWindow of WindowId       // a surface was unmapped
@@ -105,7 +107,7 @@ module Reducer =
         | CloseFocused | Spawn _ | SpawnOnce _
         | SetInactiveOpacity _ | SetAnimationSpeed _ | SetBorderWidth _
         | SetBorderColor _ | SetCornerRadius _ | SetBlur _
-        | Undo | Redo | SaveSession | LoadSession
+        | Undo | Redo | SaveSession | LoadSession | ReloadConfig
         | AddWindow _ | RemoveWindow _ -> false
 
     let private resolveSelector (w: World) sel (st: Stack<WindowId>) =
@@ -315,9 +317,9 @@ module Reducer =
         | SetCornerRadius radius -> w, [ RenderCornerRadius(max 0 radius) ]
         | SetBlur on -> w, [ RenderBlur on ]
 
-        // Host-handled (history/session). Total no-op arm keeps the reducer
+        // Host-handled (history/session/config). Total no-op arm keeps the reducer
         // pure and exhaustive; the real work happens in the host's dispatch.
-        | Undo | Redo | SaveSession | LoadSession -> w, []
+        | Undo | Redo | SaveSession | LoadSession | ReloadConfig -> w, []
 
         | AddWindow info ->
             // Guard the stack-uniqueness invariant: a re-mapped id must not be

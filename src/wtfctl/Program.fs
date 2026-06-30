@@ -69,6 +69,9 @@ let toJson (args: string list) : string option =
     | [ "fullscreen" ] -> Some """{"cmd":"fullscreen"}"""
     | [ "sinkall" ] -> Some """{"cmd":"sinkall"}"""
     | [ "close" ] -> Some """{"cmd":"close"}"""
+    // Re-read ~/.config/wtf/config.fsx from disk and apply it live (xMonad Mod+q
+    // for the config — the save-watcher does this automatically; this is on demand).
+    | [ "reload" ] -> Some """{"cmd":"reload"}"""
     // Agent-first surface: discover the curated LLM tool manifest, and notify the
     // user through WTF's own daemon.
     //   wtfctl tools                          the agent tool manifest (JSON)

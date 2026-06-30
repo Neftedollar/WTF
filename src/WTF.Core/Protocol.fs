@@ -219,6 +219,7 @@ module Protocol =
                 if flag "save" then Some SaveSession
                 elif flag "restore" then Some LoadSession
                 else None
+            | Some "reload" -> Some ReloadConfig
             | _ -> None
         with _ -> None
 
