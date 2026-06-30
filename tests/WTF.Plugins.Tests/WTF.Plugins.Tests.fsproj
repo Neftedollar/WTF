@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="PluginLoaderTests.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\WTF.Core\WTF.Core.fsproj" />
+    <ProjectReference Include="..\..\src\WTF.Plugins\WTF.Plugins.fsproj" />
+    <!-- Force the example plugin to BUILD before this test (so a real plugin dll
+         exists to load), but DO NOT link it at compile time
+         (ReferenceOutputAssembly=false) — linking would defeat the reflective /
+         ALC load path that is the whole point of the test. The test locates the
+         built SpiralLayout.dll on disk and copies it into a temp plugins dir. -->
+    <ProjectReference Include="..\..\examples\SpiralLayout\SpiralLayout.fsproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+  </ItemGroup>
+
+</Project>

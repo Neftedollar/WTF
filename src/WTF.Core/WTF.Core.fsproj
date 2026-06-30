@@ -10,6 +10,9 @@
     <Compile Include="Stack.fs" />
     <Compile Include="Layout.fs" />
     <Compile Include="World.fs" />
+    <!-- Plugin.fs AFTER World.fs: IWtfLayoutPlugin uses the `LayoutFactory` alias
+         defined in World.fs. It is JUST a type (the plugin ABI) — no IO. -->
+    <Compile Include="Plugin.fs" />
     <Compile Include="History.fs" />
     <Compile Include="Command.fs" />
     <Compile Include="Agent.fs" />

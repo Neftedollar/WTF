@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- An EXAMPLE WTF layout plugin (#13): a plain .NET class library that
+       implements WTF.Core.IWtfLayoutPlugin. Build it, drop the resulting
+       SpiralLayout.dll into ~/.config/wtf/plugins/, and the "spiral" layout
+       becomes available by name, exactly like a built-in. See README.md.
+
+       NOT in WTF.slnx (kept out of the default solution build / 174-test run),
+       but it MUST build standalone — the plugin load test forces its build. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- A class library: NO OutputType. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="SpiralLayout.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- CRITICAL for ALC type identity: reference WTF.Core but do NOT copy its dll
+         next to the plugin (<Private>false</Private> = CopyLocal off). At runtime
+         the loader resolves the plugin's WTF.Core reference to the HOST's
+         already-loaded WTF.Core, giving IWtfLayoutPlugin / LayoutFactory / Layout
+         the SAME Type identity — so the cast + Registry.register reach the LIVE
+         host Registry. Shipping a second WTF.Core.dll here would create a distinct
+         identity and the plugin would silently fail to register. -->
+    <ProjectReference Include="..\..\src\WTF.Core\WTF.Core.fsproj">
+      <Private>false</Private>
+      <ReferenceOutputAssembly>true</ReferenceOutputAssembly>
+    </ProjectReference>
+  </ItemGroup>
+
+  <!-- Likewise keep FSharp.Core out of the plugins dir: the host already loaded
+       it, and the Default.Resolving guard reuses the host copy regardless.
+       ExcludeAssets="runtime" drops FSharp.Core.dll from this library's output
+       (and deps) while keeping the compile-time reference. -->
+  <ItemGroup>
+    <PackageReference Update="FSharp.Core" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

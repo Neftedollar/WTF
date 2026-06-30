@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- AOT story (#15): runtime assembly loading (AssemblyLoadContext.
+         LoadFromAssemblyPath) + reflection (GetTypes / Activator.CreateInstance)
+         is JIT/metadata-only and INCOMPATIBLE with NativeAOT — exactly like FCS
+         in WTF.Config. Defining WTF_NO_PLUGINS compiles out `ReflectionPluginLoader`
+         entirely; the factory then always returns `NullPluginLoader`, so a
+         NativeAOT build links no reflective load path and falls back to the
+         built-in layouts only. This MIRRORS WTF_NO_FCS / IConfigEngine: the host
+         depends ONLY on the `IPluginLoader` seam + `PluginLoader.create`, never on
+         the reflection code directly. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="PluginLoader.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WTF.Core\WTF.Core.fsproj" />
+  </ItemGroup>
+
+</Project>

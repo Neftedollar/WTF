@@ -4,6 +4,7 @@ open System
 open System.Runtime.InteropServices
 open WTF.Core
 open WTF.Config
+open WTF.Plugins
 open WTF.Desktop
 open WTF.Agent
 
@@ -451,6 +452,16 @@ let main _argv =
     // bindings above used the default config's values).
     world <- { world with Gaps = cfg.Gaps }
     history <- History.create cfg.HistoryLimit world
+
+    // Load layout/extension PLUGINS (#13): scan ~/.config/wtf/plugins for
+    // compiled .NET assemblies implementing IWtfLayoutPlugin and register their
+    // custom layouts into the live Registry — exactly like the built-ins. Done
+    // HERE (after the config load, BEFORE wtf_run/the first arrange) so a config /
+    // keybind that names a plugin layout (e.g. SetLayout "spiral") resolves.
+    // GRACEFUL: LoadAll never throws — a bad/incompatible plugin logs + is skipped.
+    // The factory no-ops under WTF_SAFE_MODE (built-in layouts only) and WTF_NO_PLUGINS
+    // (the AOT build), so this single call is correct in every build/mode.
+    (PluginLoader.create ()).LoadAll()
 
     // Root the delegates for the whole run so the GC can't collect them while
     // the C side holds their function pointers.
