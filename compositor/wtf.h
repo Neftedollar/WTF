@@ -78,6 +78,19 @@ void wtf_set_corner_radius(int radius);
 /* Backdrop blur: enable/disable + radius and pass count (<=0 keeps current). */
 void wtf_set_blur(int enabled, int radius, int passes);
 
+/* ---- wallpaper (BACKGROUND layer, drawn below layer-shell bg clients) ---- */
+/* Set an image wallpaper from raw RGBA pixels. `rgba` is exactly width*height*4
+ * bytes in ImageSharp Rgba32 memory order (R,G,B,A per pixel), stride width*4
+ * (= DRM_FORMAT_ABGR8888). The pixels are copied synchronously; the caller does
+ * NOT own the buffer after the call returns. The image is shown in the
+ * BACKGROUND scene tree, scaled to fill the whole output. The F# brain has
+ * already scaled to the output size; the node is dest-sized to the output box. */
+void wtf_set_wallpaper(const unsigned char *rgba, int width, int height);
+/* Set a solid-color wallpaper (a scene-rect sized to the output). RGB in 0..1. */
+void wtf_set_wallpaper_color(double r, double g, double b);
+/* Remove any wallpaper (image buffer + color rect). */
+void wtf_clear_wallpaper(void);
+
 /* ---- input configuration (keyboard xkb/repeat + libinput pointer/touchpad) ---- */
 
 /* Set the xkb rule-names and key-repeat applied to every keyboard (existing and

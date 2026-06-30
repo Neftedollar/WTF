@@ -101,3 +101,20 @@ module Ffi =
 
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_libinput_config(LibinputConfig cfg)
+
+    // ---- wallpaper (BACKGROUND layer) ----
+    // The raw pixel buffer is `width*height*4` bytes, ABGR8888 in DRM terms — i.e.
+    // byte order R,G,B,A (ImageSharp Rgba32 memory order), stride = width*4. The C
+    // side COPIES the pixels synchronously, so the default `byte[]` marshalling
+    // (pin for the call, pass as `const unsigned char *`) is correct: no GCHandle,
+    // no ownership after the call returns.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_wallpaper(byte[] rgba, int width, int height)
+
+    /// Solid-color wallpaper subset — a scene-rect sized to the output. RGB 0..1.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_wallpaper_color(double r, double g, double b)
+
+    /// Remove any wallpaper (config has none / image failed to load).
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_clear_wallpaper()

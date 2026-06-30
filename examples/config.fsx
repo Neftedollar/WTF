@@ -53,6 +53,13 @@ let myConfig =
         cornerRadius 10             // rounded corners (scenefx)
         blur true                   // backdrop blur behind windows (scenefx)
 
+        // ---- wallpaper: solid color or a decoded+scaled image ----
+        // The image is DECODED in the F# host (ImageSharp) and its raw pixels are
+        // handed to C — it scales to the output and re-scales on resize. A leading
+        // `~` expands to your home dir. A missing/bad image logs + falls back.
+        wallpaper (Color "#1e1e2e")                  // solid Catppuccin base
+        // wallpaper (Image ("~/pics/bg.png", Fill)) // Fill|Fit|Stretch|Center|Tile
+
         // ---- input devices: applied per device type as each attaches ----
         // `input` plugs an InputConfig; build it with the `inputDevices { ... }`
         // CE composing keyboard/mouse/touchpad sub-blocks (any may be omitted).

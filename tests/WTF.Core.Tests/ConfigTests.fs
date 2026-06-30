@@ -91,6 +91,20 @@ let ``input CE round-trips into WtfConfig.Input`` () =
     Assert.Equal(0.2, cfg.Input.Mouse.AccelSpeed)
 
 [<Fact>]
+let ``default wallpaper is the Catppuccin base color`` () =
+    Assert.Equal(Color "#1e1e2e", WtfConfig.defaults.Wallpaper)
+
+[<Fact>]
+let ``wallpaper CE round-trips an image choice`` () =
+    let cfg = config { wallpaper (Image("/x.png", Fill)) }
+    Assert.Equal(Image("/x.png", Fill), cfg.Wallpaper)
+
+[<Fact>]
+let ``wallpaper CE round-trips a solid color`` () =
+    let cfg = config { wallpaper (Color "#abcdef") }
+    Assert.Equal(Color "#abcdef", cfg.Wallpaper)
+
+[<Fact>]
 let ``agent CE builds an ordered command program`` () =
     let program =
         agent {

@@ -21,11 +21,14 @@
 #include <sys/eventfd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 #include <signal.h>
+#include <drm_fourcc.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
+#include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_cursor.h>
@@ -479,6 +482,8 @@ static void report_usable_area(struct wtf_server *srv, struct wlr_box *usable) {
 	}
 }
 
+static void wallpaper_layout(struct wtf_server *srv);
+
 /* Arrange every layer surface on the primary output, letting wlroots' scene
  * helper apply anchors/margins/exclusive zones and shrink the usable area; then
  * report the resulting usable rectangle to the brain so tiling reflows. */
@@ -506,6 +511,118 @@ static void arrange_layers(struct wtf_server *srv) {
 	}
 
 	report_usable_area(srv, &usable);
+
+	/* The background also tracks the full output box. */
+	wallpaper_layout(srv);
+}
+
+/* ------------------------------------------------------------------ */
+/* wallpaper (BACKGROUND layer): custom data-ptr wlr_buffer + scene node */
+/* ------------------------------------------------------------------ */
+
+/* A producer-owned wlr_buffer wrapping a malloc'd copy of RGBA pixels the F#
+ * brain decoded/scaled. wlroots 0.18 has no wlr_readonly_data_buffer_create, so
+ * we implement the minimal data-ptr buffer interface: the renderer samples the
+ * pixels via begin/end_data_ptr_access and uploads them as a texture. */
+struct wtf_wallpaper_buffer {
+	struct wlr_buffer base;
+	void *data;        /* owned malloc copy, freed in destroy */
+	uint32_t format;   /* DRM_FORMAT_ABGR8888 (ImageSharp Rgba32 byte order) */
+	size_t stride;     /* width * 4 */
+};
+
+static void wallpaper_buffer_destroy(struct wlr_buffer *buf) {
+	struct wtf_wallpaper_buffer *wb = wl_container_of(buf, wb, base);
+	free(wb->data);
+	free(wb);
+}
+
+static bool wallpaper_buffer_begin_data_ptr_access(struct wlr_buffer *buf,
+		uint32_t flags, void **data, uint32_t *format, size_t *stride) {
+	(void)flags; /* read-only; we never honour WRITE */
+	struct wtf_wallpaper_buffer *wb = wl_container_of(buf, wb, base);
+	*data = wb->data;
+	*format = wb->format;
+	*stride = wb->stride;
+	return true;
+}
+
+static void wallpaper_buffer_end_data_ptr_access(struct wlr_buffer *buf) {
+	(void)buf; /* nothing to release */
+}
+
+static const struct wlr_buffer_impl wtf_wallpaper_buffer_impl = {
+	.destroy = wallpaper_buffer_destroy,
+	.get_dmabuf = NULL,
+	.get_shm = NULL,
+	.begin_data_ptr_access = wallpaper_buffer_begin_data_ptr_access,
+	.end_data_ptr_access = wallpaper_buffer_end_data_ptr_access,
+};
+
+/* Build a producer-referenced buffer from a copy of `rgba` (w*h*4 bytes,
+ * R,G,B,A order). Returns NULL on allocation failure. */
+static struct wlr_buffer *wtf_wallpaper_buffer_create(const unsigned char *rgba,
+		int w, int h) {
+	if (rgba == NULL || w <= 0 || h <= 0) {
+		return NULL;
+	}
+	struct wtf_wallpaper_buffer *wb = calloc(1, sizeof(*wb));
+	if (wb == NULL) {
+		return NULL;
+	}
+	size_t size = (size_t)w * (size_t)h * 4;
+	wb->data = malloc(size);
+	if (wb->data == NULL) {
+		free(wb);
+		return NULL;
+	}
+	memcpy(wb->data, rgba, size);
+	wb->format = DRM_FORMAT_ABGR8888;
+	wb->stride = (size_t)w * 4;
+	wlr_buffer_init(&wb->base, &wtf_wallpaper_buffer_impl, w, h);
+	return &wb->base;
+}
+
+/* The current wallpaper scene objects (one image node OR one color rect at a
+ * time), plus the producer ref on the live image buffer. */
+static struct wlr_scene_buffer *g_wallpaper_node;   /* image node */
+static struct wlr_buffer *g_wallpaper_buffer;       /* producer ref for ^ */
+static struct wlr_scene_rect *g_wallpaper_rect;     /* solid-color node */
+
+/* Resolve the primary output's full box, falling back to its effective
+ * resolution if the layout doesn't know it yet (mirrors arrange_layers). */
+static bool wallpaper_output_box(struct wtf_server *srv, struct wlr_box *box) {
+	if (srv->primary_output == NULL) {
+		return false;
+	}
+	wlr_output_layout_get_box(srv->output_layout, srv->primary_output, box);
+	if (box->width == 0 && box->height == 0) {
+		box->x = 0;
+		box->y = 0;
+		wlr_output_effective_resolution(srv->primary_output,
+			&box->width, &box->height);
+	}
+	return box->width > 0 && box->height > 0;
+}
+
+/* Position/size whichever wallpaper node exists to fill the full output box and
+ * lower it to the bottom of the BACKGROUND tree so real layer-shell background
+ * clients stay above it. Safe to call when no wallpaper is set. */
+static void wallpaper_layout(struct wtf_server *srv) {
+	struct wlr_box box;
+	if (!wallpaper_output_box(srv, &box)) {
+		return;
+	}
+	if (g_wallpaper_node != NULL) {
+		wlr_scene_node_set_position(&g_wallpaper_node->node, box.x, box.y);
+		wlr_scene_buffer_set_dest_size(g_wallpaper_node, box.width, box.height);
+		wlr_scene_node_lower_to_bottom(&g_wallpaper_node->node);
+	}
+	if (g_wallpaper_rect != NULL) {
+		wlr_scene_node_set_position(&g_wallpaper_rect->node, box.x, box.y);
+		wlr_scene_rect_set_size(g_wallpaper_rect, box.width, box.height);
+		wlr_scene_node_lower_to_bottom(&g_wallpaper_rect->node);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -1762,6 +1879,75 @@ void wtf_set_blur(int enabled, int radius, int passes) {
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		style_toplevel(t);
+	}
+	schedule_frame();
+}
+
+void wtf_set_wallpaper(const unsigned char *rgba, int width, int height) {
+	struct wlr_buffer *buf = wtf_wallpaper_buffer_create(rgba, width, height);
+	if (buf == NULL) {
+		return; /* bad args / OOM: leave any existing wallpaper untouched */
+	}
+	/* An image replaces any solid-color rect. */
+	if (g_wallpaper_rect != NULL) {
+		wlr_scene_node_destroy(&g_wallpaper_rect->node);
+		g_wallpaper_rect = NULL;
+	}
+	if (g_wallpaper_node == NULL) {
+		g_wallpaper_node =
+			wlr_scene_buffer_create(server.layer_tree[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND], buf);
+	} else {
+		wlr_scene_buffer_set_buffer(g_wallpaper_node, buf);
+	}
+	/* The scene took its own lock; drop the old producer ref so it frees once
+	 * the scene releases it, then keep our ref on the new buffer. */
+	if (g_wallpaper_buffer != NULL) {
+		wlr_buffer_drop(g_wallpaper_buffer);
+	}
+	g_wallpaper_buffer = buf;
+	wallpaper_layout(&server);
+	schedule_frame();
+}
+
+void wtf_set_wallpaper_color(double r, double g, double b) {
+	if (r < 0.0) r = 0.0;
+	if (r > 1.0) r = 1.0;
+	if (g < 0.0) g = 0.0;
+	if (g > 1.0) g = 1.0;
+	if (b < 0.0) b = 0.0;
+	if (b > 1.0) b = 1.0;
+	float color[4] = { (float)r, (float)g, (float)b, 1.0f };
+	/* A color replaces any image node + its buffer ref. */
+	if (g_wallpaper_node != NULL) {
+		wlr_scene_node_destroy(&g_wallpaper_node->node);
+		g_wallpaper_node = NULL;
+	}
+	if (g_wallpaper_buffer != NULL) {
+		wlr_buffer_drop(g_wallpaper_buffer);
+		g_wallpaper_buffer = NULL;
+	}
+	if (g_wallpaper_rect == NULL) {
+		g_wallpaper_rect = wlr_scene_rect_create(
+			server.layer_tree[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND], 1, 1, color);
+	} else {
+		wlr_scene_rect_set_color(g_wallpaper_rect, color);
+	}
+	wallpaper_layout(&server);
+	schedule_frame();
+}
+
+void wtf_clear_wallpaper(void) {
+	if (g_wallpaper_node != NULL) {
+		wlr_scene_node_destroy(&g_wallpaper_node->node);
+		g_wallpaper_node = NULL;
+	}
+	if (g_wallpaper_buffer != NULL) {
+		wlr_buffer_drop(g_wallpaper_buffer);
+		g_wallpaper_buffer = NULL;
+	}
+	if (g_wallpaper_rect != NULL) {
+		wlr_scene_node_destroy(&g_wallpaper_rect->node);
+		g_wallpaper_rect = NULL;
 	}
 	schedule_frame();
 }

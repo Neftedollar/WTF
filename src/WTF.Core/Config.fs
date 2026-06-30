@@ -51,6 +51,30 @@ type InputConfig =
       // DeviceOverrides deferred — per-name match would be
       // (NameSubstring:string * InputConfig) list applied after the type config.
 
+// --- wallpaper (pure data; decode happens in the host, NOT here) ---
+
+/// How an image wallpaper maps onto the output rectangle.
+///   Fill    = cover the whole output, cropping overflow (preserve aspect)
+///   Fit     = contain inside the output, letterboxing the remainder
+///   Stretch = exact output size, ignoring aspect
+///   Center  = original size centered (no upscale), padding the remainder
+///   Tile    = repeat the image to fill the output
+type WallpaperMode =
+    | Fill
+    | Fit
+    | Stretch
+    | Center
+    | Tile
+
+/// The wallpaper choice. Named `NoWallpaper` (not `None`) so it never clashes
+/// with `Option.None`. `Color` is a "#rrggbb" hex string, parsed in the host via
+/// `Protocol.hexColor`. `Image` carries a path (host may expand a leading `~`)
+/// plus the scaling mode. WTF.Core stays ImageSharp-free: this is just data.
+type Wallpaper =
+    | NoWallpaper
+    | Color of string
+    | Image of path: string * mode: WallpaperMode
+
 /// xMonad's XConfig analog.
 type WtfConfig =
     { ModKey: string                    // "Super" | "Alt"
@@ -70,7 +94,8 @@ type WtfConfig =
       Blur: bool                        // appearance: backdrop blur (scenefx)
       Scale: float                      // HiDPI output scale (physical px per logical px); 1.0 = logical px (default)
       HistoryLimit: int                 // undo depth: max retained past states
-      Input: InputConfig }              // keyboard/mouse/touchpad device settings
+      Input: InputConfig                // keyboard/mouse/touchpad device settings
+      Wallpaper: Wallpaper }            // background: solid color or decoded image
 
 module WtfConfig =
     let defaults =
@@ -100,7 +125,8 @@ module WtfConfig =
               Touchpad =
                 { Tap = true; TapDrag = true; NaturalScroll = true
                   DisableWhileTyping = true; ScrollMethod = "two-finger"
-                  ClickMethod = "button-areas"; AccelSpeed = 0.0; AccelProfile = "" } } }
+                  ClickMethod = "button-areas"; AccelSpeed = 0.0; AccelProfile = "" } }
+          Wallpaper = Color "#1e1e2e" }
 
 // --- predicate helpers for manage rules (read like English) ---
 [<AutoOpen>]
@@ -170,6 +196,8 @@ type ConfigBuilder() =
     member _.HistoryLimit(c, v) = { c with HistoryLimit = v }
     [<CustomOperation "input">]
     member _.Input(c, i: InputConfig) = { c with Input = i }
+    [<CustomOperation "wallpaper">]
+    member _.Wallpaper(c, v: Wallpaper) = { c with Wallpaper = v }
 
 // --- input sub-builders ---
 // Member params are type-annotated because some field names (e.g. Layout) collide

@@ -60,6 +60,10 @@ let cfg =
 // ---- mutable world (the event loop is single-threaded, so this is safe) ----
 let mutable world = { World.empty (Rect.create 0 0 1280 720) with Gaps = cfg.Gaps }
 
+// The wallpaper actually applied (cfg.Wallpaper, or a forced solid color in safe
+// mode). Held so onOutputResize can re-scale + re-push it to the new output size.
+let mutable private activeWallpaper : Wallpaper = cfg.Wallpaper
+
 let private applyEffects effects =
     for e in effects do
         match e with
@@ -190,6 +194,9 @@ let onOutputResize (x: int) (y: int) (width: int) (height: int) : unit =
     let toL (v: int) : int = Px.rawL (Px.toLogical cfg.Scale (v * 1<ppx>))
     world <- { world with Screen = Rect.create (toL x) (toL y) (toL width) (toL height) }
     applyEffects [ Arrange(World.arrange world) ]
+    // Re-scale the wallpaper to the new output size (image re-scales from the
+    // cached original; a solid color just re-sizes the C-side rect).
+    Wallpaper.apply activeWallpaper (Px.rawL world.Screen.Width) (Px.rawL world.Screen.Height)
 
 // ---- agent-first IPC, marshalled onto the loop thread by the bridge ----
 let private bridge = Bridge.LoopBridge()
@@ -281,6 +288,12 @@ let onReady () : unit =
     li.TpAccel <- t.AccelSpeed
     li.TpAccelProfile <- profileInt t.AccelProfile
     Ffi.wtf_set_libinput_config li
+    // Apply the wallpaper into the BACKGROUND layer at the current output size.
+    // Safe mode forces a plain solid color so a flaky GPU / huge image can't
+    // compound a crash loop. Best-effort: a bad image logs + falls back inside the
+    // Wallpaper module — it never throws here, so onReady can't be blocked.
+    activeWallpaper <- if safeMode then Color "#1e1e2e" else cfg.Wallpaper
+    Wallpaper.apply activeWallpaper (Px.rawL world.Screen.Width) (Px.rawL world.Screen.Height)
     // Restore saved settings (current tag, nmaster, ratio, gaps, per-workspace
     // layouts). Settings-only: the saved window set is dropped, since a fresh
     // compositor has no surfaces backing those ids. Re-base history afterwards.
