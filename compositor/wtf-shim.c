@@ -412,8 +412,25 @@ static bool animate_toplevels(void) {
 		}
 		int px = (int)lround(t->anim_x);
 		int py = (int)lround(t->anim_y);
-		wlr_scene_node_set_position(&t->scene_tree->node, px, py);
+		/* Compensate for the xdg-surface GEOMETRY offset. A CSD client (GTK apps
+		 * like gnome-text-editor) draws its shadow in a transparent margin AROUND
+		 * the real window, so its buffer is larger than the geometry and geo.x/y
+		 * are the top-left inset. set_size sized the GEOMETRY to width×height, so
+		 * to land the geometry box (not the buffer) at the tile origin we shift the
+		 * node by -geo.x/-geo.y. Without this the buffer overflows to the right onto
+		 * the neighbor and the border rect bleeds blue through the shadow margin.
+		 * (The interactive-resize path already does this; the layout path didn't.)
+		 * XWayland has no such offset (geo stays 0). */
+		int gx = 0, gy = 0;
+		if (!t->is_xwayland && t->xdg_toplevel != NULL) {
+			struct wlr_box geo;
+			wlr_xdg_surface_get_geometry(t->xdg_toplevel->base, &geo);
+			gx = geo.x;
+			gy = geo.y;
+		}
+		wlr_scene_node_set_position(&t->scene_tree->node, px - gx, py - gy);
 		if (t->border != NULL) {
+			/* Border hugs the GEOMETRY box (content), positioned in tile space. */
 			wlr_scene_node_set_position(&t->border->node,
 				px - g_border_width, py - g_border_width);
 		}
@@ -474,7 +491,16 @@ static void focus_toplevel(struct wtf_toplevel *toplevel) {
 	} else {
 		wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
 	}
-	if (keyboard != NULL) {
+	/* Do NOT steal the keyboard from an EXCLUSIVE layer-shell grab (the omnibox /
+	 * a launcher / a lockscreen). focus_toplevel is reached from pointer clicks
+	 * AND from the brain's wtf_focus (on every arrange/restyle); if it yanked the
+	 * keyboard while the omnibox was up, the omnibox would never see Esc/Enter and
+	 * could not be dismissed — exactly the "can't close it, typing blind" bug, with
+	 * a toplevel (e.g. gnome-text-editor) silently holding the keyboard behind it.
+	 * Visual focus (activation, raise, border, opacity) below still updates; only
+	 * the keyboard stays with the layer. layer_surface_unmap restores toplevel
+	 * keyboard focus when the grab ends. */
+	if (keyboard != NULL && server.focused_layer == NULL) {
 		wlr_seat_keyboard_notify_enter(seat, surface,
 			keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
 	}
@@ -1868,6 +1894,16 @@ void wtf_configure(int id, int x, int y, int width, int height) {
 		uint16_t ch = (uint16_t)(height < 0 ? 0 : (height > UINT16_MAX ? UINT16_MAX : height));
 		wlr_xwayland_surface_configure(t->xwl_surface, cx, cy, cw, ch);
 	} else {
+		/* Ask tiled (non-floating) windows to render in the TILED state: GTK and
+		 * other CSD clients then drop their drop-shadow + rounded corners and draw
+		 * a flush rectangle, so neighbors pack edge-to-edge and the geometry inset
+		 * collapses to ~0. Floating windows keep their normal (decorated) look. */
+		if (t->floating) {
+			wlr_xdg_toplevel_set_tiled(t->xdg_toplevel, WLR_EDGE_NONE);
+		} else {
+			wlr_xdg_toplevel_set_tiled(t->xdg_toplevel, WLR_EDGE_TOP |
+				WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
+		}
 		wlr_xdg_toplevel_set_size(t->xdg_toplevel, width, height);
 	}
 	schedule_frame();
