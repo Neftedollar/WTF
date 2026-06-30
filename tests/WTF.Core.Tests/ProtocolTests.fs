@@ -55,6 +55,17 @@ let ``parseRequest distinguishes queries from actions`` () =
     Assert.Equal(None, Protocol.parseRequest """{"cmd":"explode"}""")
 
 [<Fact>]
+let ``parseRequest recognizes the agent-first verbs`` () =
+    Assert.Equal(Some Protocol.Tools, Protocol.parseRequest """{"tools":true}""")
+    Assert.Equal(None, Protocol.parseRequest """{"tools":false}""") // not a manifest request
+    Assert.Equal(Some(Protocol.Ask "tidy up"), Protocol.parseRequest """{"ask":"tidy up"}""")
+    Assert.Equal(Some(Protocol.Notify("hi", "")), Protocol.parseRequest """{"notify":{"summary":"hi"}}""")
+    Assert.Equal(Some(Protocol.Notify("hi", "there")), Protocol.parseRequest """{"notify":{"summary":"hi","body":"there"}}""")
+    Assert.Equal(None, Protocol.parseRequest """{"notify":{"body":"no summary"}}""")
+    // The existing eval / command / query doors are unaffected.
+    Assert.Equal(Some(Protocol.Eval "config { gaps 20 }"), Protocol.parseRequest """{"eval":"config { gaps 20 }"}""")
+
+[<Fact>]
 let ``snapshot is valid JSON exposing windows and arrange`` () =
     let screen = Rect.create 0 0 1920 1080
     let w =

@@ -5,6 +5,7 @@ open System.Runtime.InteropServices
 open WTF.Core
 open WTF.Config
 open WTF.Desktop
+open WTF.Agent
 
 // ---- the default configuration (xMonad-style, in F#) ----
 // Per-workspace switch/move binds, generated for tags 1..9.
@@ -231,6 +232,18 @@ let private handleOnLoop (line: string) : string =
     | Some (Protocol.Act cmd) ->
         dispatch cmd
         Protocol.snapshotLineWith desktop world
+    // The agent tool manifest: plain data, returned verbatim so any external LLM
+    // can discover + drive WTF with zero hardcoding.
+    | Some Protocol.Tools -> AgentTools.manifestJson ()
+    // Agent -> user: inject a notification through OUR own daemon (thread-safe via
+    // the Aggregator), then reply with a fresh snapshot so the caller sees it land
+    // under "desktop".
+    | Some (Protocol.Notify (summary, body)) ->
+        Desktop.notify summary body
+        Protocol.snapshotLineWith (Some(Desktop.snapshotJson ())) world
+    // Opt-in in-process LLM brain. The real (async, off-loop) wiring lands in the
+    // next step; until a Brain is constructed it is gracefully disabled.
+    | Some (Protocol.Ask _) -> """{"error":"agent disabled (set ANTHROPIC_API_KEY)"}"""
     // Eval is routed to the FSI worker at the top-level socket handler, never the
     // loop thread — it should not arrive here.
     | Some (Protocol.Eval _) -> """{"error":"eval must run on the FSI worker"}"""
@@ -242,6 +255,7 @@ let private handleOnLoop (line: string) : string =
 let onDrain () : unit =
     bridge.Drain handleOnLoop
     bridge.DrainActions()
+    bridge.DrainCalls()
 
 /// Push a config's appearance + input + wallpaper into the C compositor at the
 /// CURRENT output size. The reusable seam shared by `onReady` and (next step)
@@ -346,6 +360,23 @@ let onReady () : unit =
         let o = System.Text.Json.Nodes.JsonObject()
         o[key] <- System.Text.Json.Nodes.JsonValue.Create value
         o.ToJsonString()
+    // Opt-in in-process LLM brain. Constructed once here (lazy + guarded on
+    // ANTHROPIC_API_KEY): None when the key is absent => {"ask"} cleanly disabled,
+    // nothing else affected. Each tool the model calls is routed through
+    // `agentDispatch`: a Command is dispatched ON the loop thread via bridge.Call
+    // (the only safe way to touch World/wlroots), returning a fresh snapshot; a
+    // Notify drives the thread-safe daemon directly. The (async, slow) Brain.ask
+    // itself runs on THIS per-client serving thread, never the loop/accept thread.
+    let agentDispatch (call: AgentTools.ToolCall) : string =
+        match call with
+        | AgentTools.ToCommand cmd ->
+            bridge.Call(Ffi.wtf_command_notify, fun () ->
+                dispatch cmd
+                Protocol.snapshotLineWith (Some(Desktop.snapshotJson ())) world)
+        | AgentTools.ToNotify (summary, body) ->
+            Desktop.notify summary body
+            """{"ok":"notified"}"""
+    let brain = Brain.tryCreate agentDispatch
     let handle (line: string) : string =
         match Protocol.parseRequest line with
         | Some (Protocol.Eval code) ->
@@ -357,6 +388,21 @@ let onReady () : unit =
                 bridge.Post(Ffi.wtf_command_notify, fun () -> cmds |> List.iter dispatch)
                 jsonReply "ok" (sprintf "dispatched %d command(s)" cmds.Length)
             | EvalText t -> jsonReply "result" t
+        // The natural-language door. Runs the async LLM call on THIS serving thread
+        // (off the loop): build the World+desktop snapshot context on the loop
+        // thread, then let the brain drive the curated tools. Graceful when the
+        // brain is disabled (no key).
+        | Some (Protocol.Ask nl) ->
+            match brain with
+            | None -> """{"error":"agent disabled (set ANTHROPIC_API_KEY)"}"""
+            | Some b ->
+                try
+                    let snapshot =
+                        bridge.Call(Ffi.wtf_command_notify, fun () ->
+                            Protocol.snapshotLineWith (Some(Desktop.snapshotJson ())) world)
+                    jsonReply "reply" ((b.Ask snapshot nl).Result)
+                with ex ->
+                    jsonReply "error" (sprintf "agent failed: %s" ex.Message)
         | _ -> bridge.Submit(Ffi.wtf_command_notify, line)
     let path = Ipc.start handle
     // Be the desktop shell natively over D-Bus (notification daemon + logind /

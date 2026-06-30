@@ -17,6 +17,9 @@ module wtfctl.Program
 //   wtfctl sinkall                   clear all floating on the current workspace
 //   wtfctl close                     close the focused window
 //   wtfctl eval "config { gaps 20 }" run F# live (hot-swap config / dispatch cmd)
+//   wtfctl tools                     the agent tool manifest (JSON)
+//   wtfctl notify "Build done"       send a desktop notification
+//   wtfctl ask "tile the browser"    drive WTF in natural language (opt-in LLM)
 //   wtfctl '{"cmd":"focus","by":"next"}'   raw JSON passthrough
 
 open System
@@ -67,6 +70,17 @@ let toJson (args: string list) : string option =
     | [ "fullscreen" ] -> Some """{"cmd":"fullscreen"}"""
     | [ "sinkall" ] -> Some """{"cmd":"sinkall"}"""
     | [ "close" ] -> Some """{"cmd":"close"}"""
+    // Agent-first surface: discover the curated LLM tool manifest, and notify the
+    // user through WTF's own daemon.
+    //   wtfctl tools                          the agent tool manifest (JSON)
+    //   wtfctl notify "Build done"            send a desktop notification
+    //   wtfctl notify "Build done" all green  summary + body
+    | [ "tools" ] -> Some """{"tools":true}"""
+    //   wtfctl ask "focus the browser and tile it"   drive WTF in natural language
+    | "ask" :: rest when not (List.isEmpty rest) ->
+        Some(sprintf """{"ask":"%s"}""" (jsonEsc (String.Join(" ", rest))))
+    | "notify" :: summary :: rest ->
+        Some(sprintf """{"notify":{"summary":"%s","body":"%s"}}""" (jsonEsc summary) (jsonEsc (String.Join(" ", rest))))
     // Live F# REPL into the running WM: a WtfConfig result hot-applies, a Command
     // or Command list dispatches, anything else returns its value/diagnostics.
     //   wtfctl eval "config { gaps 20 }"      hot-swap the whole config

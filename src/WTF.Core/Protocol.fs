@@ -144,6 +144,9 @@ module Protocol =
         | Query
         | Act of Command
         | Eval of string
+        | Tools                          // {"tools":true} -> the agent tool manifest
+        | Notify of string * string      // {"notify":{summary,body}} -> desktop notification
+        | Ask of string                  // {"ask":"<nl>"} -> the opt-in in-process LLM brain
 
     /// Parse one command object, e.g. {"cmd":"focus","by":"next"} or
     /// {"cmd":"layout","name":"bsp"}. Returns None on unknown/invalid input.
@@ -219,18 +222,33 @@ module Protocol =
         match line.Trim() with
         | "" | "state" | "snapshot" -> Some Query
         | t when t.StartsWith "{" ->
-            // The live-REPL door is checked FIRST: {"eval":"<f# code>"} runs on the
-            // host's FSI worker thread (not the loop thread), so it is recognized
-            // here and routed before the generic command parse.
-            match (try str (JsonNode.Parse t) "eval" with _ -> None) with
-            | Some code -> Some(Eval code)
-            | None ->
-                match parse t with
-                | Some cmd -> Some(Act cmd)
+            match (try Some(JsonNode.Parse t) with _ -> None) with
+            | None -> None
+            | Some o ->
+                // The agent-facing doors are checked BEFORE the generic command
+                // parse. The live-REPL {"eval"} runs on the host's FSI worker;
+                // {"ask"} on the off-loop LLM brain; {"tools"} / {"notify"} are
+                // host/desktop concerns — all recognized and routed here.
+                match str o "eval" with
+                | Some code -> Some(Eval code)
                 | None ->
-                    try
-                        match str (JsonNode.Parse t) "cmd" with
-                        | Some "state" | Some "snapshot" -> Some Query
-                        | _ -> None
-                    with _ -> None
+                    match str o "ask" with
+                    | Some nl -> Some(Ask nl)
+                    | None ->
+                        match o["notify"] with
+                        | n when not (isNull n) ->
+                            match str n "summary" with
+                            | Some s -> Some(Notify(s, defaultArg (str n "body") ""))
+                            | None -> None
+                        | _ ->
+                            match o["tools"] with
+                            | flag when not (isNull flag) && (try flag.GetValue<bool>() with _ -> false) ->
+                                Some Tools
+                            | _ ->
+                                match parse t with
+                                | Some cmd -> Some(Act cmd)
+                                | None ->
+                                    match str o "cmd" with
+                                    | Some "state" | Some "snapshot" -> Some Query
+                                    | _ -> None
         | _ -> None

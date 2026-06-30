@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Brain.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The opt-in in-process LLM brain. Microsoft.Extensions.AI exposes the
+         IChatClient + function-calling abstractions; Anthropic.SDK backs it with a
+         Claude model. Referenced now so the restore is cached; the full plumbing
+         (Brain.tryCreate / Brain.ask) lands in the next step. -->
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.7.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.7.0" />
+    <PackageReference Include="Anthropic.SDK" Version="5.10.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core only: Command / Protocol / AgentTools. WTF.Agent = Core + AI packages;
+         it does NOT reference WTF.Desktop — the host bridges notify. -->
+    <ProjectReference Include="..\WTF.Core\WTF.Core.fsproj" />
+  </ItemGroup>
+
+</Project>

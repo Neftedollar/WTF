@@ -23,6 +23,7 @@
     <ProjectReference Include="..\WTF.Core\WTF.Core.fsproj" />
     <ProjectReference Include="..\WTF.Config\WTF.Config.fsproj" />
     <ProjectReference Include="..\WTF.Desktop\WTF.Desktop.fsproj" />
+    <ProjectReference Include="..\WTF.Agent\WTF.Agent.fsproj" />
   </ItemGroup>
 
 </Project>

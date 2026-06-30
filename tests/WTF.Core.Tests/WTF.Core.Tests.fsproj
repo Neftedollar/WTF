@@ -12,6 +12,7 @@
     <Compile Include="HistoryTests.fs" />
     <Compile Include="ReducerTests.fs" />
     <Compile Include="ProtocolTests.fs" />
+    <Compile Include="AgentToolsTests.fs" />
     <Compile Include="SessionTests.fs" />
     <Compile Include="ConfigTests.fs" />
     <Compile Include="FloatingTests.fs" />

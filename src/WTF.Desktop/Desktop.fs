@@ -39,6 +39,23 @@ module Desktop =
     /// snapshot's "desktop" key via `Protocol.snapshotLineWith`.
     let snapshotJson () : JsonObject = DesktopJson.render (agg.Snapshot())
 
+    /// Inject a notification straight into the daemon's OWN store via the
+    /// Aggregator lock — the identical mutation `NotificationDaemon.NotifyAsync`
+    /// performs. Because it reuses the same Aggregator/NotificationStore the daemon
+    /// owns and the snapshot's "desktop" object reads, the notification immediately
+    /// surfaces in our store + in the agent snapshot (and on a bar in Phase 4); the
+    /// daemon's ~1s expiry Timer reaps it normally. Thread-safe (Aggregator gate),
+    /// so it needs NO LoopBridge — the agent `notify` tool and the socket
+    /// {"notify":{summary,body}} verb both drive it. Works even when another daemon
+    /// owns the bus name (we still record it in our own store/snapshot).
+    let notify (summary: string) (body: string) : unit =
+        let nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        agg.Mutate(fun s ->
+            let store', _ =
+                NotificationStore.add nowMs 5000 0u "wtf-agent" "" summary body [] None -1 s.Notifications
+            { s with Notifications = store' }, ())
+        eprintfn "WTF notif: wtf-agent %s" summary
+
     // Own org.freedesktop.Notifications (best-effort). If another daemon already
     // holds the name, RegisterServiceAsync throws — we log and continue with the
     // client features (battery/network/media still work).
