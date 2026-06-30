@@ -3,6 +3,7 @@ module WTF.Host.Program
 open System
 open System.Runtime.InteropServices
 open WTF.Core
+open WTF.Config
 open WTF.Desktop
 
 // ---- the default configuration (xMonad-style, in F#) ----
@@ -43,7 +44,11 @@ let private baseKeys =
         bind "M-S-s"     SaveSession
     }
 
-let cfg =
+// The built-in DEFAULT configuration. This is the fallback the loader returns
+// when ~/.config/wtf/config.fsx is missing/broken, and the base in safe mode.
+// The live config (`cfg` below) is LOADED from the user file at startup and may
+// be swapped at runtime; everything downstream reads it through `cfg.`.
+let defaultConfig =
     config {
         modKey "Super"
         terminal "kitty"
@@ -56,6 +61,20 @@ let cfg =
         // Launch two terminals on startup so tiling is visible immediately.
         startup [ "kitty"; "kitty" ]
     }
+
+// The LIVE config. Initialised to the default at module init (so the world /
+// history bindings below have something to read); `main` replaces it with the
+// user's loaded config before the compositor starts. `mutable` so a future
+// hot-reload can swap it — keybinds read `cfg.Keys` through `Keymap.lookup`, so
+// a swap re-binds instantly.
+let mutable cfg = defaultConfig
+
+// The runtime config engine (FCS-backed FsiEvaluationSession on its own worker
+// thread). Created in `main`; held module-wide so `onReady` can start the
+// hot-reload watcher and the socket handler can route {"eval"} REPL requests to
+// the SAME worker thread. `Unchecked.defaultof` until `main` assigns it (nothing
+// reads it before then).
+let mutable private configEngine : IConfigEngine = Unchecked.defaultof<_>
 
 // ---- mutable world (the event loop is single-threaded, so this is safe) ----
 let mutable world = { World.empty (Rect.create 0 0 1280 720) with Gaps = cfg.Gaps }
@@ -212,47 +231,45 @@ let private handleOnLoop (line: string) : string =
     | Some (Protocol.Act cmd) ->
         dispatch cmd
         Protocol.snapshotLineWith desktop world
+    // Eval is routed to the FSI worker at the top-level socket handler, never the
+    // loop thread — it should not arrive here.
+    | Some (Protocol.Eval _) -> """{"error":"eval must run on the FSI worker"}"""
     | None -> """{"error":"unrecognized command"}"""
 
 /// Drain callback — the compositor fires this on the loop thread after a notify.
-let onDrain () : unit = bridge.Drain handleOnLoop
+/// Handles queued socket requests AND fire-and-forget actions (hot-reload /
+/// REPL-produced config + commands marshalled from the FSI worker thread).
+let onDrain () : unit =
+    bridge.Drain handleOnLoop
+    bridge.DrainActions()
 
-let onReady () : unit =
-    // Safe-mode (WTF_SAFE_MODE=1): the session wrapper escalates here after a
-    // crash loop. Force a minimal known-good appearance and skip startup apps so
-    // a flaky GPU/driver or a heavy rice config cannot compound a crash loop.
+/// Push a config's appearance + input + wallpaper into the C compositor at the
+/// CURRENT output size. The reusable seam shared by `onReady` and (next step)
+/// the hot-reload path: anything PUSHED to C (appearance/input/wallpaper) must be
+/// re-applied when the config is swapped — a plain `cfg <- ...` only re-binds
+/// keys. Honors WTF_SAFE_MODE (forced minimal appearance + solid wallpaper).
+/// MUST run on the loop thread (it calls Ffi/wlroots).
+let applyConfig (c: WtfConfig) : unit =
     let safeMode = (System.Environment.GetEnvironmentVariable "WTF_SAFE_MODE" = "1")
-    if safeMode then
-        eprintfn "WTF: SAFE MODE active (WTF_SAFE_MODE=1) — minimal appearance, startup apps skipped"
-    // The compositor is live; open the agent door and launch startup clients so
-    // you see tiled windows immediately instead of an empty output.
-    let submit line = bridge.Submit(Ffi.wtf_command_notify, line)
-    let path = Ipc.start submit
-    // Be the desktop shell natively over D-Bus (notification daemon + logind /
-    // UPower / MPRIS / NetworkManager clients). FIRE-AND-FORGET and best-effort:
-    // it returns immediately and never blocks/crashes startup (no bus / name
-    // taken / failure => degrade with a log). Started here, where the session bus
-    // is available, alongside Ipc.start.
-    Desktop.start ()
-    // Push the configured appearance into the renderer (forced minimal in safe mode).
-    let inactiveOpacity = if safeMode then 1.0 else cfg.InactiveOpacity
-    let animSpeed       = if safeMode then 1.0 else cfg.AnimSpeed      // 1.0 = instant
-    let cornerRadius    = if safeMode then 0   else cfg.CornerRadius
-    let blurOn          = if safeMode then false else cfg.Blur
+    // Appearance (forced minimal in safe mode).
+    let inactiveOpacity = if safeMode then 1.0 else c.InactiveOpacity
+    let animSpeed       = if safeMode then 1.0 else c.AnimSpeed      // 1.0 = instant
+    let cornerRadius    = if safeMode then 0   else c.CornerRadius
+    let blurOn          = if safeMode then false else c.Blur
     Ffi.wtf_set_inactive_opacity inactiveOpacity
     Ffi.wtf_set_anim_speed animSpeed
-    Ffi.wtf_set_border_width cfg.BorderWidth
+    Ffi.wtf_set_border_width c.BorderWidth
     let border active hex =
         match Protocol.hexColor hex with
         | Some (r, g, b) -> Ffi.wtf_set_border_color ((if active then 1 else 0), r, g, b)
         | None -> ()
-    border true cfg.ActiveBorder
-    border false cfg.InactiveBorder
+    border true c.ActiveBorder
+    border false c.InactiveBorder
     Ffi.wtf_set_corner_radius cornerRadius
     Ffi.wtf_set_blur ((if blurOn then 1 else 0), 0, 0)
-    // Push the configured input devices: keyboard xkb/repeat + libinput knobs.
+    // Input devices: keyboard xkb/repeat + libinput knobs.
     // Empty xkb fields stay "" — the C side converts those to NULL for xkb defaults.
-    let kb = cfg.Input.Keyboard
+    let kb = c.Input.Keyboard
     Ffi.wtf_set_keymap (kb.Rules, kb.Model, kb.Layout, kb.Variant, kb.Options, kb.RepeatRate, kb.RepeatDelay)
     // string profile/method -> int sentinel (-1 = leave libinput default).
     let profileInt =
@@ -273,8 +290,8 @@ let onReady () : unit =
         | "clickfinger" -> 2
         | _ -> -1
     let b (v: bool) = if v then 1 else 0
-    let m = cfg.Input.Mouse
-    let t = cfg.Input.Touchpad
+    let m = c.Input.Mouse
+    let t = c.Input.Touchpad
     let mutable li = Ffi.LibinputConfig()
     li.MouseAccel <- m.AccelSpeed
     li.MouseAccelProfile <- profileInt m.AccelProfile
@@ -288,12 +305,74 @@ let onReady () : unit =
     li.TpAccel <- t.AccelSpeed
     li.TpAccelProfile <- profileInt t.AccelProfile
     Ffi.wtf_set_libinput_config li
-    // Apply the wallpaper into the BACKGROUND layer at the current output size.
-    // Safe mode forces a plain solid color so a flaky GPU / huge image can't
-    // compound a crash loop. Best-effort: a bad image logs + falls back inside the
-    // Wallpaper module — it never throws here, so onReady can't be blocked.
-    activeWallpaper <- if safeMode then Color "#1e1e2e" else cfg.Wallpaper
+    // Wallpaper into the BACKGROUND layer at the current output size. Safe mode
+    // forces a plain solid color so a flaky GPU / huge image can't compound a
+    // crash loop. Best-effort: a bad image logs + falls back inside Wallpaper —
+    // it never throws here, so this can't block startup or a reload.
+    activeWallpaper <- if safeMode then Color "#1e1e2e" else c.Wallpaper
     Wallpaper.apply activeWallpaper (Px.rawL world.Screen.Width) (Px.rawL world.Screen.Height)
+
+/// Apply a hot-swapped config (from the file watcher or a REPL eval) LIVE, on
+/// the loop thread. Swaps the live `cfg` (so keybinds / Manage.onAdd / Keymap
+/// lookups pick up the new map instantly), folds the new gaps into the world,
+/// re-pushes everything derived from config (appearance/input/wallpaper via
+/// `applyConfig`), then re-arranges so the new gaps/layout re-tile. Deliberately
+/// does NOT re-run StartupApps (launch-only) or re-load the saved session.
+/// MUST run on the loop thread (calls Ffi/wlroots through applyConfig/applyEffects).
+let applyConfigReload (newCfg: WtfConfig) : unit =
+    cfg <- newCfg
+    world <- { world with Gaps = cfg.Gaps }
+    applyConfig cfg
+    applyEffects [ Arrange(World.arrange world) ]
+    eprintfn "WTF: config reloaded (mod=%s, %d keybinds)" cfg.ModKey cfg.Keys.Length
+
+let onReady () : unit =
+    // Safe-mode (WTF_SAFE_MODE=1): the session wrapper escalates here after a
+    // crash loop. Force a minimal known-good appearance and skip startup apps so
+    // a flaky GPU/driver or a heavy rice config cannot compound a crash loop.
+    let safeMode = (System.Environment.GetEnvironmentVariable "WTF_SAFE_MODE" = "1")
+    if safeMode then
+        eprintfn "WTF: SAFE MODE active (WTF_SAFE_MODE=1) — minimal appearance, startup apps skipped"
+    // The compositor is live; open the agent door and launch startup clients so
+    // you see tiled windows immediately instead of an empty output.
+    //
+    // The socket handler runs on the per-client serving thread (NOT the loop
+    // thread). A normal request goes through the bridge to the loop thread. An
+    // {"eval":"<code>"} request is routed to the FSI worker thread (FSI is single-
+    // threaded and lives off-loop); whatever it produces — a hot-swappable
+    // WtfConfig, a Command/list, or just a text result — is then marshalled back
+    // ONTO the loop thread via the bridge (Post, fire-and-forget) before replying.
+    let jsonReply (key: string) (value: string) : string =
+        let o = System.Text.Json.Nodes.JsonObject()
+        o[key] <- System.Text.Json.Nodes.JsonValue.Create value
+        o.ToJsonString()
+    let handle (line: string) : string =
+        match Protocol.parseRequest line with
+        | Some (Protocol.Eval code) ->
+            match configEngine.Eval code with
+            | EvalConfig c ->
+                bridge.Post(Ffi.wtf_command_notify, fun () -> applyConfigReload c)
+                jsonReply "ok" "config hot-applied"
+            | EvalCommands cmds ->
+                bridge.Post(Ffi.wtf_command_notify, fun () -> cmds |> List.iter dispatch)
+                jsonReply "ok" (sprintf "dispatched %d command(s)" cmds.Length)
+            | EvalText t -> jsonReply "result" t
+        | _ -> bridge.Submit(Ffi.wtf_command_notify, line)
+    let path = Ipc.start handle
+    // Be the desktop shell natively over D-Bus (notification daemon + logind /
+    // UPower / MPRIS / NetworkManager clients). FIRE-AND-FORGET and best-effort:
+    // it returns immediately and never blocks/crashes startup (no bus / name
+    // taken / failure => degrade with a log). Started here, where the session bus
+    // is available, alongside Ipc.start.
+    Desktop.start ()
+    // Push the configured appearance/input/wallpaper (the reusable seam).
+    applyConfig cfg
+    // Start watching ~/.config/wtf/config.fsx for live hot-reload. A successful
+    // re-eval (on the FSI worker thread) marshals the new config onto the loop
+    // thread via the bridge; a broken edit is logged and the running config kept.
+    // Skipped in safe mode (the Null engine's StartWatching is a no-op anyway).
+    configEngine.StartWatching(fun newCfg ->
+        bridge.Post(Ffi.wtf_command_notify, fun () -> applyConfigReload newCfg))
     // Restore saved settings (current tag, nmaster, ratio, gaps, per-workspace
     // layouts). Settings-only: the saved window set is dropped, since a fresh
     // compositor has no surfaces backing those ids. Re-base history afterwards.
@@ -312,6 +391,21 @@ let onReady () : unit =
 // ---- entry point ----
 [<EntryPoint>]
 let main _argv =
+    // Load the user's F# config (~/.config/wtf/config.fsx) BEFORE the compositor
+    // starts — like xMonad recompiling on launch. The first FCS eval can take a
+    // few seconds; this blocks briefly here (acceptable, nothing is on screen
+    // yet). Graceful: a missing/broken config returns `defaultConfig`, so the WM
+    // ALWAYS starts. WTF_SAFE_MODE bypasses the user file entirely (the engine
+    // factory returns a no-op engine). Held for the whole run (its worker thread
+    // serves future hot-reload/REPL eval).
+    configEngine <- ConfigEngine.create defaultConfig
+    eprintfn "WTF: loading config..."
+    cfg <- configEngine.Load()
+    // Fold the loaded gaps into the world and re-base history (the module-init
+    // bindings above used the default config's values).
+    world <- { world with Gaps = cfg.Gaps }
+    history <- History.create cfg.HistoryLimit world
+
     // Root the delegates for the whole run so the GC can't collect them while
     // the C side holds their function pointers.
     let dMap = Ffi.ViewMapDelegate(onViewMap)
@@ -338,4 +432,5 @@ let main _argv =
     GC.KeepAlive dResize
     GC.KeepAlive dReady
     GC.KeepAlive dDrain
+    GC.KeepAlive configEngine
     rc

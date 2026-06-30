@@ -16,6 +16,7 @@ module wtfctl.Program
 //   wtfctl fullscreen                toggle fullscreen on the focused window
 //   wtfctl sinkall                   clear all floating on the current workspace
 //   wtfctl close                     close the focused window
+//   wtfctl eval "config { gaps 20 }" run F# live (hot-swap config / dispatch cmd)
 //   wtfctl '{"cmd":"focus","by":"next"}'   raw JSON passthrough
 
 open System
@@ -66,6 +67,12 @@ let toJson (args: string list) : string option =
     | [ "fullscreen" ] -> Some """{"cmd":"fullscreen"}"""
     | [ "sinkall" ] -> Some """{"cmd":"sinkall"}"""
     | [ "close" ] -> Some """{"cmd":"close"}"""
+    // Live F# REPL into the running WM: a WtfConfig result hot-applies, a Command
+    // or Command list dispatches, anything else returns its value/diagnostics.
+    //   wtfctl eval "config { gaps 20 }"      hot-swap the whole config
+    //   wtfctl eval "SetGaps 20"              dispatch one command
+    //   wtfctl eval "[ SetLayout \"bsp\"; IncGaps ]"   dispatch a list
+    | [ "eval"; code ] -> Some(sprintf """{"eval":"%s"}""" (jsonEsc code))
     | _ -> None
 
 let socketPath () =
@@ -95,7 +102,7 @@ let pretty (json: string) =
 let main argv =
     match toJson (List.ofArray argv) with
     | None ->
-        eprintfn "wtfctl: unrecognized command. Try: state | focus next | layout bsp | workspace 2 | spawn kitty"
+        eprintfn "wtfctl: unrecognized command. Try: state | focus next | layout bsp | workspace 2 | spawn kitty | eval \"config { gaps 20 }\""
         2
     | Some line ->
         try

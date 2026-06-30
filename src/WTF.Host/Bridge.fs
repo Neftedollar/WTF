@@ -17,6 +17,10 @@ open System.Threading.Tasks
 /// add a second thread we'd then have to marshal *off* of — strictly worse.
 type LoopBridge() =
     let pending = ConcurrentQueue<string * TaskCompletionSource<string>>()
+    // Fire-and-forget closures (config hot-reload / REPL-produced config+commands)
+    // queued from the FSI worker thread to run ON the loop thread. No reply: the
+    // submitter already answered the socket, the application is best-effort.
+    let actions = ConcurrentQueue<unit -> unit>()
 
     /// Any thread: enqueue a request, wake the loop, block for its reply.
     member _.Submit(notify: unit -> unit, line: string) : string =
@@ -24,6 +28,13 @@ type LoopBridge() =
         pending.Enqueue(line, reply)
         notify ()
         reply.Task.Result
+
+    /// Any thread: enqueue a closure to run on the loop thread, wake the loop, and
+    /// return immediately. Used by the FSI worker to apply a hot-swapped config /
+    /// dispatch REPL commands without ever touching wlroots off the loop thread.
+    member _.Post(notify: unit -> unit, action: unit -> unit) : unit =
+        actions.Enqueue action
+        notify ()
 
     /// Loop thread only: handle every queued request and complete its reply.
     member _.Drain(handle: string -> string) : unit =
@@ -34,3 +45,9 @@ type LoopBridge() =
                 reply.SetResult(handle line)
             with ex ->
                 reply.SetResult(sprintf """{"error":"%s"}""" (ex.Message.Replace("\"", "'")))
+
+    /// Loop thread only: run every queued fire-and-forget action.
+    member _.DrainActions() : unit =
+        let mutable a = Unchecked.defaultof<unit -> unit>
+        while actions.TryDequeue(&a) do
+            try a () with ex -> eprintfn "WTF: loop action failed: %s" ex.Message

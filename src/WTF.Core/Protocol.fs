@@ -138,10 +138,12 @@ module Protocol =
         | _, _, Some app -> ByApp app
         | _ -> Focused
 
-    /// A request over the control socket: a read-only state query, or an action.
+    /// A request over the control socket: a read-only state query, an action, or
+    /// a live F# eval ({"eval":"<code>"}) routed to the FSI worker by the host.
     type Request =
         | Query
         | Act of Command
+        | Eval of string
 
     /// Parse one command object, e.g. {"cmd":"focus","by":"next"} or
     /// {"cmd":"layout","name":"bsp"}. Returns None on unknown/invalid input.
@@ -217,12 +219,18 @@ module Protocol =
         match line.Trim() with
         | "" | "state" | "snapshot" -> Some Query
         | t when t.StartsWith "{" ->
-            match parse t with
-            | Some cmd -> Some(Act cmd)
+            // The live-REPL door is checked FIRST: {"eval":"<f# code>"} runs on the
+            // host's FSI worker thread (not the loop thread), so it is recognized
+            // here and routed before the generic command parse.
+            match (try str (JsonNode.Parse t) "eval" with _ -> None) with
+            | Some code -> Some(Eval code)
             | None ->
-                try
-                    match str (JsonNode.Parse t) "cmd" with
-                    | Some "state" | Some "snapshot" -> Some Query
-                    | _ -> None
-                with _ -> None
+                match parse t with
+                | Some cmd -> Some(Act cmd)
+                | None ->
+                    try
+                        match str (JsonNode.Parse t) "cmd" with
+                        | Some "state" | Some "snapshot" -> Some Query
+                        | _ -> None
+                    with _ -> None
         | _ -> None

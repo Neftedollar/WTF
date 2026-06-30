@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- AOT story (#15): defining WTF_NO_FCS excludes the FsiEvaluationSession-backed
+         engine (FSharp.Compiler.Service needs JIT/reflection-emit, incompatible with
+         NativeAOT). The factory then always returns the NullConfigEngine fallback. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="ConfigEngine.fs" />
+  </ItemGroup>
+
+  <!-- FCS pinned to 43.11.301: its nuspec declares FSharp.Core [10.1.301, 10.1.301],
+       an EXACT match to the FSharp.Core already used by the rest of the solution
+       (and bundled with SDK 10.0.301), so it restores with no version conflict.
+       Do NOT add a floating FSharp.Core PackageReference — let the SDK satisfy the pin. -->
+  <ItemGroup Condition="'$(DefineConstants.Contains(WTF_NO_FCS))' != 'true'">
+    <PackageReference Include="FSharp.Compiler.Service" Version="43.11.301" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WTF.Core\WTF.Core.fsproj" />
+  </ItemGroup>
+
+</Project>

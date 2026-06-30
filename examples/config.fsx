@@ -1,7 +1,17 @@
 // ~/.config/wtf/config.fsx  — your window manager, configured in F#.
 // This is the xMonad idea: the config IS code, in the WM's own language.
-//   dotnet fsi examples/config.fsx
+//
+//   * The WM loads this file at startup via the F# Compiler Service. It must end
+//     with a binding named `wtfConfig` (NOT `config`, which is the CE builder):
+//         let wtfConfig = config { ... }
+//     The runtime loader injects its own `#r WTF.Core` + `open WTF.Core` and
+//     defines WTF_RUNTIME, so the dev `#r` below is skipped under the WM.
+//   * You can also run it standalone to type-check / preview it:
+//         dotnet fsi examples/config.fsx
+//     There WTF_RUNTIME is undefined, so the dev `#r` provides WTF.Core.
+#if !WTF_RUNTIME
 #r "../src/WTF.Core/bin/Debug/net10.0/WTF.Core.dll"
+#endif
 open WTF.Core
 
 // ---- 1. Keybindings: every chord compiles to a semantic Command ----
@@ -34,7 +44,8 @@ let myManage =
     }
 
 // ---- 3. The whole config, assembled declaratively ----
-let myConfig =
+// MUST be bound to `wtfConfig` — that is the name the WM's loader reads.
+let wtfConfig =
     config {
         modKey "Super"
         terminal "foot"
@@ -97,19 +108,23 @@ let myConfig =
         })
     }
 
+// ---- Standalone preview (skipped when loaded by the WM) ----
+// Under `dotnet fsi examples/config.fsx` this prints a summary + an agent demo;
+// the runtime loader defines WTF_RUNTIME so none of this runs inside the WM.
+#if !WTF_RUNTIME
 printfn "Loaded WTF config:"
 printfn "  mod=%s terminal=%s gaps=%d layout=%s"
-    myConfig.ModKey myConfig.Terminal myConfig.Gaps myConfig.DefaultLayout
+    wtfConfig.ModKey wtfConfig.Terminal wtfConfig.Gaps wtfConfig.DefaultLayout
 printfn "  %d keybindings, %d manage rules, startup: %A"
-    myConfig.Keys.Length myConfig.ManageHook.Length myConfig.StartupApps
+    wtfConfig.Keys.Length wtfConfig.ManageHook.Length wtfConfig.StartupApps
 
-// ---- 4. Agent-first: an LLM can drive the SAME object model declaratively ----
+// ---- Agent-first: an LLM can drive the SAME object model declaratively ----
 printfn "\nSimulating an agent program against this config..."
 let world = World.empty (Rect.create 0 0 1920 1080)
 let world1, _ =
     [ "foot"; "firefox"; "code" ]
     |> List.mapi (fun i app -> { Id = i + 1; AppId = app; Title = app; Floating = false })
-    |> List.fold (fun (w, _) info -> Manage.onAdd myConfig info w) (world, [])
+    |> List.fold (fun (w, _) info -> Manage.onAdd wtfConfig info w) (world, [])
 
 // firefox was auto-shifted to ws "2" by the manage hook:
 printfn "  ws1 windows: %A" (World.stackOf "1" world1 |> Option.map Stack.toList)
@@ -122,4 +137,5 @@ printfn "    current=%s layout=%s effects=%A"
     world2.Current (World.currentWorkspace world2).Layout effects
 
 // A keybind resolves to the same Command an agent would issue:
-printfn "  keybind M-space resolves to: %A" (Keymap.lookup myConfig "M-space")
+printfn "  keybind M-space resolves to: %A" (Keymap.lookup wtfConfig "M-space")
+#endif
