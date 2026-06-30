@@ -37,6 +37,11 @@ struct wtf_callbacks {
      * another thread. The brain drains its command queue here, where mutating
      * state and calling the wtf_* ops below is safe. */
     void (*drain)(void);
+    /* A view became focused (incl. pointer click-to-focus, which is C-driven).
+     * Lets the brain sync its focus + re-evaluate focus-dependent style. The host
+     * handler must NOT call wtf_focus in response (would loop); it guards on the
+     * brain already focusing `id`. Appended last to keep prior field offsets. */
+    void (*view_focus)(int id);
 };
 
 /* Register callbacks and run the compositor event loop. Blocks until quit.

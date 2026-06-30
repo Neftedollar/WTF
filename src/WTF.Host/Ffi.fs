@@ -15,6 +15,7 @@ module Ffi =
             val mutable OutputResize: nativeint
             val mutable Ready: nativeint
             val mutable Drain: nativeint
+            val mutable ViewFocus: nativeint
         end
 
     // Delegate types for the callbacks the C side invokes (C -> F#).
@@ -24,6 +25,7 @@ module Ffi =
     type OutputResizeDelegate = delegate of int * int * int * int -> unit
     type ReadyDelegate = delegate of unit -> unit
     type DrainDelegate = delegate of unit -> unit
+    type ViewFocusDelegate = delegate of int -> unit
 
     [<Literal>]
     let private Lib = "wtf_shim"

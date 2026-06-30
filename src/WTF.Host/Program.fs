@@ -326,6 +326,16 @@ let onViewUnmap (id: int) : unit =
     | None -> ()
     restyleWindows world
 
+/// A view became focused in the compositor — notably pointer click-to-focus, which
+/// is entirely C-driven and would otherwise leave the brain's focus (and thus any
+/// focus-dependent dynamic border/opacity) stale. Sync the brain's focus so the
+/// dynamic style re-evaluates. Guard: if the brain already focuses `id` (e.g. this
+/// fired as an echo of a host-initiated wtf_focus) it's a no-op. dispatch(Focus …)
+/// never calls wtf_focus, so there is no C<->host focus loop.
+let onViewFocus (id: int) : unit =
+    if World.focusedWindow world <> Some id then
+        dispatch (Focus(ById id))
+
 let onKey (mods: uint32) (sym: uint32) : int =
     // Media keys are the one INPUT->DBus flow. Recognize XF86Audio* keysyms
     // BEFORE the Chord path (Chord can't name them so they'd fall through to 0
@@ -666,6 +676,7 @@ let main _argv =
     let dResize = Ffi.OutputResizeDelegate(onOutputResize)
     let dReady = Ffi.ReadyDelegate(onReady)
     let dDrain = Ffi.DrainDelegate(onDrain)
+    let dFocus = Ffi.ViewFocusDelegate(onViewFocus)
 
     let mutable cbs = Ffi.Callbacks()
     cbs.ViewMap <- Marshal.GetFunctionPointerForDelegate dMap
@@ -674,6 +685,7 @@ let main _argv =
     cbs.OutputResize <- Marshal.GetFunctionPointerForDelegate dResize
     cbs.Ready <- Marshal.GetFunctionPointerForDelegate dReady
     cbs.Drain <- Marshal.GetFunctionPointerForDelegate dDrain
+    cbs.ViewFocus <- Marshal.GetFunctionPointerForDelegate dFocus
 
     eprintfn "WTF: starting compositor (mod=%s, %d keybinds)" cfg.ModKey cfg.Keys.Length
     let rc = Ffi.wtf_run cbs
@@ -684,6 +696,7 @@ let main _argv =
     GC.KeepAlive dResize
     GC.KeepAlive dReady
     GC.KeepAlive dDrain
+    GC.KeepAlive dFocus
 #if !WTF_NO_FCS
     GC.KeepAlive configEngine
 #endif

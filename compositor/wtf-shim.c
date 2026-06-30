@@ -490,6 +490,15 @@ static void focus_toplevel(struct wtf_toplevel *toplevel) {
 		}
 	}
 	schedule_frame();
+
+	/* Tell the brain who is focused now. focus_toplevel is reached BOTH from a
+	 * pointer click (C-driven) and from the host's wtf_focus (brain-driven); the
+	 * host guards `view_focus` so a brain-initiated focus is a no-op, while a
+	 * CLICK syncs the brain's focus + re-evaluates focus-dependent style. The
+	 * host's view_focus handler does NOT call wtf_focus back, so there is no loop. */
+	if (g_cb.view_focus) {
+		g_cb.view_focus(toplevel->id);
+	}
 }
 
 /* Report the primary output's usable area (full output minus layer-shell
