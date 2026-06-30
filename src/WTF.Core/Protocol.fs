@@ -19,7 +19,7 @@ module Protocol =
 
     /// A rich, semantic snapshot: workspaces, the windows in each (in order),
     /// what's focused, available layouts, and the computed geometry.
-    let private buildSnapshot (w: World) : JsonObject =
+    let private buildSnapshot (extra: JsonObject option) (w: World) : JsonObject =
         let root = JsonObject()
         root["current"] <- JsonValue.Create w.Current
         root["nmaster"] <- JsonValue.Create w.Nmaster
@@ -84,15 +84,30 @@ module Protocol =
             a["h"] <- JsonValue.Create(int r.Height)
             arrange.Add a
         root["arrange"] <- arrange
+        // Additive: a non-Core subsystem (the D-Bus desktop shell, WTF.Desktop)
+        // can splice its own state under "desktop" without Core depending on it.
+        match extra with
+        | Some d -> root["desktop"] <- d
+        | None -> ()
         root
 
     /// Pretty, multi-line snapshot (human / CLI).
     let snapshot (w: World) : string =
-        (buildSnapshot w).ToJsonString(JsonSerializerOptions(WriteIndented = true))
+        (buildSnapshot None w).ToJsonString(JsonSerializerOptions(WriteIndented = true))
 
     /// Compact single-line snapshot (NDJSON over the socket).
     let snapshotLine (w: World) : string =
-        (buildSnapshot w).ToJsonString(JsonSerializerOptions(WriteIndented = false))
+        (buildSnapshot None w).ToJsonString(JsonSerializerOptions(WriteIndented = false))
+
+    /// Pretty snapshot with an optional extra node spliced under "desktop".
+    /// `None` is byte-identical to `snapshot` (existing consumers unaffected).
+    let snapshotWith (extra: JsonObject option) (w: World) : string =
+        (buildSnapshot extra w).ToJsonString(JsonSerializerOptions(WriteIndented = true))
+
+    /// Compact snapshot with an optional extra node spliced under "desktop".
+    /// `None` is byte-identical to `snapshotLine`.
+    let snapshotLineWith (extra: JsonObject option) (w: World) : string =
+        (buildSnapshot extra w).ToJsonString(JsonSerializerOptions(WriteIndented = false))
 
     // --- command parsing ---
 

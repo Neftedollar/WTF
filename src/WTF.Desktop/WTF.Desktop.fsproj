@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pure layer first (no Tmds/I-O), then the Tmds.DBus plumbing. -->
+    <Compile Include="Models.fs" />
+    <Compile Include="Aggregator.fs" />
+    <Compile Include="DesktopJson.fs" />
+    <Compile Include="DBusInterfaces.fs" />
+    <Compile Include="NotificationDaemon.fs" />
+    <Compile Include="Clients.fs" />
+    <Compile Include="Desktop.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 0.94.2 is the patched release (NOT 0.20.0 / GHSA-xrw6-gwf8-vvr9). -->
+    <PackageReference Include="Tmds.DBus" Version="0.94.2" />
+  </ItemGroup>
+
+</Project>

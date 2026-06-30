@@ -3,6 +3,7 @@ module WTF.Host.Program
 open System
 open System.Runtime.InteropServices
 open WTF.Core
+open WTF.Desktop
 
 // ---- the default configuration (xMonad-style, in F#) ----
 // Per-workspace switch/move binds, generated for tags 1..9.
@@ -158,6 +159,16 @@ let onViewUnmap (id: int) : unit =
     | None -> ()
 
 let onKey (mods: uint32) (sym: uint32) : int =
+    // Media keys are the one INPUT->DBus flow. Recognize XF86Audio* keysyms
+    // BEFORE the Chord path (Chord can't name them so they'd fall through to 0
+    // anyway): transport keys drive the active MPRIS player, volume/mute shell
+    // out to wpctl/pactl. Desktop.sendMedia is non-blocking (fires a task), so
+    // the single-threaded loop never stalls. Returns 1 = handled.
+    match Models.MediaKey.ofKeysym sym with
+    | Some action ->
+        Desktop.sendMedia action
+        1
+    | None ->
     match Chord.format mods sym with
     | Some "M-S-q" ->
         SessionIO.save world // persist the session before tearing down
@@ -186,11 +197,14 @@ let private bridge = Bridge.LoopBridge()
 /// Apply one control-socket request ON the loop thread (safe to mutate world and
 /// call wlroots), returning the resulting snapshot. A Query changes nothing.
 let private handleOnLoop (line: string) : string =
+    // Additive: splice the live D-Bus desktop-shell state under "desktop" so the
+    // agent/bar can read notifications + battery/network/players too.
+    let desktop = Some(Desktop.snapshotJson ())
     match Protocol.parseRequest line with
-    | Some Protocol.Query -> Protocol.snapshotLine world
+    | Some Protocol.Query -> Protocol.snapshotLineWith desktop world
     | Some (Protocol.Act cmd) ->
         dispatch cmd
-        Protocol.snapshotLine world
+        Protocol.snapshotLineWith desktop world
     | None -> """{"error":"unrecognized command"}"""
 
 /// Drain callback — the compositor fires this on the loop thread after a notify.
@@ -207,6 +221,12 @@ let onReady () : unit =
     // you see tiled windows immediately instead of an empty output.
     let submit line = bridge.Submit(Ffi.wtf_command_notify, line)
     let path = Ipc.start submit
+    // Be the desktop shell natively over D-Bus (notification daemon + logind /
+    // UPower / MPRIS / NetworkManager clients). FIRE-AND-FORGET and best-effort:
+    // it returns immediately and never blocks/crashes startup (no bus / name
+    // taken / failure => degrade with a log). Started here, where the session bus
+    // is available, alongside Ipc.start.
+    Desktop.start ()
     // Push the configured appearance into the renderer (forced minimal in safe mode).
     let inactiveOpacity = if safeMode then 1.0 else cfg.InactiveOpacity
     let animSpeed       = if safeMode then 1.0 else cfg.AnimSpeed      // 1.0 = instant
