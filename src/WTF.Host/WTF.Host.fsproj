@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Ffi.fs" />
+    <Compile Include="Chord.fs" />
+    <Compile Include="Bridge.fs" />
+    <Compile Include="Ipc.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WTF.Core\WTF.Core.fsproj" />
+  </ItemGroup>
+
+</Project>

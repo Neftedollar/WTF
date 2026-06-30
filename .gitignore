@@ -1,0 +1,12 @@
+# .NET build output
+bin/
+obj/
+*.user
+
+# native build / vendored deps
+compositor/build/
+compositor/.scenefx/
+build/
+
+# misc
+*.swp

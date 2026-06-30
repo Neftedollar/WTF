@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=WTF
+Comment=Wayland Tiling, F# — a tiling window manager
+Exec=/usr/local/bin/wtf
+Type=Application
+DesktopNames=wtf
+Keywords=tiling;wayland;wm;compositor;
