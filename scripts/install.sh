@@ -29,10 +29,20 @@ export PKG_CONFIG_PATH="$ROOT/compositor/.scenefx/lib/x86_64-linux-gnu/pkgconfig
 echo ">> 2/5  publishing self-contained host + wtfctl + bar + omnibox ($RID)"
 rm -rf "$STAGE"
 mkdir -p "$LIBWTF" "$BINWTF" "$SESS"
+# Self-contained but NOT single-file: the runtime is bundled (no .NET needed on the
+# target), yet the assemblies sit as FILES on disk. This is deliberate — the FCS config
+# loader does `#r typeof<WtfConfig>.Assembly.Location`, and Location is EMPTY under a
+# single-file publish, which would break ~/.config/wtf/config.fsx loading + hot-reload.
+# Multi-file keeps Location valid so the user's config works. (Also fewer edge cases.)
 pub() { dotnet publish "$1" -c Release -r "$RID" --self-contained \
-          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+          -p:PublishSingleFile=false \
           -o "$2" >/dev/null; }
 pub src/WTF.Host/WTF.Host.fsproj "$LIBWTF"
+# The config Type Provider assembly (config.fsx #r's it via the loader); the host
+# doesn't reference it, so place it next to WTF.Core.dll in the published host dir.
+dotnet build src/WTF.TypeProviders/WTF.TypeProviders.fsproj -c Release >/dev/null
+TPDLL=$(find src/WTF.TypeProviders/bin/Release -name 'WTF.TypeProviders.dll' | head -1)
+[ -n "$TPDLL" ] && cp "$TPDLL" "$LIBWTF/"
 TMPCTL="$STAGE/.ctl"; pub src/wtfctl/wtfctl.fsproj "$TMPCTL"
 # The two client apps (the status bar + the omnibox launcher), each into its own
 # dir under lib/wtf so libwtf_panel.so can sit next to the binary it DllImports.
