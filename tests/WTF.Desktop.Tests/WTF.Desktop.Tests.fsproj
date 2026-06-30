@@ -10,6 +10,9 @@
     <Compile Include="StateMapperTests.fs" />
     <Compile Include="MediaKeyTests.fs" />
     <Compile Include="DesktopJsonTests.fs" />
+    <Compile Include="AggregatorTests.fs" />
+    <Compile Include="VolumeTests.fs" />
+    <Compile Include="NotificationDaemonTests.fs" />
   </ItemGroup>
 
   <ItemGroup>

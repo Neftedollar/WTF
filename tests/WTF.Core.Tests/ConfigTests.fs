@@ -129,3 +129,159 @@ let ``agent program runs through the reducer`` () =
     let world', _ = Reducer.applyMany program world
     Assert.Equal(Some 2, World.focusedWindow world')
     Assert.Equal("grid", (World.currentWorkspace world').Layout)
+
+// ============================================================================
+//  WtfConfig.defaults full contract — a flipped default must be caught.
+// ============================================================================
+
+[<Fact>]
+let ``WtfConfig.defaults pins every default value`` () =
+    let d = WtfConfig.defaults
+    Assert.Equal("Super", d.ModKey)
+    Assert.Equal("foot", d.Terminal)
+    Assert.Equal<string list>([ for i in 1..9 -> string i ], d.Workspaces)
+    Assert.Equal("tall", d.DefaultLayout)
+    Assert.Equal(6, d.Gaps)
+    Assert.Equal(2, d.BorderWidth)
+    Assert.Equal(0.94, d.InactiveOpacity)
+    Assert.Equal(0.30, d.AnimSpeed)
+    Assert.Equal("#89b4fa", d.ActiveBorder)
+    Assert.Equal("#45475a", d.InactiveBorder)
+    Assert.Equal(0, d.CornerRadius)
+    Assert.False(d.Blur)
+    Assert.Equal(1.0, d.Scale)
+    Assert.Equal(64, d.HistoryLimit)
+    Assert.Empty(d.Keys)
+    Assert.Empty(d.ManageHook)
+    Assert.Empty(d.StartupApps)
+
+// ============================================================================
+//  ConfigBuilder custom operations — each op writes ITS OWN field (guards
+//  against a field-miswire, e.g. scale -> wrong record field).
+// ============================================================================
+
+[<Fact>]
+let ``each ConfigBuilder appearance op writes its own field`` () =
+    let c =
+        config {
+            borderWidth 5
+            inactiveOpacity 0.5
+            animSpeed 0.7
+            activeBorder "#111111"
+            inactiveBorder "#222222"
+            cornerRadius 9
+            blur true
+            scale 2.0
+            historyLimit 7
+            workspaces [ "a"; "b" ]
+        }
+    Assert.Equal(5, c.BorderWidth)
+    Assert.Equal(0.5, c.InactiveOpacity)
+    Assert.Equal(0.7, c.AnimSpeed)
+    Assert.Equal("#111111", c.ActiveBorder)
+    Assert.Equal("#222222", c.InactiveBorder)
+    Assert.Equal(9, c.CornerRadius)
+    Assert.True(c.Blur)
+    Assert.Equal(2.0, c.Scale)
+    Assert.Equal(7, c.HistoryLimit)
+    Assert.Equal<string list>([ "a"; "b" ], c.Workspaces)
+    // untouched fields keep their defaults
+    Assert.Equal("Super", c.ModKey)
+
+[<Fact>]
+let ``keys, manageHook and startup APPEND across multiple blocks`` () =
+    let c =
+        config {
+            keys (keymap { bind "M-a" (Spawn "a") })
+            keys (keymap { bind "M-b" (Spawn "b") })
+            startup [ "x" ]
+            startup [ "y"; "z" ]
+            manageHook (manage { rule (appIs "p") (ShiftToWorkspace "2") })
+            manageHook (manage { rule (appIs "q") FloatWindow })
+        }
+    Assert.Equal<(string * Command) list>([ "M-a", Spawn "a"; "M-b", Spawn "b" ], c.Keys)
+    Assert.Equal<string list>([ "x"; "y"; "z" ], c.StartupApps)
+    Assert.Equal(2, c.ManageHook.Length)
+
+// ============================================================================
+//  Manage.onAdd — FloatWindow rule, first-match-wins, explicit NoAction.
+// ============================================================================
+
+[<Fact>]
+let ``manage FloatWindow rule actually floats the new window`` () =
+    let cfg = config { manageHook (manage { rule (appIs "mpv") FloatWindow }) }
+    let world = World.empty (Rect.create 0 0 1920 1080)
+    let mpv = { Id = 1; AppId = "mpv"; Title = "video"; Floating = false }
+    let world', _ = Manage.onAdd cfg mpv world
+    let ws = World.currentWorkspace world'
+    Assert.True(Map.containsKey 1 ws.Floating)
+    Assert.True((Map.find 1 world'.Windows).Floating) // mirror flag in lockstep
+
+[<Fact>]
+let ``manage applies the FIRST matching rule only`` () =
+    // both rules match; the first (ShiftToWorkspace "2") must win over FloatWindow.
+    let cfg =
+        config {
+            manageHook (manage {
+                rule anyWindow (ShiftToWorkspace "2")
+                rule anyWindow FloatWindow
+            })
+        }
+    let world = World.empty (Rect.create 0 0 1920 1080)
+    let w = { Id = 1; AppId = "x"; Title = "x"; Floating = false }
+    let world', _ = Manage.onAdd cfg w world
+    Assert.Equal<int list>([ 1 ], World.stackOf "2" world' |> Option.get |> Stack.toList)
+    Assert.True(Map.isEmpty (world'.Workspaces |> List.find (fun ws -> ws.Tag = "2")).Floating)
+
+[<Fact>]
+let ``manage explicit NoAction leaves the window plainly tiled`` () =
+    let cfg = config { manageHook (manage { rule (appIs "foot") NoAction }) }
+    let world = World.empty (Rect.create 0 0 1920 1080)
+    let term = { Id = 7; AppId = "foot"; Title = "shell"; Floating = false }
+    let world', _ = Manage.onAdd cfg term world
+    let ws = World.currentWorkspace world'
+    Assert.Equal<int list>([ 7 ], ws.Stack |> Option.get |> Stack.toList)
+    Assert.True(Map.isEmpty ws.Floating)
+
+// ============================================================================
+//  InputBuilder composition: omission keeps the default, order-independent,
+//  last-of-duplicate-block wins.
+// ============================================================================
+
+[<Fact>]
+let ``inputDevices omitting a sub-block keeps that block's default`` () =
+    let i = inputDevices { mouse { accelProfile "flat" } }
+    Assert.Equal("flat", i.Mouse.AccelProfile)
+    // keyboard + touchpad untouched -> defaults
+    Assert.Equal(WtfConfig.defaults.Input.Keyboard, i.Keyboard)
+    Assert.Equal(WtfConfig.defaults.Input.Touchpad, i.Touchpad)
+
+[<Fact>]
+let ``inputDevices sub-block order does not matter`` () =
+    let a = inputDevices { keyboard { layout "us,ru" }; mouse { accelSpeed 0.3 } }
+    let b = inputDevices { mouse { accelSpeed 0.3 }; keyboard { layout "us,ru" } }
+    Assert.Equal(a, b)
+
+[<Fact>]
+let ``inputDevices two keyboard blocks -> last wins`` () =
+    let i = inputDevices { keyboard { layout "us" }; keyboard { layout "de" } }
+    Assert.Equal("de", i.Keyboard.Layout)
+
+// ============================================================================
+//  AgentBuilder — the operations not covered by the existing ordered-program test.
+// ============================================================================
+
+[<Fact>]
+let ``agent CE maps the remaining ops and preserves order`` () =
+    let program =
+        agent {
+            focusNext
+            focusPrev
+            spawn "foot"
+            workspace "2"
+            master 3
+            close
+        }
+    Assert.Equal<Command list>(
+        [ Focus NextWindow; Focus PrevWindow; Spawn "foot"; SwitchWorkspace "2"; SetMaster 3; CloseFocused ],
+        program)

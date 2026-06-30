@@ -111,7 +111,15 @@ module Session =
                               | sn ->
                                   let ids = [ for i in sn["windows"].AsArray() -> i.GetValue<int>() ]
                                   let focused = sn["focused"].GetValue<int>()
-                                  Stack.ofList ids |> Option.map (Stack.focus focused)
+                                  // Fail CLOSED on a corrupt focus: a focused id absent from
+                                  // the stack's windows means the persisted state is malformed
+                                  // (Stack.focus would otherwise silently no-op to the head).
+                                  // The failwith is caught by the outer try -> None.
+                                  match Stack.ofList ids with
+                                  | None -> None
+                                  | Some s ->
+                                      if List.contains focused ids then Some(Stack.focus focused s)
+                                      else failwith "session: focused id not present in stack windows"
                           // Guard with null-checks so an OLD session json (without these
                           // additive keys) still loads with empty/None defaults.
                           let floating =

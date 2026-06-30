@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# wtf-record — toggle screen recording. Bind it to ONE key and press it twice:
+#   first press starts wf-recorder, second press stops it (SIGINT finalizes the file).
+#
+#   config.fsx:  bind "M-S-r" (Spawn "wtf-record")
+#
+# Optional args are passed straight to wf-recorder on START, e.g.:
+#   wtf-record -g "$(slurp)"     # record a region (needs slurp)
+#   wtf-record -a                # also capture audio
+# Recordings land in ~/Videos (or $XDG_VIDEOS_DIR) as wtf-YYYYmmdd-HHMMSS.mp4.
+set -u
+
+# If a recorder is already running, this press means STOP: SIGINT lets wf-recorder
+# flush the muxer and write a valid file. notify if a daemon is present.
+if pkill -INT -x wf-recorder 2>/dev/null; then
+  command -v notify-send >/dev/null 2>&1 && notify-send "WTF" "Recording stopped" || true
+  exit 0
+fi
+
+if ! command -v wf-recorder >/dev/null 2>&1; then
+  command -v notify-send >/dev/null 2>&1 \
+    && notify-send "WTF" "wf-recorder not installed (sudo apt install wf-recorder)" \
+    || echo "wtf-record: wf-recorder not installed (sudo apt install wf-recorder)" >&2
+  exit 127
+fi
+
+OUTDIR="${XDG_VIDEOS_DIR:-$HOME/Videos}"
+mkdir -p "$OUTDIR" 2>/dev/null || OUTDIR="$HOME"
+OUT="$OUTDIR/wtf-$(date +%Y%m%d-%H%M%S).mp4"
+
+command -v notify-send >/dev/null 2>&1 && notify-send "WTF" "Recording → $OUT" || true
+# exec so the bound Spawn's child IS wf-recorder, and the next press can pkill it.
+exec wf-recorder -f "$OUT" "$@"

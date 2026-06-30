@@ -101,14 +101,19 @@ type ReflectionPluginLoader(pluginDir: string) =
 
     /// Register one plugin instance's layouts into the live host Registry.
     let registerPlugin (file: string) (plugin: IWtfLayoutPlugin) =
-        let existing = Registry.names () |> Set.ofList
+        // Track names as we go (not a once-snapshotted set) so an INTRA-plugin
+        // duplicate (two Layouts entries with the SAME name) also warns — the
+        // second silently overwriting the first is exactly the kind of collision
+        // the warning exists to surface.
+        let mutable existing = Registry.names () |> Set.ofList
         for (name, factory) in plugin.Layouts do
-            // A collision with a built-in (or an earlier plugin) overwrites:
-            // last-registered wins — warn so it is diagnosable.
+            // A collision with a built-in (or an earlier-registered layout)
+            // overwrites: last-registered wins — warn so it is diagnosable.
             if existing.Contains name then
                 log (sprintf "WARNING: layout \"%s\" from %s overrides an existing layout (last wins)"
                         name (Path.GetFileName file))
             Registry.register name factory
+            existing <- existing.Add name
             log (sprintf "loaded layout \"%s\" from %s (plugin: %s)"
                     name (Path.GetFileName file) plugin.Name)
 
@@ -127,11 +132,18 @@ type ReflectionPluginLoader(pluginDir: string) =
                 try
                     if typeof<IWtfLayoutPlugin>.IsAssignableFrom t
                        && not t.IsAbstract
-                       && not t.IsInterface
-                       && t.GetConstructor(Type.EmptyTypes) <> null then
-                        match Activator.CreateInstance t with
-                        | :? IWtfLayoutPlugin as plugin -> registerPlugin file plugin
-                        | _ -> ()
+                       && not t.IsInterface then
+                        // A plugin type with NO public parameterless ctor can't be
+                        // reflectively instantiated — skip it, but LOG so the user
+                        // gets a diagnostic (otherwise their layout silently never
+                        // appears with no clue why).
+                        if t.GetConstructor(Type.EmptyTypes) = null then
+                            log (sprintf "skipped type %s in %s: no public parameterless constructor (plugin types need one)"
+                                    t.FullName (Path.GetFileName file))
+                        else
+                            match Activator.CreateInstance t with
+                            | :? IWtfLayoutPlugin as plugin -> registerPlugin file plugin
+                            | _ -> ()
                 with ex ->
                     log (sprintf "skipped type %s in %s: %s" t.FullName (Path.GetFileName file) ex.Message)
         with ex ->

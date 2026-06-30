@@ -25,14 +25,18 @@ module Rect =
 
     /// Split into (left, right) at `ratio` of the width (0.0..1.0).
     /// The two halves exactly tile the original — no gap, no overlap.
+    /// `ratio` is clamped to [0,1] so a wild value (e.g. from a hand-edited
+    /// session/config) degrades to a zero-width half instead of an inverted,
+    /// negative-width rect; exactness (lw + (W-lw) = W) is preserved either way.
     let splitVertical (ratio: float) r =
-        let lw = int (float r.Width * ratio) * 1<lpx>
+        let lw = max 0<lpx> (min r.Width (int (float r.Width * ratio) * 1<lpx>))
         { r with Width = lw },
         { r with X = r.X + lw; Width = r.Width - lw }
 
-    /// Split into (top, bottom) at `ratio` of the height.
+    /// Split into (top, bottom) at `ratio` of the height. `ratio` clamped to
+    /// [0,1] (see splitVertical) so neither half can become negative-height.
     let splitHorizontal (ratio: float) r =
-        let th = int (float r.Height * ratio) * 1<lpx>
+        let th = max 0<lpx> (min r.Height (int (float r.Height * ratio) * 1<lpx>))
         { r with Height = th },
         { r with Y = r.Y + th; Height = r.Height - th }
 
@@ -47,9 +51,15 @@ module Rect =
                 { r with Y = r.Y + i * h; Height = height } ]
 
     /// Shrink uniformly on every side (window gaps / "useless gaps", Hyprland-style).
+    /// The gap is clamped per-axis to [0, dim/2] so an oversized gap (Gaps is an
+    /// unbounded int reachable from config / `incgaps` / a hand-edited session)
+    /// degrades to a zero-size tile instead of producing an inverted, negative-
+    /// dimension rect. A negative gap is clamped to 0 (a no-op), never an expand.
     let pad (gap: int<lpx>) r =
-        { X = r.X + gap; Y = r.Y + gap
-          Width = r.Width - 2 * gap; Height = r.Height - 2 * gap }
+        let clamp (dim: int<lpx>) = max 0<lpx> (min gap (dim / 2))
+        let gx, gy = clamp r.Width, clamp r.Height
+        { X = r.X + gx; Y = r.Y + gy
+          Width = r.Width - 2 * gx; Height = r.Height - 2 * gy }
 
 /// Strip / convert measures at the HiDPI boundary. The brain never needs a
 /// `Rect<ppx>`; physical pixels appear only as transient `int<ppx>` here.

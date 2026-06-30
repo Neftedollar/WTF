@@ -64,3 +64,53 @@ let ``redo composed with undo is identity after any pushes`` (xs: int list) =
 let ``canUndo iff a push happened`` (xs: int list) =
     let h = pushAll 0 xs
     History.canUndo h = not (List.isEmpty xs)
+
+// =====================================================================
+//  Coverage additions: limit edges (0 / negative), undo-count cap, and
+//  the Past bound under arbitrary push/undo/redo interleavings.
+// =====================================================================
+
+[<Fact>]
+let ``a zero limit never retains any past`` () =
+    let h = (History.create 0 0, [ 1; 2; 3 ]) ||> List.fold (fun acc x -> History.push x acc)
+    Assert.Empty(h.Past)
+    Assert.False(History.canUndo h)
+    Assert.True((History.undo h).IsNone)
+
+[<Fact>]
+let ``a negative limit is clamped to zero`` () =
+    let h = History.create -5 0
+    Assert.Equal(0, h.Limit)
+    let h1 = History.push 1 h
+    Assert.Empty(h1.Past)
+    Assert.False(History.canUndo h1)
+
+[<Fact>]
+let ``you can undo at most Limit times and dropped states are gone`` () =
+    let limit = 3
+    // push 1..6 onto a present of 0; only the 3 most-recent priors survive in Past
+    let h = (History.create limit 0, [ 1..6 ]) ||> List.fold (fun acc x -> History.push x acc)
+    Assert.Equal(limit, List.length h.Past)
+    // undo exactly Limit times, then no more
+    let mutable cur = h
+    for _ in 1..limit do
+        match History.undo cur with
+        | Some(h', _) -> cur <- h'
+        | None -> failwith "expected to undo"
+    Assert.True((History.undo cur).IsNone) // 4th undo fails
+    // the oldest survivor was the present just before the last 3 pushes (i.e. 3)
+    Assert.Equal(3, cur.Present)
+
+[<Property>]
+let ``Past stays within Limit across arbitrary push undo redo interleavings`` (ops: bool list) =
+    // map a bool stream to a deterministic op sequence: every 3rd kind cycles
+    let limit = 4
+    let step (h, i) flag =
+        let h' =
+            match (i % 3), flag with
+            | 0, _ -> History.push i h
+            | 1, _ -> History.undo h |> Option.map fst |> Option.defaultValue h
+            | _, _ -> History.redo h |> Option.map fst |> Option.defaultValue h
+        (h', i + 1)
+    let h, _ = (List.fold step (History.create limit 0, 1) ops)
+    List.length h.Past <= limit

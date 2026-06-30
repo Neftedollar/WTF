@@ -1,6 +1,7 @@
 namespace WTF.Client
 
 open System
+open System.Globalization
 open System.Text.Json.Nodes
 
 /// PURE (ImageSharp-free, display-free) content model for the status bar. It
@@ -21,35 +22,42 @@ module BarModel =
 
     type BarModel = { Left: Segment list; Right: Segment list }
 
+    // NOTE: JsonNode's string indexer THROWS InvalidOperationException when the
+    // node is not a JsonObject (e.g. an array element that is a bare number, or a
+    // sub-value that arrived as a string/array). These getters therefore type-test
+    // for JsonObject FIRST so one wrong-typed sub-value degrades to None instead of
+    // unwinding and collapsing the whole bar — "the bar shows what it can".
     let private getStr (n: JsonNode) (key: string) : string option =
         match n with
-        | null -> None
-        | _ ->
-            match n.[key] with
+        | :? JsonObject as o ->
+            match o.[key] with
             | null -> None
             | v -> (try Some(v.GetValue<string>()) with _ -> None)
+        | _ -> None
 
     let private getInt (n: JsonNode) (key: string) : int option =
         match n with
-        | null -> None
-        | _ ->
-            match n.[key] with
+        | :? JsonObject as o ->
+            match o.[key] with
             | null -> None
             | v -> (try Some(v.GetValue<int>()) with _ -> (try Some(int (v.GetValue<float>())) with _ -> None))
+        | _ -> None
 
     let private getBool (n: JsonNode) (key: string) : bool =
         match n with
-        | null -> false
-        | _ ->
-            match n.[key] with
+        | :? JsonObject as o ->
+            match o.[key] with
             | null -> false
             | v -> (try v.GetValue<bool>() with _ -> false)
+        | _ -> false
 
     /// Build the bar content model. `now` drives the clock (HH:mm). On ANY parse
     /// failure or missing "desktop", degrade to just the clock on the right — the
     /// bar shows what it can and never crashes.
     let build (now: DateTime) (snapshotJson: string) : BarModel =
-        let clock = Clock(now.ToString("HH:mm"))
+        // InvariantCulture: in a custom format string ':' is the LOCALE time
+        // separator placeholder, so fi-FI etc. would render "14.05" without it.
+        let clock = Clock(now.ToString("HH:mm", CultureInfo.InvariantCulture))
         let fallback = { Left = []; Right = [ clock ] }
         match (try Some(JsonNode.Parse snapshotJson) with _ -> None) with
         | None -> fallback
@@ -74,10 +82,16 @@ module BarModel =
                     | _ -> []
 
                 // Right: now-playing (first Playing player), network, battery, clock.
+                // `child` indexes only JsonObjects so a missing/wrong-typed "desktop"
+                // (or container) yields null instead of throwing and collapsing the bar.
+                let child (n: JsonNode) (key: string) : JsonNode =
+                    match n with
+                    | :? JsonObject as o -> o.[key]
+                    | _ -> null
                 let desktop = root.["desktop"]
 
                 let player =
-                    match (if isNull desktop then null else desktop.["players"]) with
+                    match child desktop "players" with
                     | :? JsonArray as players ->
                         players
                         |> Seq.tryPick (fun p ->
@@ -94,7 +108,7 @@ module BarModel =
                     | _ -> None
 
                 let network =
-                    match (if isNull desktop then null else desktop.["network"]) with
+                    match child desktop "network" with
                     | null -> None
                     | net ->
                         let primary = getStr net "primary"
@@ -105,11 +119,13 @@ module BarModel =
                         | _ -> None
 
                 let battery =
-                    match (if isNull desktop then null else desktop.["battery"]) with
+                    match child desktop "battery" with
                     | null -> None
                     | bat ->
                         match getInt bat "percent" with
-                        | Some pct -> Some(Battery(pct, defaultArg (getStr bat "state") ""))
+                        // clamp to a sane 0..100 so a bogus snapshot can't make the
+                        // renderer draw a nonsensical bar.
+                        | Some pct -> Some(Battery(max 0 (min 100 pct), defaultArg (getStr bat "state") ""))
                         | None -> None
 
                 let right =

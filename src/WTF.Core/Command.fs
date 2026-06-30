@@ -302,14 +302,27 @@ module Reducer =
         | Undo | Redo | SaveSession | LoadSession -> w, []
 
         | AddWindow info ->
-            let newCur =
-                match World.stackOf w.Current w with
-                | Some s -> Stack.insertUp info.Id s
-                | None -> Stack.singleton info.Id
-            let w' =
-                { w with Windows = Map.add info.Id info w.Windows }
-                |> World.setStackOf w.Current (Some newCur)
-            w', arrangeOf w'
+            // Guard the stack-uniqueness invariant: a re-mapped id must not be
+            // inserted a second time. If it is already stacked on ANY workspace,
+            // just refresh its WindowInfo and leave the stacks untouched.
+            let alreadyStacked =
+                w.Workspaces
+                |> List.exists (fun ws ->
+                    match ws.Stack with
+                    | Some s -> List.contains info.Id (Stack.toList s)
+                    | None -> false)
+            if alreadyStacked then
+                let w' = { w with Windows = Map.add info.Id info w.Windows }
+                w', arrangeOf w'
+            else
+                let newCur =
+                    match World.stackOf w.Current w with
+                    | Some s -> Stack.insertUp info.Id s
+                    | None -> Stack.singleton info.Id
+                let w' =
+                    { w with Windows = Map.add info.Id info w.Windows }
+                    |> World.setStackOf w.Current (Some newCur)
+                w', arrangeOf w'
 
         | RemoveWindow id ->
             // drop the window from whichever workspace holds it; an emptied
@@ -321,7 +334,15 @@ module Reducer =
                 |> List.map (fun ws ->
                     let stack =
                         match ws.Stack with
-                        | Some s when List.contains id (Stack.toList s) -> focusId id s |> Stack.delete
+                        | Some s when List.contains id (Stack.toList s) ->
+                            // Preserve the user's current focus when a *non-focused*
+                            // window dies: focus the dying id, delete it, then restore
+                            // the original focus. If the focused window itself is the
+                            // one removed, fall back to delete's down-then-up neighbour.
+                            let keep = s.Focus
+                            match focusId id s |> Stack.delete with
+                            | Some s' -> Some(if keep = id then s' else focusId keep s')
+                            | None -> None
                         | other -> other
                     { ws with
                         Stack = stack

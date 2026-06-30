@@ -135,3 +135,110 @@ let ``missing plugins dir is a graceful no-op`` () =
     let loader = PluginLoader.createForPath missing
     let ex = Record.Exception(fun () -> loader.LoadAll())
     Assert.Null(ex)
+
+[<Fact>]
+let ``an existing but empty plugins dir is a graceful no-op`` () =
+    let dir = freshDir ()
+    // No *.dll files at all.
+    let loader = PluginLoader.createForPath dir
+    let names0 = Registry.names ()
+    let ex = Record.Exception(fun () -> loader.LoadAll())
+    Assert.Null(ex)
+    // Nothing was added to the live Registry.
+    Assert.Equal<string list>(names0, Registry.names ())
+    Directory.Delete(dir, true)
+
+[<Fact>]
+let ``non-dll files and subdirectories are ignored (GetFiles is non-recursive)`` () =
+    let dir = freshDir ()
+    File.WriteAllText(Path.Combine(dir, "notes.txt"), "not a plugin")
+    File.WriteAllText(Path.Combine(dir, "config.fsx"), "let x = 1")
+    // A subdirectory that itself contains a .dll must NOT be scanned (non-recursive).
+    let sub = Directory.CreateDirectory(Path.Combine(dir, "nested")).FullName
+    File.Copy(spiralDllPath (), Path.Combine(sub, "SpiralLayout.dll"))
+    let loader = PluginLoader.createForPath dir
+    let ex = Record.Exception(fun () -> loader.LoadAll())
+    Assert.Null(ex)
+    Directory.Delete(dir, true)
+
+[<Fact>]
+let ``a managed dll with no IWtfLayoutPlugin type registers nothing`` () =
+    // WTF.Core.dll is a valid managed assembly that defines the IWtfLayoutPlugin
+    // INTERFACE but no concrete plugin — loading it must register nothing.
+    let dir = freshDir ()
+    let coreDll = Path.Combine(AppContext.BaseDirectory, "WTF.Core.dll")
+    Assert.True(File.Exists coreDll, "WTF.Core.dll should sit beside the test assembly")
+    File.Copy(coreDll, Path.Combine(dir, "WTF.Core.dll"))
+    let before = Registry.names ()
+    let loader = PluginLoader.createForPath dir
+    let ex = Record.Exception(fun () -> loader.LoadAll())
+    Assert.Null(ex)
+    Assert.Equal<string list>(before, Registry.names ())
+    Directory.Delete(dir, true)
+
+// --- the test-fixture assembly: multiple layouts / collision / bad ctors -----
+
+/// Absolute path to the freshly-built FixturePlugins.dll (located like the spiral).
+let private fixtureDllPath () =
+    let root = repoRoot ()
+    let preferred =
+        Path.Combine(root, "examples", "FixturePlugins", "bin", buildConfig (), "net10.0", "FixturePlugins.dll")
+    if File.Exists preferred then preferred
+    else
+        let baseBin = Path.Combine(root, "examples", "FixturePlugins", "bin")
+        match
+            (if Directory.Exists baseBin then
+                Directory.GetFiles(baseBin, "FixturePlugins.dll", SearchOption.AllDirectories)
+             else [||])
+            |> Array.tryHead
+        with
+        | Some p -> p
+        | None -> failwithf "FixturePlugins.dll not built (looked under %s)" baseBin
+
+[<Fact>]
+let ``fixture assembly registers multiple layouts, overrides a built-in, and skips bad types`` () =
+    let dir = freshDir ()
+    File.Copy(fixtureDllPath (), Path.Combine(dir, "FixturePlugins.dll"))
+    let loader = PluginLoader.createForPath dir
+    try
+        // Must not throw despite the throwing-ctor and no-ctor plugin types.
+        let ex = Record.Exception(fun () -> loader.LoadAll())
+        Assert.Null(ex)
+
+        // 1) BOTH layouts of the multi-layout plugin registered.
+        Assert.Contains("fixture_alpha", Registry.names ())
+        Assert.Contains("fixture_beta", Registry.names ())
+        // and the intra-plugin duplicate name registered (last wins, no crash).
+        Assert.Contains("fixture_dup", Registry.names ())
+
+        // 2) The bad types were SKIPPED — their layouts must NOT appear.
+        Assert.DoesNotContain("fixture_throwing_should_not_appear", Registry.names ())
+        Assert.DoesNotContain("fixture_noctor_should_not_appear", Registry.names ())
+
+        // 3) The "tall" collision: last-registered (the plugin's marker) wins, so
+        //    resolve "tall" now yields the marker geometry (every window 7x7@0,0) —
+        //    proving the plugin's register reached the LIVE host Registry.
+        let layout = Registry.resolve "tall" 1 0.5
+        Assert.True(layout.IsSome, "tall should still resolve")
+        let stack = (Stack.ofList [ 10; 20 ]).Value
+        let rects = layout.Value (Rect.create 0 0 1920 1080) stack
+        let expected = [ 10, Rect.create 0 0 7 7; 20, Rect.create 0 0 7 7 ]
+        Assert.Equal<(WindowId * Rect) list>(expected, rects)
+    finally
+        // RESTORE the built-in "tall" so this process-global override doesn't leak
+        // into other tests (the Registry has no unregister; re-register the builtin).
+        Registry.register "tall" (fun n r -> Layout.tall n r)
+        Directory.Delete(dir, true)
+
+[<Fact>]
+let ``PluginPath.resolve honours XDG_CONFIG_HOME and falls back to ~/.config`` () =
+    let prev = Environment.GetEnvironmentVariable "XDG_CONFIG_HOME"
+    try
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", "/xdg/here")
+        Assert.Equal(Path.Combine("/xdg/here", "wtf", "plugins"), PluginPath.resolve ())
+        // Empty is treated like unset -> ~/.config/wtf/plugins.
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", "")
+        let home = Environment.GetFolderPath Environment.SpecialFolder.UserProfile
+        Assert.Equal(Path.Combine(home, ".config", "wtf", "plugins"), PluginPath.resolve ())
+    finally
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", prev)

@@ -44,7 +44,7 @@ module Brain =
     /// use, and hands the resulting ToolCall to the host `dispatch` callback (which
     /// marshals Commands onto the loop thread / drives the notify daemon). All the
     /// AI-specific plumbing is isolated here; the brain carries no World policy.
-    type private ToolFunction(tool: AgentTools.Tool, dispatch: AgentTools.ToolCall -> string) =
+    type internal ToolFunction(tool: AgentTools.Tool, dispatch: AgentTools.ToolCall -> string) =
         inherit AIFunction()
         // The pure schema (type:object + properties + required) reused verbatim.
         let schema = JsonSerializer.Deserialize<JsonElement>(tool.Parameters.ToJsonString())
@@ -63,7 +63,11 @@ module Brain =
                 match kv.Value with
                 | null -> ()
                 | :? JsonElement as je -> (try o[kv.Key] <- JsonNode.Parse(je.GetRawText()) with _ -> ())
-                | v -> (try o[kv.Key] <- JsonValue.Create(string v) with _ -> ())
+                // Preserve the boxed CLR primitive's REPRESENTATION: serialize by its
+                // runtime type so an int/float/bool stays a JSON number/boolean (not a
+                // JSON *string* — which would make AgentTools.argInt/argNum's
+                // GetValue<int>/<float> throw and silently drop the argument).
+                | v -> (try o[kv.Key] <- JsonNode.Parse(JsonSerializer.Serialize(v, v.GetType())) with _ -> ())
             let result =
                 match AgentTools.toToolCall tool.Name o with
                 | Some call -> dispatch call
@@ -112,7 +116,7 @@ module Brain =
     let tryCreate (dispatch: AgentTools.ToolCall -> string) : Brain option =
         match Environment.GetEnvironmentVariable "ANTHROPIC_API_KEY" with
         | null | "" ->
-            eprintfn "WTF agent: disabled (ANTHROPIC_API_KEY not set)"
+            eprintfn "WTF agent: disabled (ANTHROPIC_API_KEY not set or empty)"
             None
         | key ->
             try

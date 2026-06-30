@@ -10,6 +10,13 @@
     <Compile Include="Brain.fs" />
   </ItemGroup>
 
+  <!-- Expose the internal ToolFunction (the AIFunction arg-marshaling shim) to the
+       test project so its JsonElement/primitive round-trip + dispatch mapping can
+       be unit-tested directly. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="WTF.Agent.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- The opt-in in-process LLM brain. Microsoft.Extensions.AI exposes the
          IChatClient + function-calling abstractions; Anthropic.SDK backs it with a

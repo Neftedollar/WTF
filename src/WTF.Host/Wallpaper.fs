@@ -18,7 +18,7 @@ open WTF.Core
 let mutable private cached: (string * Image<Rgba32>) option = None
 
 /// Expand a leading `~` to the user's home directory (config stores `~/pics/...`).
-let private expand (path: string) : string =
+let internal expand (path: string) : string =
     if path = "~" || path.StartsWith("~/") then
         let home = System.Environment.GetFolderPath System.Environment.SpecialFolder.UserProfile
         home + path.Substring(1)
@@ -29,7 +29,7 @@ let private expand (path: string) : string =
 /// Pad = contain+letterbox (Fit), Stretch = exact, BoxPad = centered-with-pad
 /// (Center). Tile has no direct ResizeMode; we fall back to Crop (cover) so the
 /// output is still fully covered — a true tiling loop can refine this later.
-let private resizeModeOf (mode: WallpaperMode) : ResizeMode =
+let internal resizeModeOf (mode: WallpaperMode) : ResizeMode =
     match mode with
     | Fill -> ResizeMode.Crop
     | Fit -> ResizeMode.Pad
@@ -61,7 +61,7 @@ let private loadOriginal (path: string) : Image<Rgba32> option =
 
 /// Decode + scale `path` to exactly w x h and push the RGBA32 bytes to the C
 /// shim. Returns true on success, false (after logging) on any failure.
-let private pushImage (path: string) (mode: WallpaperMode) (w: int) (h: int) : bool =
+let internal pushImage (path: string) (mode: WallpaperMode) (w: int) (h: int) : bool =
     if w <= 0 || h <= 0 then
         false
     else

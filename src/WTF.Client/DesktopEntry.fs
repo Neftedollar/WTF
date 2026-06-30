@@ -38,10 +38,32 @@ module DesktopEntry =
                 else
                     sb.Append(c) |> ignore
                     i <- i + 1
-            // Collapse runs of whitespace introduced by removed codes, then trim.
-            let collapsed =
-                sb.ToString().Split([| ' '; '\t'; '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
-            String.Join(" ", collapsed)
+            // Collapse runs of whitespace introduced by removed codes, then trim —
+            // but ONLY outside single/double quotes, so intentional whitespace inside
+            // a quoted argument (e.g. sh -c "printf 'a  b'") survives untouched.
+            let s = sb.ToString()
+            let out = System.Text.StringBuilder(s.Length)
+            let mutable inSingle = false
+            let mutable inDouble = false
+            let mutable pendingSpace = false // saw outside-quote whitespace, not yet emitted
+            let mutable started = false       // have we emitted any non-space yet (drops leading)
+            for ch in s do
+                if inSingle then
+                    out.Append(ch) |> ignore
+                    if ch = '\'' then inSingle <- false
+                elif inDouble then
+                    out.Append(ch) |> ignore
+                    if ch = '"' then inDouble <- false
+                elif ch = ' ' || ch = '\t' || ch = '\n' || ch = '\r' then
+                    pendingSpace <- true
+                else
+                    if pendingSpace && started then out.Append(' ') |> ignore
+                    pendingSpace <- false
+                    started <- true
+                    if ch = '\'' then inSingle <- true
+                    elif ch = '"' then inDouble <- true
+                    out.Append(ch) |> ignore
+            out.ToString()
 
     let private isTrue (v: string) =
         v.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)

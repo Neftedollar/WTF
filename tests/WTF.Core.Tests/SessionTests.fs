@@ -61,3 +61,84 @@ let ``garbage returns None`` () =
 [<Fact>]
 let ``version mismatch returns None`` () =
     Assert.Equal(None, Session.ofJson """{"schema":"wtf-session","version":99}""")
+
+// ============================================================================
+//  Floating + Fullscreen codec round-trips (the most explicitly requested gap:
+//  the existing tests never exercise a non-empty Floating map or Fullscreen).
+// ============================================================================
+
+[<Fact>]
+let ``a floating + fullscreen world round-trips losslessly`` () =
+    let w =
+        Reducer.applyMany
+            [ AddWindow(win 1 "a"); AddWindow(win 2 "b"); AddWindow(win 3 "c")
+              Focus(ById 2); ToggleFloat          // 2 floats (real stored rect)
+              Focus(ById 3); ToggleFullscreen ]   // 3 fullscreen
+            (World.empty screen)
+        |> fst
+    let ws = World.currentWorkspace w
+    Assert.False(Map.isEmpty ws.Floating)         // precondition: actually floating
+    Assert.Equal(Some 3, ws.Fullscreen)
+    Assert.Equal(Some w, Session.ofJson (Session.toJson w))
+
+[<Fact>]
+let ``multiple floating windows round-trip`` () =
+    let w =
+        Reducer.applyMany
+            [ AddWindow(win 1 "a"); AddWindow(win 2 "b"); AddWindow(win 3 "c")
+              Focus(ById 1); ToggleFloat
+              Focus(ById 3); ToggleFloat ]
+            (World.empty screen)
+        |> fst
+    Assert.Equal(2, (World.currentWorkspace w).Floating.Count)
+    Assert.Equal(Some w, Session.ofJson (Session.toJson w))
+
+[<Fact>]
+let ``a window that is both floating and fullscreen round-trips`` () =
+    let w =
+        Reducer.applyMany
+            [ AddWindow(win 1 "a"); AddWindow(win 2 "b")
+              Focus(ById 2); ToggleFloat; ToggleFullscreen ]
+            (World.empty screen)
+        |> fst
+    let ws = World.currentWorkspace w
+    Assert.True(Map.containsKey 2 ws.Floating)
+    Assert.Equal(Some 2, ws.Fullscreen)
+    Assert.Equal(Some w, Session.ofJson (Session.toJson w))
+
+// ============================================================================
+//  ofJson fail-closed contract: a structurally valid header but missing/invalid
+//  required content must yield None, never a partial World.
+// ============================================================================
+
+[<Fact>]
+let ``valid header but missing required keys returns None`` () =
+    Assert.Equal(None, Session.ofJson """{"schema":"wtf-session","version":1}""")
+
+[<Fact>]
+let ``a workspace missing tag or layout returns None`` () =
+    let json =
+        """{"schema":"wtf-session","version":1,"current":"1","nmaster":1,"ratio":0.5,"gaps":6,
+            "screen":{"x":0,"y":0,"w":100,"h":100},
+            "workspaces":[{"layout":"tall","stack":null,"floating":[],"fullscreen":null}],
+            "windows":[]}"""
+    Assert.Equal(None, Session.ofJson json)
+
+[<Fact>]
+let ``version as a string returns None`` () =
+    Assert.Equal(None, Session.ofJson """{"schema":"wtf-session","version":"1"}""")
+
+[<Fact>]
+let ``schema without version (and vice versa) returns None`` () =
+    Assert.Equal(None, Session.ofJson """{"schema":"wtf-session"}""")
+    Assert.Equal(None, Session.ofJson """{"version":1}""")
+
+[<Fact>]
+let ``a corrupt focused id (not in the stack windows) fails closed`` () =
+    // Regression: this used to load with the focus silently reset to the head.
+    let w =
+        Reducer.applyMany [ AddWindow(win 1 "a"); AddWindow(win 2 "b") ] (World.empty screen)
+        |> fst
+    let corrupt = (Session.toJson w).Replace("\"focused\": 2", "\"focused\": 99")
+    Assert.NotEqual<string>(Session.toJson w, corrupt) // the substitution actually happened
+    Assert.Equal(None, Session.ofJson corrupt)

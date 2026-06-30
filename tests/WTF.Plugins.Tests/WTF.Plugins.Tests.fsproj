@@ -27,6 +27,12 @@
     <ProjectReference Include="..\..\examples\SpiralLayout\SpiralLayout.fsproj">
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>
+    <!-- The test-fixture plugin assembly (multiple layouts / collisions / throwing
+         + ctor-less plugin types). Forced to build, NOT linked — the test locates
+         FixturePlugins.dll on disk and loads it through the reflective/ALC path. -->
+    <ProjectReference Include="..\..\examples\FixturePlugins\FixturePlugins.fsproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
   </ItemGroup>
 
 </Project>

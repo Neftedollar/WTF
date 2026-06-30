@@ -36,15 +36,23 @@ module Volume =
     let toggleMute () =
         run "set-mute @DEFAULT_AUDIO_SINK@ toggle" "set-sink-mute @DEFAULT_SINK@ toggle"
 
-    /// `pct` may be negative (lower) or positive (raise).
-    let adjust (pct: int) =
-        let mag = abs pct
+    /// Build the (wpctl, pactl) argument strings for a volume delta. Pure +
+    /// testable. The magnitude is computed in int64 so `abs` never overflows
+    /// (abs Int32.MinValue would throw OverflowException). `pct` may be negative
+    /// (lower) or positive (raise).
+    let formatArgs (pct: int) : string * string =
+        let mag = abs (int64 pct)
         let wp =
             if pct >= 0 then sprintf "set-volume @DEFAULT_AUDIO_SINK@ %d%%+" mag
             else sprintf "set-volume @DEFAULT_AUDIO_SINK@ %d%%-" mag
         let pa =
             if pct >= 0 then sprintf "set-sink-volume @DEFAULT_SINK@ +%d%%" mag
             else sprintf "set-sink-volume @DEFAULT_SINK@ -%d%%" mag
+        wp, pa
+
+    /// `pct` may be negative (lower) or positive (raise).
+    let adjust (pct: int) =
+        let wp, pa = formatArgs pct
         run wp pa
 
 
@@ -273,8 +281,12 @@ module Clients =
                         Action<struct (string * string * string)>(fun args ->
                             let struct (name, oldOwner, newOwner) = args
                             if name.StartsWith mprisPrefix then
-                                if newOwner <> "" && oldOwner = "" then track name |> ignore
-                                elif newOwner = "" then untrack name))
+                                // newOwner<>"" covers BOTH a fresh appearance (oldOwner="")
+                                // AND an owner transfer (oldOwner<>"" && newOwner<>""): in
+                                // either case re-track so a handed-off bus name isn't left
+                                // with a stale proxy. newOwner="" means the player vanished.
+                                if newOwner <> "" then track name |> ignore
+                                else untrack name))
 
                 eprintfn "WTF desktop: MPRIS watching for players"
             with ex ->

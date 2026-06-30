@@ -17,7 +17,8 @@ module internal DBusSig =
 
     /// Map a single complete D-Bus signature to a .NET type-name string.
     /// Returns the mapped name and the count of signature chars consumed.
-    let rec private mapOne (sig_: string) (i: int) : string * int =
+    /// (Not `private` so the test suite can white-box the recursion offsets.)
+    let rec mapOne (sig_: string) (i: int) : string * int =
         if i >= sig_.Length then "System.Object", 0
         else
             match sig_.[i] with
@@ -61,7 +62,7 @@ module internal DBusSig =
             | _ -> "System.Object", 1
 
     /// Friendly short name for nested generics (string instead of System.String etc.).
-    and private shortName (n: string) =
+    and shortName (n: string) =
         match n with
         | "System.String" -> "string"
         | "System.Object" -> "obj"
@@ -89,7 +90,10 @@ module internal DBusSig =
         match sigs with
         | [] -> "System.Void"
         | [ one ] -> map one
-        | many -> sprintf "ValueTuple<%s>" (String.Join(",", many |> List.map (map >> (fun n -> if n.StartsWith "System." then n else n))))
+        // Short-name each component so a multi-out signature renders identically
+        // to a struct of the same types (ValueTuple<int32,string>, not
+        // ValueTuple<System.Int32,System.String>).
+        | many -> sprintf "ValueTuple<%s>" (String.Join(",", many |> List.map (map >> shortName)))
 
 /// Design-time XML model.
 module internal Introspection =
@@ -100,12 +104,32 @@ module internal Introspection =
 
     let private localName (e: XElement) = e.Name.LocalName
 
+    /// Read an attribute value, or "" when the attribute is absent. Guards every
+    /// `.Attribute(...).Value` so a malformed introspection XML (missing a `name`,
+    /// `type`, etc.) degrades to an empty string instead of NRE-ing the TP build.
+    let private attrValue (e: XElement) (name: string) =
+        match e.Attribute(XName.Get name) with
+        | null -> ""
+        | a -> a.Value
+
+    /// Parse an introspection XML file into the design-time model. Hardened so the
+    /// Type Provider degrades gracefully rather than surfacing an opaque
+    /// XmlException/NullReferenceException as a compile failure:
+    ///   * syntactically broken XML  -> [] (no interfaces provided)
+    ///   * document with no root      -> []
+    ///   * member/interface missing a `name` attribute -> "" (via attrValue)
     let parseFile (path: string) : Interface list =
-        let doc = XDocument.Load(path)
+        let docOpt =
+            try Some(XDocument.Load(path))
+            with :? System.Xml.XmlException -> None
+        match docOpt with
+        | None -> []
+        | Some doc ->
         let node = doc.Root
+        if isNull node then [] else
         [ for iface in node.Elements() do
             if localName iface = "interface" then
-                let ifaceName = iface.Attribute(XName.Get "name").Value
+                let ifaceName = attrValue iface "name"
                 let members =
                     [ for m in iface.Elements() do
                         match localName m with
@@ -113,43 +137,41 @@ module internal Introspection =
                             let args =
                                 [ for a in m.Elements() do
                                     if localName a = "arg" then
-                                        let nm = a.Attribute(XName.Get "name")
                                         let dir = a.Attribute(XName.Get "direction")
-                                        let ty = a.Attribute(XName.Get "type")
-                                        yield { Name = (if isNull nm then "" else nm.Value)
+                                        yield { Name = attrValue a "name"
                                                 Direction = (if isNull dir then "in" else dir.Value)
-                                                Sig = (if isNull ty then "" else ty.Value) } ]
-                            yield { Name = m.Attribute(XName.Get "name").Value
+                                                Sig = attrValue a "type" } ]
+                            yield { Name = attrValue m "name"
                                     Kind = "method"; Args = args; Access = ""; PropSig = "" }
                         | "signal" ->
                             let args =
                                 [ for a in m.Elements() do
                                     if localName a = "arg" then
-                                        let nm = a.Attribute(XName.Get "name")
-                                        let ty = a.Attribute(XName.Get "type")
-                                        yield { Name = (if isNull nm then "" else nm.Value)
+                                        yield { Name = attrValue a "name"
                                                 Direction = "out"
-                                                Sig = (if isNull ty then "" else ty.Value) } ]
-                            yield { Name = m.Attribute(XName.Get "name").Value
+                                                Sig = attrValue a "type" } ]
+                            yield { Name = attrValue m "name"
                                     Kind = "signal"; Args = args; Access = ""; PropSig = "" }
                         | "property" ->
-                            let ty = m.Attribute(XName.Get "type")
-                            let acc = m.Attribute(XName.Get "access")
-                            yield { Name = m.Attribute(XName.Get "name").Value
+                            yield { Name = attrValue m "name"
                                     Kind = "property"; Args = []
-                                    Access = (if isNull acc then "" else acc.Value)
-                                    PropSig = (if isNull ty then "" else ty.Value) }
+                                    Access = attrValue m "access"
+                                    PropSig = attrValue m "type" }
                         | _ -> () ]
                 yield { Name = ifaceName; Members = members } ]
 
     /// Sanitize a D-Bus interface name (org.freedesktop.Accounts) into a valid
-    /// .NET identifier (OrgFreedesktopAccounts).
+    /// .NET identifier (OrgFreedesktopAccounts). RemoveEmptyEntries guarantees no
+    /// zero-length segment, so each `part.[0]` is safe. A leading digit (e.g. an
+    /// interface beginning "0rg.foo") would otherwise yield an identifier that
+    /// starts with a digit, which is not a valid .NET name, so we prefix '_'.
     let sanitize (name: string) : string =
-        name.Split([| '.'; '-' |], StringSplitOptions.RemoveEmptyEntries)
-        |> Array.map (fun part ->
-            if part.Length = 0 then part
-            else string (Char.ToUpperInvariant part.[0]) + part.Substring(1))
-        |> String.concat ""
+        let pascal =
+            name.Split([| '.'; '-' |], StringSplitOptions.RemoveEmptyEntries)
+            |> Array.map (fun part ->
+                string (Char.ToUpperInvariant part.[0]) + part.Substring(1))
+            |> String.concat ""
+        if pascal.Length > 0 && Char.IsDigit pascal.[0] then "_" + pascal else pascal
 
 [<TypeProvider>]
 type DBusIntrospectionProvider(config: TypeProviderConfig) as this =
@@ -251,4 +273,7 @@ type DBusIntrospectionProvider(config: TypeProviderConfig) as this =
         this.AddNamespace(ns, [ rootType ])
 
 [<assembly: TypeProviderAssembly>]
+// Expose the internal DBusSig / Introspection modules to the test suite so the
+// signature-mapping table and XML parser can be unit-tested directly.
+[<assembly: System.Runtime.CompilerServices.InternalsVisibleTo("WTF.TypeProviders.Tests")>]
 do ()

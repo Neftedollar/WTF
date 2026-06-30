@@ -78,3 +78,166 @@ let ``snapshot is valid JSON exposing windows and arrange`` () =
     let doc = System.Text.Json.JsonDocument.Parse json // throws if invalid
     Assert.Equal("1", doc.RootElement.GetProperty("current").GetString())
     Assert.Equal(2, doc.RootElement.GetProperty("arrange").GetArrayLength())
+
+// ============================================================================
+//  parseRequest: typed-mismatch / malformed-shape must return None, NEVER throw.
+//  (Regression for the control-socket crash: `str` was unguarded outside the
+//  generic `parse` try/with, so a hostile line like {"eval":123} threw.)
+// ============================================================================
+
+[<Theory>]
+[<InlineData("""{"eval":123}""")>]
+[<InlineData("""{"ask":123}""")>]
+[<InlineData("""{"cmd":123}""")>]
+[<InlineData("""{"notify":{"summary":123}}""")>]
+[<InlineData("""{"notify":42}""")>]
+[<InlineData("""{"notify":{}}""")>]
+[<InlineData("""{"notify":{"body":"no summary"}}""")>]
+let ``parseRequest returns None (not a throw) on typed-mismatch input`` (json: string) =
+    // A plain Assert.Equal already converts a thrown exception into a test
+    // failure, which is exactly the regression we are guarding against.
+    Assert.Equal(None, Protocol.parseRequest json)
+
+[<Fact>]
+let ``parseRequest degrades a malformed notify body to empty (summary still wins)`` () =
+    // summary is the ONLY required notify field; a present-but-wrong-typed body
+    // gracefully falls back to "" (mirrors AgentTools.toToolCall's notify path).
+    Assert.Equal(Some(Protocol.Notify("x", "")), Protocol.parseRequest """{"notify":{"summary":"x","body":123}}""")
+
+// ============================================================================
+//  parse: command-verb coverage (round-trip each verb to its Command).
+// ============================================================================
+
+[<Fact>]
+let ``parse maps every action verb to the right Command`` () =
+    let eq exp s = Assert.Equal(exp, Protocol.parse s)
+    eq (Some SwapNext) """{"cmd":"swap"}"""
+    eq (Some SwapPrev) """{"cmd":"swap","dir":"prev"}"""
+    eq (Some SwapMaster) """{"cmd":"swap","dir":"master"}"""
+    eq (Some SwapNext) """{"cmd":"swap","dir":"garbage"}"""   // unknown dir -> next
+    eq (Some SwapMaster) """{"cmd":"swapmaster"}"""
+    eq (Some FocusMaster) """{"cmd":"focusmaster"}"""
+    eq (Some ToggleFloat) """{"cmd":"float"}"""
+    eq (Some ToggleFullscreen) """{"cmd":"fullscreen"}"""
+    eq (Some SinkAll) """{"cmd":"sinkall"}"""
+    eq (Some CloseFocused) """{"cmd":"close"}"""
+    eq (Some(MoveToWorkspace "4")) """{"cmd":"workspace","move":"4"}"""
+    eq (Some NextWorkspace) """{"cmd":"workspace","next":true}"""
+    eq (Some PrevWorkspace) """{"cmd":"workspace","prev":true}"""
+    eq (Some NextLayout) """{"cmd":"layout","next":true}"""
+    eq (Some IncMaster) """{"cmd":"master","inc":true}"""
+    eq (Some DecMaster) """{"cmd":"master","dec":true}"""
+    eq (Some(SetMaster 3)) """{"cmd":"master","n":3}"""
+    eq (Some IncGaps) """{"cmd":"gaps","inc":true}"""
+    eq (Some DecGaps) """{"cmd":"gaps","dec":true}"""
+    eq (Some(SetGaps 10)) """{"cmd":"gaps","value":10}"""
+    eq (Some(SetInactiveOpacity 0.8)) """{"cmd":"opacity","value":0.8}"""
+    eq (Some(SetAnimationSpeed 0.5)) """{"cmd":"anim","value":0.5}"""
+    eq (Some(SetBlur false)) """{"cmd":"blur"}"""
+    eq (Some Undo) """{"cmd":"undo"}"""
+    eq (Some Redo) """{"cmd":"redo"}"""
+    eq (Some SaveSession) """{"cmd":"session","save":true}"""
+    eq (Some LoadSession) """{"cmd":"session","restore":true}"""
+
+[<Theory>]
+// verbs whose required argument/flag is missing -> None
+[<InlineData("""{"cmd":"workspace"}""")>]
+[<InlineData("""{"cmd":"layout"}""")>]
+[<InlineData("""{"cmd":"master"}""")>]
+[<InlineData("""{"cmd":"ratio"}""")>]
+[<InlineData("""{"cmd":"gaps"}""")>]
+[<InlineData("""{"cmd":"corners"}""")>]
+[<InlineData("""{"cmd":"session"}""")>]
+let ``parse returns None when a required field is absent`` (json: string) =
+    Assert.Equal(None, Protocol.parse json)
+
+[<Theory>]
+// integer fields given a fractional number must reject (no silent truncation).
+[<InlineData("""{"cmd":"master","n":2.7}""")>]
+[<InlineData("""{"cmd":"gaps","value":3.5}""")>]
+[<InlineData("""{"cmd":"corners","value":1.5}""")>]
+[<InlineData("""{"cmd":"border","width":2.5}""")>]
+let ``parse rejects fractional values in integer fields`` (json: string) =
+    Assert.Equal(None, Protocol.parse json)
+
+// ============================================================================
+//  hexColor edge cases.
+// ============================================================================
+
+[<Fact>]
+let ``hexColor rejects wrong-length and invalid-hex inputs`` () =
+    Assert.Equal(None, Protocol.hexColor "#ffff")     // 4 digits
+    Assert.Equal(None, Protocol.hexColor "#fffff")    // 5 digits
+    Assert.Equal(None, Protocol.hexColor "#xyz")      // invalid hex, 3 digits
+    Assert.Equal(None, Protocol.hexColor "#gggggg")   // invalid hex, 6 digits
+    Assert.Equal(None, Protocol.hexColor "")          // empty
+    Assert.Equal(None, Protocol.hexColor "#")         // hash only
+
+[<Fact>]
+let ``hexColor rejects multiple leading hashes (regression)`` () =
+    // "##fff"/"###ffffff" used to strip ALL '#' and parse as white.
+    Assert.Equal(None, Protocol.hexColor "##fff")
+    Assert.Equal(None, Protocol.hexColor "###ffffff")
+
+[<Fact>]
+let ``hexColor parses uppercase and computes per-channel values`` () =
+    match Protocol.hexColor "#ABCDEF" with
+    | Some _ -> ()
+    | None -> failwith "uppercase hex should parse"
+    match Protocol.hexColor "#ff8000" with
+    | Some(r, g, b) ->
+        Assert.Equal(1.0, r)
+        Assert.True(abs (g - 0.50196) < 1e-4, sprintf "g=%f" g)
+        Assert.Equal(0.0, b)
+    | None -> failwith "expected Some"
+
+// ============================================================================
+//  snapshot: floating / fullscreen / desktop exposure + the snapshotWith None
+//  byte-identity invariant.
+// ============================================================================
+
+[<Fact>]
+let ``snapshot exposes floating geometry and the fullscreen id`` () =
+    let screen = Rect.create 0 0 1920 1080
+    let w =
+        Reducer.applyMany
+            [ AddWindow { Id = 1; AppId = "a"; Title = "a"; Floating = false }
+              AddWindow { Id = 2; AppId = "b"; Title = "b"; Floating = false }
+              AddWindow { Id = 3; AppId = "c"; Title = "c"; Floating = false }
+              Focus(ById 2); ToggleFloat
+              Focus(ById 3); ToggleFullscreen ]
+            (World.empty screen)
+        |> fst
+    let doc = System.Text.Json.JsonDocument.Parse(Protocol.snapshot w)
+    let ws0 = doc.RootElement.GetProperty("workspaces").[0]
+    let floating = ws0.GetProperty("floating")
+    Assert.Equal(1, floating.GetArrayLength())
+    Assert.Equal(2, floating.[0].GetProperty("id").GetInt32())
+    Assert.True(floating.[0].GetProperty("w").GetInt32() > 0)
+    Assert.Equal(3, ws0.GetProperty("fullscreen").GetInt32())
+
+[<Fact>]
+let ``snapshotWith None is byte-identical to snapshot`` () =
+    let screen = Rect.create 0 0 800 600
+    let w =
+        Reducer.applyMany
+            [ AddWindow { Id = 1; AppId = "a"; Title = "a"; Floating = false } ]
+            (World.empty screen)
+        |> fst
+    Assert.Equal(Protocol.snapshot w, Protocol.snapshotWith None w)
+    Assert.Equal(Protocol.snapshotLine w, Protocol.snapshotLineWith None w)
+
+[<Fact>]
+let ``snapshotWith Some splices the extra node under desktop`` () =
+    let screen = Rect.create 0 0 800 600
+    let extra = System.Text.Json.Nodes.JsonObject()
+    extra["tray"] <- System.Text.Json.Nodes.JsonValue.Create "ok"
+    let json = Protocol.snapshotWith (Some extra) (World.empty screen)
+    let doc = System.Text.Json.JsonDocument.Parse json
+    Assert.Equal("ok", doc.RootElement.GetProperty("desktop").GetProperty("tray").GetString())
+
+[<Fact>]
+let ``snapshot of an empty world is valid JSON with an empty arrange`` () =
+    let json = Protocol.snapshot (World.empty (Rect.create 0 0 640 480))
+    let doc = System.Text.Json.JsonDocument.Parse json
+    Assert.Equal(0, doc.RootElement.GetProperty("arrange").GetArrayLength())

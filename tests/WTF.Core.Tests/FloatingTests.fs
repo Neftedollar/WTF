@@ -235,3 +235,15 @@ let ``toggle float fullscreen and sinkall are undoable`` () =
     Assert.True(Reducer.isUndoable ToggleFloat)
     Assert.True(Reducer.isUndoable ToggleFullscreen)
     Assert.True(Reducer.isUndoable SinkAll)
+
+// ---- (12) z-order WITHIN the floating layer (documented: stack=z) ---
+
+[<Fact>]
+let ``within the floating layer z follows stack order`` () =
+    // mixed(): stack top->bottom [5;4;3;2;1], floats = {4;2}. arrange visits ids
+    // in stack order, so the higher-stacked float (4) precedes the lower (2):
+    // later in the arrange list = higher z. This pins the documented behaviour.
+    let w = mixed ()
+    let arr = World.arrange w |> List.map fst
+    let idxOf id = List.findIndex ((=) id) arr
+    Assert.True(idxOf 4 < idxOf 2, "stack order among floats must be preserved (4 above 2 in stack => lower z)")

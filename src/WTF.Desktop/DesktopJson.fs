@@ -46,7 +46,10 @@ module DesktopJson =
             | Some b ->
                 let o = JsonObject()
                 o["present"] <- JsonValue.Create b.Present
-                o["percent"] <- JsonValue.Create b.Percentage
+                // System.Text.Json rejects non-finite floats by default, which would
+                // crash the Host's snapshot serialization. The contract is 0..100, so
+                // sanitize NaN/Infinity to 0.0 rather than emit an unserializable node.
+                o["percent"] <- JsonValue.Create(if System.Double.IsFinite b.Percentage then b.Percentage else 0.0)
                 o["state"] <- JsonValue.Create b.State
                 o :> JsonNode
             | None -> null

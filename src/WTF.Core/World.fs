@@ -156,11 +156,25 @@ module World =
             // LAYER 1 — TILED: build a sub-stack preserving order; focus = first tiled id
             // (the built-in layouts read only Stack.toList order, never Focus identity).
             let tiledRects =
-                match Stack.ofList tiledIds, Registry.resolve ws.Layout w.Nmaster w.Ratio with
-                | Some sub, Some layout ->
-                    let layout = if w.Gaps > 0 then Layout.withGaps (w.Gaps * 1<lpx>) layout else layout
-                    layout w.Screen sub
-                | _ -> []
+                match Stack.ofList tiledIds with
+                | None -> []
+                | Some sub ->
+                    // Resolve the workspace's layout; if its name is unknown (e.g. set
+                    // by a hot-reloaded config that bypassed SetLayout's guard), fall
+                    // back to the first registered layout rather than silently dropping
+                    // every tiled window from arrange (no-loss / bijection invariant).
+                    let layoutOpt =
+                        match Registry.resolve ws.Layout w.Nmaster w.Ratio with
+                        | Some l -> Some l
+                        | None ->
+                            Registry.names ()
+                            |> List.tryHead
+                            |> Option.bind (fun n -> Registry.resolve n w.Nmaster w.Ratio)
+                    match layoutOpt with
+                    | Some layout ->
+                        let layout = if w.Gaps > 0 then Layout.withGaps (w.Gaps * 1<lpx>) layout else layout
+                        layout w.Screen sub
+                    | None -> []
             // LAYER 2 — FLOATING: stack order = z; skip the fs id; clamp on-screen.
             let floatRects =
                 allIds

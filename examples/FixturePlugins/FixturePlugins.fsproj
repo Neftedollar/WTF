@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- TEST-FIXTURE plugin assembly used by WTF.Plugins.Tests to exercise the
+       loader's edge cases (multiple layouts, name collisions, throwing ctor, no
+       parameterless ctor). NOT in WTF.slnx; built on demand via the test's
+       ProjectReference (ReferenceOutputAssembly=false), exactly like SpiralLayout. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- A class library: NO OutputType. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="FixturePlugins.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Same ALC-identity contract as SpiralLayout: reference WTF.Core but DON'T
+         copy its dll next to the plugin, so the loader resolves to the HOST's
+         already-loaded WTF.Core (shared Type identity). -->
+    <ProjectReference Include="..\..\src\WTF.Core\WTF.Core.fsproj">
+      <Private>false</Private>
+      <ReferenceOutputAssembly>true</ReferenceOutputAssembly>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="FSharp.Core" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

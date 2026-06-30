@@ -109,3 +109,55 @@ let ``missing required args return None`` () =
     Assert.Equal(None, toToolCall "set_ratio" (args "{}"))
     Assert.Equal(None, toToolCall "set_master" (args "{}"))
     Assert.Equal(None, toToolCall "notify" (args "{}"))
+
+// ============================================================================
+//  manifest <-> Registry drift guard + the curated-name lock.
+// ============================================================================
+
+[<Fact>]
+let ``set_layout enum matches the live layout Registry`` () =
+    let setLayoutEnum =
+        let t = manifest |> List.find (fun t -> t.Name = "set_layout")
+        let enumNode = t.Parameters.["properties"].["name"].["enum"]
+        [ for v in enumNode.AsArray() -> v.GetValue<string>() ]
+    Assert.Equal<Set<string>>(Set.ofList (Registry.names ()), Set.ofList setLayoutEnum)
+
+[<Fact>]
+let ``the manifest exposes exactly the curated tool set in order`` () =
+    // Locks the count AND names so an accidental add/remove/rename is caught.
+    let expected =
+        [ "focus_window"; "set_layout"; "switch_workspace"; "move_window_to_workspace"
+          "next_workspace"; "prev_workspace"; "spawn"; "close_focused"; "set_ratio"
+          "set_master"; "toggle_float"; "toggle_fullscreen"; "notify" ]
+    Assert.Equal<string list>(expected, manifest |> List.map (fun t -> t.Name))
+
+// ============================================================================
+//  toToolCall: hostile / edge args (null node, wrong types, boundary clamp).
+// ============================================================================
+
+[<Fact>]
+let ``null args resolve for no-param tools`` () =
+    Assert.Equal(Some(ToCommand NextWorkspace), toToolCall "next_workspace" (null: JsonNode))
+    Assert.Equal(Some(ToCommand PrevWorkspace), toToolCall "prev_workspace" (null: JsonNode))
+    Assert.Equal(Some(ToCommand CloseFocused), toToolCall "close_focused" (null: JsonNode))
+    Assert.Equal(Some(ToCommand ToggleFloat), toToolCall "toggle_float" (null: JsonNode))
+    Assert.Equal(Some(ToCommand ToggleFullscreen), toToolCall "toggle_fullscreen" (null: JsonNode))
+
+[<Fact>]
+let ``null args are rejected for required-arg tools`` () =
+    Assert.Equal(None, toToolCall "set_layout" (null: JsonNode))
+    Assert.Equal(None, toToolCall "switch_workspace" (null: JsonNode))
+    Assert.Equal(None, toToolCall "spawn" (null: JsonNode))
+    Assert.Equal(None, toToolCall "set_master" (null: JsonNode))
+    Assert.Equal(None, toToolCall "focus_window" (null: JsonNode))
+    Assert.Equal(None, toToolCall "notify" (null: JsonNode))
+
+[<Fact>]
+let ``wrong-typed args are rejected by the arg guards`` () =
+    Assert.Equal(None, toToolCall "set_master" (args """{"n":2.5}"""))          // int field, float value
+    Assert.Equal(None, toToolCall "set_ratio" (args """{"value":"high"}"""))    // num field, string value
+    Assert.Equal(None, toToolCall "focus_window" (args """{"selector":7}"""))   // str field, number value
+
+[<Fact>]
+let ``set_master passes 0 through (the reducer, not the tool, clamps)`` () =
+    Assert.Equal(Some(ToCommand(SetMaster 0)), toToolCall "set_master" (args """{"n":0}"""))

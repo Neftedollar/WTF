@@ -12,6 +12,14 @@ let private worldWith n =
     [ for i in 1..n -> AddWindow(win i (sprintf "app%d" i)) ]
     |> fun cmds -> Reducer.applyMany cmds (World.empty screen) |> fst
 
+/// Force the current workspace's Layout name directly, bypassing SetLayout's
+/// registry guard (mimics a hot-reloaded config writing an arbitrary string).
+let private setCurrentLayout name (w: World) =
+    { w with
+        Workspaces =
+            w.Workspaces
+            |> List.map (fun ws -> if ws.Tag = w.Current then { ws with Layout = name } else ws) }
+
 [<Fact>]
 let ``adding windows populates the current workspace in order`` () =
     let w = worldWith 3
@@ -133,3 +141,231 @@ let ``every command keeps window-set and stack consistent`` (n: int) =
         |> List.collect (fun ws -> ws.Stack |> Option.map Stack.toList |> Option.defaultValue [])
         |> Set.ofList
     Set.ofSeq (Map.toSeq w.Windows |> Seq.map fst) = inStacks
+
+// =====================================================================
+//  Coverage additions: focus preservation on removal, stack-uniqueness,
+//  MoveToWorkspace boundaries, clamp behaviour on every numeric/render
+//  knob, effect-only commands, invalid-tag no-ops, and the arrange
+//  fallback for an unresolvable layout. (Reviewer "core-world-reducer".)
+// =====================================================================
+
+let private curStack w =
+    (World.currentWorkspace w).Stack |> Option.get |> Stack.toList
+
+// ---- RemoveWindow: focus preservation (regression for focus-steal) --
+
+[<Fact>]
+let ``removing a non-focused window preserves the current focus`` () =
+    let w = worldWith 3 // stack [3;2;1], focus = 3
+    Assert.Equal(Some 3, World.focusedWindow w)
+    let w', _ = Reducer.apply (RemoveWindow 1) w // 1 is NOT focused
+    Assert.Equal<int list>([ 3; 2 ], curStack w')
+    Assert.Equal(Some 3, World.focusedWindow w') // focus stays on 3, not stolen to 2
+
+[<Fact>]
+let ``removing the focused window shifts focus down then up`` () =
+    let w = worldWith 3 // stack [3;2;1], focus = 3 (top, no down-from-3? Down=[2;1])
+    let w', _ = Reducer.apply (RemoveWindow 3) w // remove the focused top window
+    Assert.Equal<int list>([ 2; 1 ], curStack w')
+    Assert.Equal(Some 2, World.focusedWindow w') // delete picks the down neighbour
+
+[<Fact>]
+let ``removing the focused bottom window falls back to the up neighbour`` () =
+    let w = worldWith 3 |> Reducer.apply (Focus(ById 1)) |> fst // focus = 1 (bottom)
+    let w', _ = Reducer.apply (RemoveWindow 1) w
+    Assert.Equal<int list>([ 3; 2 ], curStack w')
+    Assert.Equal(Some 2, World.focusedWindow w') // no Down -> up neighbour
+
+// ---- AddWindow: stack-uniqueness (regression for duplicate insert) --
+
+[<Fact>]
+let ``re-adding an existing id keeps it in the stack exactly once`` () =
+    let w = worldWith 2 // [2;1]
+    let w', _ = Reducer.apply (AddWindow { Id = 1; AppId = "renamed"; Title = "t2"; Floating = false }) w
+    let ids = curStack w'
+    Assert.Equal(List.length (List.distinct ids), List.length ids) // no duplicate id
+    Assert.True(List.contains 1 ids)
+    Assert.Equal("renamed", (Map.find 1 w'.Windows).AppId) // Windows holds the latest info
+
+// ---- MoveToWorkspace boundaries -------------------------------------
+
+[<Fact>]
+let ``move to the same workspace is a no-op`` () =
+    let w = worldWith 2
+    let w', e = Reducer.apply (MoveToWorkspace "1") w // current is "1"
+    Assert.Equal<World>(w, w')
+    Assert.Empty(e)
+
+[<Fact>]
+let ``move to a non-existent workspace is a no-op`` () =
+    let w = worldWith 2
+    let w', e = Reducer.apply (MoveToWorkspace "does-not-exist") w
+    Assert.Equal<World>(w, w')
+    Assert.Empty(e)
+
+[<Fact>]
+let ``move from an empty workspace is a no-op`` () =
+    let w = World.empty screen // no windows, no focus
+    let w', e = Reducer.apply (MoveToWorkspace "2") w
+    Assert.Equal<World>(w, w')
+    Assert.Empty(e)
+
+[<Fact>]
+let ``moving the only window empties the source workspace stack`` () =
+    let w = worldWith 1
+    let w', _ = Reducer.apply (MoveToWorkspace "2") w
+    Assert.Equal(None, (w'.Workspaces |> List.find (fun ws -> ws.Tag = "1")).Stack)
+    Assert.Equal<int list>([ 1 ], World.stackOf "2" w' |> Option.get |> Stack.toList)
+
+[<Fact>]
+let ``moving into a non-empty target inserts and focuses the moved id`` () =
+    // put window 9 on "2" first, then move focused 2 from "1" to "2"
+    let w =
+        worldWith 2 // [2;1] on "1", focus 2
+        |> Reducer.apply (SwitchWorkspace "2") |> fst
+        |> Reducer.apply (AddWindow(win 9 "nine")) |> fst // "2" has [9]
+        |> Reducer.apply (SwitchWorkspace "1") |> fst
+    let w', _ = Reducer.apply (MoveToWorkspace "2") w // moves focused 2
+    let tgt = World.stackOf "2" w' |> Option.get
+    Assert.Equal<int list>([ 2; 9 ], Stack.toList tgt) // insertUp => moved on top
+    Assert.Equal(2, tgt.Focus) // target focuses the moved id
+
+// ---- numeric clamp commands -----------------------------------------
+
+[<Fact>]
+let ``set ratio clamps to the 0.1..0.9 band`` () =
+    let w = worldWith 1
+    Assert.Equal(0.9, (Reducer.apply (SetRatio 5.0) w |> fst).Ratio)
+    Assert.Equal(0.1, (Reducer.apply (SetRatio -1.0) w |> fst).Ratio)
+
+[<Fact>]
+let ``set master clamps zero and negatives to one`` () =
+    let w = worldWith 1
+    Assert.Equal(1, (Reducer.apply (SetMaster 0) w |> fst).Nmaster)
+    Assert.Equal(1, (Reducer.apply (SetMaster -5) w |> fst).Nmaster)
+    Assert.Equal(3, (Reducer.apply (SetMaster 3) w |> fst).Nmaster)
+
+[<Fact>]
+let ``set gaps floors negatives at zero and inc adds four`` () =
+    let w = worldWith 1
+    Assert.Equal(0, (Reducer.apply (SetGaps -10) w |> fst).Gaps)
+    let g0 = (Reducer.apply (SetGaps 5) w |> fst)
+    Assert.Equal(9, (Reducer.apply IncGaps g0 |> fst).Gaps)
+
+// ---- render-knob clamps ---------------------------------------------
+
+[<Fact>]
+let ``inactive opacity clamps to 0..1`` () =
+    let w = worldWith 1
+    Assert.Equal<Effect list>([ RenderOpacity 1.0 ], Reducer.apply (SetInactiveOpacity 2.0) w |> snd)
+    Assert.Equal<Effect list>([ RenderOpacity 0.0 ], Reducer.apply (SetInactiveOpacity -0.5) w |> snd)
+
+[<Fact>]
+let ``animation speed clamps to a 0.01..1 band`` () =
+    let w = worldWith 1
+    Assert.Equal<Effect list>([ RenderAnimSpeed 0.01 ], Reducer.apply (SetAnimationSpeed 0.0) w |> snd)
+    Assert.Equal<Effect list>([ RenderAnimSpeed 1.0 ], Reducer.apply (SetAnimationSpeed 5.0) w |> snd)
+
+[<Fact>]
+let ``border width and corner radius floor negatives at zero`` () =
+    let w = worldWith 1
+    Assert.Equal<Effect list>([ RenderBorderWidth 0 ], Reducer.apply (SetBorderWidth -3) w |> snd)
+    Assert.Equal<Effect list>([ RenderCornerRadius 0 ], Reducer.apply (SetCornerRadius -7) w |> snd)
+
+[<Fact>]
+let ``border color passes through and blur toggles both ways`` () =
+    let w = worldWith 1
+    Assert.Equal<Effect list>(
+        [ RenderBorderColor(true, 0.2, 0.4, 0.6) ],
+        Reducer.apply (SetBorderColor(true, 0.2, 0.4, 0.6)) w |> snd)
+    Assert.Equal<Effect list>([ RenderBlur true ], Reducer.apply (SetBlur true) w |> snd)
+    Assert.Equal<Effect list>([ RenderBlur false ], Reducer.apply (SetBlur false) w |> snd)
+
+// ---- effect-only commands: CloseFocused / Spawn ---------------------
+
+[<Fact>]
+let ``close focused emits exactly one CloseSurface for the focused id`` () =
+    let w = worldWith 3 // focus = 3
+    let w', e = Reducer.apply CloseFocused w
+    Assert.Equal<World>(w, w') // no World change
+    Assert.Equal<Effect list>([ CloseSurface 3 ], e)
+
+[<Fact>]
+let ``close focused on an empty workspace emits nothing`` () =
+    let w = World.empty screen
+    let w', e = Reducer.apply CloseFocused w
+    Assert.Equal<World>(w, w')
+    Assert.Empty(e)
+
+[<Fact>]
+let ``spawn emits a SpawnProcess and leaves the world unchanged`` () =
+    let w = worldWith 1
+    let w', e = Reducer.apply (Spawn "foot") w
+    Assert.Equal<World>(w, w')
+    Assert.Equal<Effect list>([ SpawnProcess "foot" ], e)
+
+// ---- SwitchWorkspace invalid / idempotent ---------------------------
+
+[<Fact>]
+let ``switch to a non-existent workspace is a no-op`` () =
+    let w = worldWith 1
+    let w', e = Reducer.apply (SwitchWorkspace "nope") w
+    Assert.Equal<World>(w, w')
+    Assert.Empty(e)
+
+[<Fact>]
+let ``switch to the current workspace keeps Current unchanged`` () =
+    let w = worldWith 1
+    let w', _ = Reducer.apply (SwitchWorkspace "1") w
+    Assert.Equal("1", w'.Current)
+
+// ---- workspace wrap (Next direction) + NextLayout fallback ----------
+
+[<Fact>]
+let ``next workspace from 9 wraps back to 1`` () =
+    let w = { worldWith 1 with Current = "9" }
+    let w', _ = Reducer.apply NextWorkspace w
+    Assert.Equal("1", w'.Current)
+
+[<Fact>]
+let ``next layout from an unknown current layout falls to the first registered`` () =
+    let w = setCurrentLayout "garbage" (worldWith 1)
+    let w', _ = Reducer.apply NextLayout w
+    Assert.Equal(List.head (Registry.names ()), (World.currentWorkspace w').Layout)
+
+// ---- Focus selectors: wrap + misses ---------------------------------
+
+[<Fact>]
+let ``focus next and prev wrap at the stack ends`` () =
+    let w = worldWith 3 |> Reducer.apply (Focus(ById 1)) |> fst // focus = 1 (bottom)
+    let down, _ = Reducer.apply (Focus NextWindow) w // wraps to top
+    Assert.Equal(Some 3, World.focusedWindow down)
+    let up, _ = Reducer.apply (Focus PrevWindow) (worldWith 3) // focus 3 (top) wraps up to bottom
+    Assert.Equal(Some 1, World.focusedWindow up)
+
+[<Fact>]
+let ``focus by absent id or app is a no-op on the current focus`` () =
+    let w = worldWith 3 // focus = 3
+    Assert.Equal(Some 3, World.focusedWindow (Reducer.apply (Focus(ById 999)) w |> fst))
+    Assert.Equal(Some 3, World.focusedWindow (Reducer.apply (Focus(ByApp "nope")) w |> fst))
+
+// ---- ToggleFloat / ToggleFullscreen on an empty workspace -----------
+
+[<Fact>]
+let ``toggle float and fullscreen on an empty workspace are no-ops`` () =
+    let w = World.empty screen
+    let wf, ef = Reducer.apply ToggleFloat w
+    Assert.Equal<World>(w, wf)
+    Assert.Empty(ef)
+    let wfs, efs = Reducer.apply ToggleFullscreen w
+    Assert.Equal<World>(w, wfs)
+    Assert.Empty(efs)
+
+// ---- arrange fallback for an unresolvable layout (regression) -------
+
+[<Fact>]
+let ``arrange still rects every tiled window under an unresolvable layout`` () =
+    let w = setCurrentLayout "not-a-real-layout" (worldWith 3)
+    let arrangeIds = World.arrange w |> List.map fst |> List.sort
+    let stackIds = curStack w |> List.sort
+    Assert.Equal<int list>(stackIds, arrangeIds) // no tiled window vanishes

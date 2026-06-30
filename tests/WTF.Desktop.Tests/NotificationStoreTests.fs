@@ -107,6 +107,85 @@ let ``expire before due time removes nothing`` () =
     Assert.Empty(removed)
     Assert.Equal(1, List.length s2.Active)
 
+[<Theory>]
+[<InlineData(-2)>]
+[<InlineData(-100)>]
+[<InlineData(System.Int32.MinValue)>]
+let ``timeout: negatives other than -1 never expire (catch-all arm)`` (timeout: int) =
+    let s0 = NotificationStore.empty
+    let s1, id = addN 100L 0u "x" timeout s0
+    Assert.Equal(None, (NotificationStore.tryFind id s1).Value.ExpiresAtMs)
+
+[<Fact>]
+let ``NextId wrap collision: adding atop an active id at NextId produces a duplicate id (documented hole)`` () =
+    // Pin the known invariant hole: if NextId lands on an id already held by an
+    // active never-expiring notification, add() allocates it again -> two actives
+    // share an Id. This is what close/tryFind/replace would then operate on
+    // ambiguously. Documents current behavior so a future fix has a witness.
+    let s0 = NotificationStore.empty
+    let s1, id1 = addN 0L 0u "first" 0 s0 // id 1, never expires
+    // Force NextId back onto the live id 1.
+    let s2 = { s1 with NextId = id1 }
+    let s3, id2 = addN 0L 0u "second" 0 s2
+    Assert.Equal(id1, id2) // collision
+    let dupes = s3.Active |> List.filter (fun n -> n.Id = id1)
+    Assert.Equal(2, List.length dupes) // CURRENT behavior: duplicate active id
+    // And the invariant-dependent ops are now ambiguous: close removes BOTH.
+    let s4, was = NotificationStore.close id1 s3
+    Assert.True(was)
+    Assert.Empty(s4.Active)
+
+[<Fact>]
+let ``expire on an empty store returns empty and no removed ids`` () =
+    let s', removed = NotificationStore.expire 1000L NotificationStore.empty
+    Assert.Empty(removed)
+    Assert.Empty(s'.Active)
+
+[<Fact>]
+let ``expire with equal expiry returns both ids and keeps no survivors`` () =
+    let s0 = NotificationStore.empty
+    let s1, id1 = addN 0L 0u "a" 100 s0 // expires at 100
+    let s2, id2 = addN 0L 0u "b" 100 s1 // also expires at 100
+    let s3, removed = NotificationStore.expire 100L s2
+    // Both due; stable sort by equal key preserves their (newest-first) order.
+    Assert.Equal(2, List.length removed)
+    Assert.Equal<Set<uint32>>(Set.ofList [ id1; id2 ], Set.ofList removed)
+    Assert.Empty(s3.Active)
+
+[<Fact>]
+let ``partial expire keeps survivors in newest-first order`` () =
+    let s0 = NotificationStore.empty
+    let s1, idOld = addN 0L 0u "old" 0 s0    // never
+    let s2, idDue = addN 0L 0u "due" 50 s1   // expires at 50
+    let s3, idNew = addN 0L 0u "new" 0 s2    // never
+    let s4, removed = NotificationStore.expire 100L s3
+    Assert.Equal<uint32 list>([ idDue ], removed)
+    // Survivors retain newest-first (idNew before idOld), with the due one gone.
+    Assert.Equal<uint32 list>([ idNew; idOld ], s4.Active |> List.map (fun n -> n.Id))
+
+[<Fact>]
+let ``close removes ALL matching ids when duplicates exist`` () =
+    let s0 = NotificationStore.empty
+    let s1, id1 = addN 0L 0u "first" 0 s0
+    let s2 = { s1 with NextId = id1 } // force a collision
+    let s3, _ = addN 0L 0u "second" 0 s2
+    let s4, was = NotificationStore.close id1 s3
+    Assert.True(was)
+    Assert.Empty(s4.Active) // both copies gone
+
+[<Fact>]
+let ``replace resets CreatedMs to the new now and recomputes ExpiresAtMs`` () =
+    let s0 = NotificationStore.empty
+    let s1, id = addN 100L 0u "orig" 1000 s0 // created 100, expires 1100
+    Assert.Equal(100L, (NotificationStore.tryFind id s1).Value.CreatedMs)
+    // Replace at a later now with a new timeout.
+    let s2, idR = addN 500L id "edited" 250 s1
+    Assert.Equal(id, idR)
+    let n = (NotificationStore.tryFind id s2).Value
+    Assert.Equal(500L, n.CreatedMs)          // CreatedMs reset to new now
+    Assert.Equal(Some 750L, n.ExpiresAtMs)   // 500 + 250 recomputed
+    Assert.Equal("edited", n.Summary)
+
 // --- Properties ---
 
 [<Property>]

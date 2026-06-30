@@ -3,6 +3,13 @@ module WTF.Host.Bridge
 open System.Collections.Concurrent
 open System.Threading.Tasks
 
+/// Build a well-formed `{"error":"..."}` reply. Delegates string escaping to
+/// System.Text.Json so backslashes, newlines, tabs and other control chars are
+/// escaped per JSON (a naive quote-only replace produced INVALID JSON whenever an
+/// exception message contained e.g. a backslash path or an embedded newline).
+let internal errorJson (msg: string) : string =
+    sprintf """{"error":%s}""" (System.Text.Json.JsonSerializer.Serialize(msg: string))
+
 /// Marshal a request from any thread onto the compositor's event-loop thread.
 ///
 /// Threading model: the wlroots event loop is a single-threaded owner. All world
@@ -59,7 +66,7 @@ type LoopBridge() =
             try
                 reply.SetResult(handle line)
             with ex ->
-                reply.SetResult(sprintf """{"error":"%s"}""" (ex.Message.Replace("\"", "'")))
+                reply.SetResult(errorJson ex.Message)
 
     /// Loop thread only: run every queued fire-and-forget action.
     member _.DrainActions() : unit =
@@ -75,4 +82,4 @@ type LoopBridge() =
             try
                 reply.SetResult(action ())
             with ex ->
-                reply.SetResult(sprintf """{"error":"%s"}""" (ex.Message.Replace("\"", "'")))
+                reply.SetResult(errorJson ex.Message)

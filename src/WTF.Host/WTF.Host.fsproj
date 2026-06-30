@@ -55,6 +55,12 @@
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
   </ItemGroup>
 
+  <!-- Expose internal pure helpers (Wallpaper.expand/resizeModeOf/pushImage) to the
+       unit-test assembly so they can be covered without a compositor or native lib. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="WTF.Core.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- WTF.Core is the pure brain — always in the graph (JIT and AOT). -->
     <ProjectReference Include="..\WTF.Core\WTF.Core.fsproj" />

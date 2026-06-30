@@ -112,13 +112,19 @@ module Protocol =
     // --- command parsing ---
 
     let private str (o: JsonNode) (key: string) =
-        match o[key] with
+        // Total + hardened: indexing a non-object node (e.g. {"notify":42}) or a
+        // non-string value (e.g. {"eval":123}) yields None rather than throwing.
+        // parseRequest calls this OUTSIDE the generic `parse` try/with, so a
+        // hostile/malformed control-socket line must never crash the parser.
+        match (try o[key] with _ -> null) with
         | null -> None
-        | v -> Some(v.GetValue<string>())
+        | v -> (try Some(v.GetValue<string>()) with _ -> None)
 
     /// Parse "#rrggbb" / "rrggbb" / "#rgb" into (r, g, b) floats in 0..1.
     let hexColor (s: string) : (float * float * float) option =
-        let h = s.TrimStart('#')
+        // Strip at most ONE leading '#': "##fff" / "###ffffff" are rejected (their
+        // residual length is no longer 3 or 6) rather than silently parsed as white.
+        let h = if s.StartsWith "#" then s.Substring 1 else s
         let conv (hex: string) =
             float (System.Convert.ToInt32(hex, 16)) / 255.0
         try

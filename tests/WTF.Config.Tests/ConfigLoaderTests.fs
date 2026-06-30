@@ -114,3 +114,172 @@ let ``editing the config file fires the watcher with the new config`` () =
     match received.Value with
     | Some c -> Assert.Equal(73, c.Gaps)
     | None -> Assert.Fail "no config delivered"
+
+// --- stale-binding regression (persistent FSI session across reloads) -------
+
+[<Fact>]
+let ``a reload that removes the wtfConfig binding does NOT keep the stale value`` () =
+    // The FsiEvaluationSession is persistent: once `let wtfConfig = ...` lands, a
+    // later edit that RENAMES/removes the binding must not silently resolve to the
+    // previous session value. Two loads on ONE engine exercise the reuse path.
+    let path = writeTemp "let wtfConfig = config { gaps 5 }"
+    use engine = ConfigEngine.createForPath defaultCfg path
+    let first = engine.Load()
+    Assert.Equal(5, first.Gaps)                       // genuinely loaded the first time
+    File.WriteAllText(path, "let myConfig = config { gaps 9 }")   // renamed binding
+    let second = engine.Load()
+    File.Delete path
+    Assert.Equal("DEFAULT_MARKER", second.ModKey)     // fell back, did NOT return stale gaps=5
+    Assert.Equal(99, second.Gaps)
+
+[<Fact>]
+let ``a broken hot-reload edit never invokes the callback (keeps current config)`` () =
+    let path = writeTemp "let wtfConfig = config { gaps 5 }"
+    use engine = ConfigEngine.createForPath defaultCfg path
+    engine.Load() |> ignore
+    let received = ref None
+    engine.StartWatching(fun c -> received.Value <- Some c)
+    File.WriteAllText(path, "let wtfConfig = this is not valid F#")
+    System.Threading.Thread.Sleep 4000                // ample time for the debounced (failed) re-eval
+    File.Delete path
+    Assert.True(received.Value.IsNone, "callback must NOT fire on a broken edit")
+
+// --- graceful-fallback edge cases -------------------------------------------
+
+[<Fact>]
+let ``a wtfConfig bound to a non-WtfConfig value falls back to the default`` () =
+    let path = writeTemp "let wtfConfig = 5"
+    let cfg = load path
+    File.Delete path
+    Assert.Equal("DEFAULT_MARKER", cfg.ModKey)
+    Assert.Equal(99, cfg.Gaps)
+
+[<Fact>]
+let ``an empty config file falls back to the default`` () =
+    let path = writeTemp ""
+    let cfg = load path
+    File.Delete path
+    Assert.Equal("DEFAULT_MARKER", cfg.ModKey)
+    Assert.Equal(99, cfg.Gaps)
+
+[<Fact>]
+let ``a partial config loads for real with CE defaults for unspecified fields`` () =
+    let path = writeTemp "let wtfConfig = config { gaps 3 }"
+    let cfg = load path
+    File.Delete path
+    Assert.Equal(3, cfg.Gaps)                         // the field we set
+    Assert.Equal("Super", cfg.ModKey)                 // config{} CE default — proves it LOADED
+    Assert.NotEqual<string>("DEFAULT_MARKER", cfg.ModKey)   // ...not the injected fallback
+
+[<Fact>]
+let ``an infinite-loop config times out and falls back to the default`` () =
+    let prev = Environment.GetEnvironmentVariable "WTF_CONFIG_LOAD_TIMEOUT_MS"
+    Environment.SetEnvironmentVariable("WTF_CONFIG_LOAD_TIMEOUT_MS", "2000")
+    let path = writeTemp "let wtfConfig = config { gaps 5 }\nwhile true do System.Threading.Thread.Sleep 25"
+    try
+        use engine = ConfigEngine.createForPath defaultCfg path
+        let sw = System.Diagnostics.Stopwatch.StartNew()
+        let cfg = engine.Load()
+        sw.Stop()
+        Assert.Equal("DEFAULT_MARKER", cfg.ModKey)    // fell back rather than hanging
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds 20.0, "Load should have timed out, not hung")
+    finally
+        Environment.SetEnvironmentVariable("WTF_CONFIG_LOAD_TIMEOUT_MS", prev)
+        File.Delete path
+
+// --- live REPL eval: interaction / runtime-error / empty / persistence ------
+
+[<Fact>]
+let ``eval of a binding then a reference persists REPL state`` () =
+    use engine = ConfigEngine.createForPath defaultCfg (writeTemp "let wtfConfig = config { gaps 1 }")
+    match engine.Eval "let x = 5" with
+    | EvalText "ok" -> ()
+    | other -> Assert.Fail(sprintf "expected EvalText \"ok\", got %A" other)
+    match engine.Eval "x + 1" with
+    | EvalText "6" -> ()
+    | other -> Assert.Fail(sprintf "expected EvalText \"6\", got %A" other)
+
+[<Fact>]
+let ``eval of code that throws at runtime returns an error text`` () =
+    use engine = ConfigEngine.createForPath defaultCfg (writeTemp "let wtfConfig = config { gaps 1 }")
+    match engine.Eval "failwith \"boom\"" with
+    | EvalText t -> Assert.StartsWith("error:", t)
+    | other -> Assert.Fail(sprintf "expected EvalText error, got %A" other)
+
+[<Fact>]
+let ``eval of empty code is graceful`` () =
+    use engine = ConfigEngine.createForPath defaultCfg (writeTemp "let wtfConfig = config { gaps 1 }")
+    match engine.Eval "" with
+    | EvalText _ -> ()                                 // some text outcome, never throws
+    | other -> Assert.Fail(sprintf "expected EvalText, got %A" other)
+
+// --- use-after-dispose ------------------------------------------------------
+
+[<Fact>]
+let ``Eval and Load after Dispose are graceful (no throw, no hang)`` () =
+    let engine = ConfigEngine.createForPath defaultCfg (writeTemp "let wtfConfig = config { gaps 1 }")
+    engine.Load() |> ignore
+    engine.Dispose()
+    match engine.Eval "1 + 1" with                     // work queue completed -> graceful text
+    | EvalText _ -> ()
+    | other -> Assert.Fail(sprintf "expected EvalText, got %A" other)
+    Assert.Equal("DEFAULT_MARKER", (engine.Load()).ModKey)   // graceful fallback, returns promptly
+
+// --- StartWatching robustness -----------------------------------------------
+
+[<Fact>]
+let ``StartWatching on a non-existent config dir is a graceful no-op`` () =
+    let missingDir = Path.Combine(Path.GetTempPath(), "wtf-cfg-absent-" + Guid.NewGuid().ToString("N"))
+    let path = Path.Combine(missingDir, "config.fsx")
+    use engine = ConfigEngine.createForPath defaultCfg path
+    let ex = Record.Exception(fun () -> engine.StartWatching(fun _ -> ()))
+    Assert.Null(ex)
+
+[<Fact>]
+let ``a config file CREATED after StartWatching triggers a reload`` () =
+    let dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "wtf-cfg-watch-" + Guid.NewGuid().ToString("N"))).FullName
+    let path = Path.Combine(dir, "config.fsx")
+    use engine = ConfigEngine.createForPath defaultCfg path
+    engine.Load() |> ignore                            // file absent yet -> default
+    use latch = new System.Threading.ManualResetEventSlim(false)
+    let received = ref None
+    engine.StartWatching(fun c -> received.Value <- Some c; latch.Set())
+    File.WriteAllText(path, "let wtfConfig = config { gaps 21 }")
+    let fired = latch.Wait(TimeSpan.FromSeconds 15.0)
+    Directory.Delete(dir, true)
+    Assert.True(fired, "watcher did not fire on file creation within 15s")
+    match received.Value with
+    | Some c -> Assert.Equal(21, c.Gaps)
+    | None -> Assert.Fail "no config delivered"
+
+[<Fact>]
+let ``a burst of rapid writes is debounced into a single reload`` () =
+    let path = writeTemp "let wtfConfig = config { gaps 1 }"
+    use engine = ConfigEngine.createForPath defaultCfg path
+    engine.Load() |> ignore
+    use latch = new System.Threading.ManualResetEventSlim(false)
+    let count = ref 0
+    engine.StartWatching(fun _ ->
+        System.Threading.Interlocked.Increment(count) |> ignore
+        latch.Set())
+    for i in 1 .. 12 do                                // tight burst, well within the 200ms window
+        File.WriteAllText(path, sprintf "let wtfConfig = config { gaps %d }" i)
+    let fired = latch.Wait(TimeSpan.FromSeconds 15.0)
+    System.Threading.Thread.Sleep 1500                 // settle: ensure no second reload follows
+    File.Delete path
+    Assert.True(fired, "debounced reload never fired")
+    Assert.Equal(1, count.Value)
+
+// --- path resolution --------------------------------------------------------
+
+[<Fact>]
+let ``ConfigPath.resolve honours XDG_CONFIG_HOME and falls back to ~/.config`` () =
+    let prev = Environment.GetEnvironmentVariable "XDG_CONFIG_HOME"
+    try
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", "/xdg/here")
+        Assert.Equal(Path.Combine("/xdg/here", "wtf", "config.fsx"), ConfigPath.resolve ())
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", "")   // empty == unset
+        let home = Environment.GetFolderPath Environment.SpecialFolder.UserProfile
+        Assert.Equal(Path.Combine(home, ".config", "wtf", "config.fsx"), ConfigPath.resolve ())
+    finally
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", prev)

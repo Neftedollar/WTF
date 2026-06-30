@@ -1,0 +1,44 @@
+<!DOCTYPE node PUBLIC
+"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd" >
+<!-- Synthetic fixture exercising TP paths the real Accounts XML never touches:
+     multi-out methods (tuple return), default arg direction, struct/dict return
+     mapping, multi-arg signals, write/readwrite/missing property access, and an
+     empty interface. -->
+<node name="/">
+  <interface name="org.wtf.Fixtures">
+
+    <method name="TwoOut">
+      <arg name="a" direction="out" type="i"/>
+      <arg name="b" direction="out" type="s"/>
+    </method>
+
+    <!-- arg with NO direction attribute: must default to "in" -->
+    <method name="DefaultDir">
+      <arg name="x" type="i"/>
+    </method>
+
+    <method name="StructReturn">
+      <arg name="r" direction="out" type="(si)"/>
+    </method>
+
+    <method name="DictReturn">
+      <arg name="r" direction="out" type="a{sv}"/>
+    </method>
+
+    <signal name="MultiSig">
+      <arg name="a" type="i"/>
+      <arg name="b" type="s"/>
+    </signal>
+
+    <property name="Writable" type="s" access="write"/>
+    <property name="ReadWritable" type="b" access="readwrite"/>
+    <!-- property with NO access attribute: must map to "" -->
+    <property name="NoAccess" type="i"/>
+
+  </interface>
+
+  <!-- interface with zero members must still produce a usable provided type -->
+  <interface name="org.wtf.Empty">
+  </interface>
+</node>

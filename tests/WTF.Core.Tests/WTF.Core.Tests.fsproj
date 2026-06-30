@@ -8,6 +8,7 @@
   <ItemGroup>
     <Compile Include="StackTests.fs" />
     <Compile Include="GeometryTests.fs" />
+    <Compile Include="RectTests.fs" />
     <Compile Include="LayoutTests.fs" />
     <Compile Include="HistoryTests.fs" />
     <Compile Include="ReducerTests.fs" />
@@ -16,6 +17,11 @@
     <Compile Include="SessionTests.fs" />
     <Compile Include="ConfigTests.fs" />
     <Compile Include="FloatingTests.fs" />
+    <Compile Include="ChordTests.fs" />
+    <Compile Include="BridgeTests.fs" />
+    <Compile Include="IpcTests.fs" />
+    <Compile Include="SessionIOTests.fs" />
+    <Compile Include="WallpaperTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -28,6 +34,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\WTF.Core\WTF.Core.fsproj" />
+    <!-- The "host" review section: Chord / Bridge / Ipc / SessionIO / Wallpaper all
+         live in WTF.Host and were previously unreachable by any test. -->
+    <ProjectReference Include="..\..\src\WTF.Host\WTF.Host.fsproj" />
   </ItemGroup>
 
 </Project>

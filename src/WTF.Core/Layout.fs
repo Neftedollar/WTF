@@ -75,8 +75,10 @@ module Layout =
         let t (r: Rect) = { X = r.Y; Y = r.X; Width = r.Height; Height = r.Width }
         fun area s -> layout (t area) s |> List.map (fun (w, r) -> w, t r)
 
-    /// Reflect left<->right within the area.
-    let reflectHoriz (area0: Rect) (layout: Layout<'a>) : Layout<'a> =
+    /// Reflect left<->right within the area. The reflection bounds come from the
+    /// runtime `area` the layout is invoked with; the leading `_area0` parameter
+    /// is intentionally ignored (kept only for call-site shape / future wiring).
+    let reflectHoriz (_area0: Rect) (layout: Layout<'a>) : Layout<'a> =
         fun area s ->
             layout area s
             |> List.map (fun (w, r) ->

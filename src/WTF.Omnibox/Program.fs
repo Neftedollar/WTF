@@ -146,7 +146,10 @@ let private render (buf: nativeint) (w: int) (h: int) (stride: int) =
 
 // ---- keyboard ----------------------------------------------------------------
 let private isPrintable (cp: uint32) =
-    cp >= 0x20u && cp <> 0x7fu && cp < 0x110000u
+    // Exclude UTF-16 surrogate code points: Char.ConvertFromUtf32 throws on them,
+    // and this runs inside the reverse-P/Invoke `key` callback where an exception
+    // crossing the native boundary is undefined behaviour.
+    cp >= 0x20u && cp <> 0x7fu && cp < 0x110000u && not (cp >= 0xD800u && cp <= 0xDFFFu)
 
 let private key (keysym: uint32) (codepoint: uint32) =
     let h = handle.Value

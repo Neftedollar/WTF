@@ -39,9 +39,28 @@ type NotificationDaemon(agg: Aggregator) =
         for id in removed do
             raiseClosed id 1u
 
-    /// Start the expiry timer (called once, after the name is owned).
+    /// Run one expiry sweep synchronously: expire due notifications and emit
+    /// NotificationClosed(id, 1) for each, earliest-expiry first. The ~1s `Timer`
+    /// calls this; exposed so the expiry/emit path is deterministically testable
+    /// without waiting on (or owning) the timer.
+    member _.Tick() = tick ()
+
+    /// Start the expiry timer (called once, after the name is owned). Disposes any
+    /// prior timer so a double Start() doesn't leak one.
     member _.Start() =
+        match timer with
+        | null -> ()
+        | t -> t.Dispose()
         timer <- new Timer(TimerCallback(fun _ -> try tick () with _ -> ()), null, 1000, 1000)
+
+    interface IDisposable with
+        /// Stop and release the expiry timer.
+        member _.Dispose() =
+            match timer with
+            | null -> ()
+            | t ->
+                t.Dispose()
+                timer <- null
 
     /// Emit ActionInvoked — a future bar/omnibox calls this when the user clicks
     /// a notification action. Exposed now so the wiring is in place.
@@ -53,12 +72,17 @@ type NotificationDaemon(agg: Aggregator) =
 
     interface IFreedesktopNotifications with
         member _.NotifyAsync(appName, replacesId, appIcon, summary, body, actions, hints, expireTimeout) =
-            // actions[] is a flat [key, label, key, label, ...] array.
+            // actions[] is a flat [key, label, key, label, ...] array. A malformed
+            // client may deliver null instead of an empty array — degrade to no
+            // actions rather than throwing out of the Task.
             let acts =
-                [ let mutable i = 0
-                  while i + 1 < actions.Length do
-                      yield actions.[i], actions.[i + 1]
-                      i <- i + 2 ]
+                if isNull actions then
+                    []
+                else
+                    [ let mutable i = 0
+                      while i + 1 < actions.Length do
+                          yield actions.[i], actions.[i + 1]
+                          i <- i + 2 ]
             let urgency =
                 match hints with
                 | null -> None

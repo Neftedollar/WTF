@@ -161,6 +161,32 @@ type FsiConfigEngine(defaultConfig: WtfConfig, configPath: string) =
             with ex -> tcs.SetException ex)
         tcs.Task.Result
 
+    /// Like `runSync` but BOUNDED: returns `None` when the worker can't accept the
+    /// job (engine disposed — `work` completed) or when it doesn't finish within
+    /// `timeoutMs`. Used by `Load` so a pathological user config (an infinite loop
+    /// or a runaway compile) can't wedge startup forever — the WM ALWAYS starts
+    /// (it falls back to the built-in default on timeout).
+    let runSyncOpt (timeoutMs: int) (f: unit -> 'a) : 'a option =
+        let tcs = TaskCompletionSource<'a>()
+        let queued =
+            try
+                work.Add(fun () ->
+                    try tcs.SetResult(f ())
+                    with ex -> tcs.SetException ex)
+                true
+            with _ -> false
+        if not queued then None
+        elif tcs.Task.Wait(timeoutMs) then Some tcs.Task.Result
+        else None
+
+    /// Startup-load timeout (ms). Defaults to a generous 30s (no real config
+    /// compiles that long); overridable via WTF_CONFIG_LOAD_TIMEOUT_MS (tests use a
+    /// short value to exercise the infinite-loop fallback quickly).
+    let loadTimeoutMs () =
+        match Environment.GetEnvironmentVariable "WTF_CONFIG_LOAD_TIMEOUT_MS" with
+        | null | "" -> 30000
+        | s -> (match Int32.TryParse s with | true, v when v > 0 -> v | _ -> 30000)
+
     // The actual load/re-eval — runs ON the worker thread. Returns Ok config on
     // success, or Error message (so the caller distinguishes a real config from a
     // fallback: Load returns the default on Error; Reload KEEPS the current).
@@ -176,6 +202,15 @@ type FsiConfigEngine(defaultConfig: WtfConfig, configPath: string) =
             try
                 let s = ensureSession ()
                 clearWriters ()
+                // Invalidate any prior top-level `wtfConfig` binding BEFORE evaluating
+                // the new text. The FsiEvaluationSession is PERSISTENT across reloads:
+                // if a valid config bound `wtfConfig` once and the file is later edited
+                // to RENAME/REMOVE that binding (or the new text fails to compile after
+                // a prior success), the expression eval below would otherwise still
+                // resolve `wtfConfig` to the STALE previous value and return Ok(stale).
+                // Shadowing it with a null sentinel makes a removed/renamed binding read
+                // back as null => Error => Load falls back / hot-reload keeps current.
+                (try s.EvalInteractionNonThrowing "let wtfConfig : obj = null" |> ignore with _ -> ())
                 // Feed the file's TEXT to EvalInteraction (not EvalScript): a
                 // `#load`/EvalScript scopes the file's `let` bindings into a module
                 // named after the file, so `wtfConfig` would not be visible at the
@@ -257,9 +292,12 @@ type FsiConfigEngine(defaultConfig: WtfConfig, configPath: string) =
     interface IConfigEngine with
         member _.Load() =
             try
-                match runSync tryLoadResult with
-                | Ok c -> log (sprintf "loaded config from %s" configPath); c
-                | Error msg -> log (sprintf "%s — using built-in default config" msg); defaultConfig
+                match runSyncOpt (loadTimeoutMs ()) tryLoadResult with
+                | Some(Ok c) -> log (sprintf "loaded config from %s" configPath); c
+                | Some(Error msg) -> log (sprintf "%s — using built-in default config" msg); defaultConfig
+                | None ->
+                    log "config load timed out or worker unavailable — using built-in default config"
+                    defaultConfig
             with ex ->
                 log (sprintf "worker load failed: %s — using built-in default config" ex.Message)
                 defaultConfig
