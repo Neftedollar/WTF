@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
+#include <signal.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
 #include <wlr/render/allocator.h>
@@ -234,6 +235,12 @@ struct wtf_pointer {
  * loop is single-threaded, so plain globals are correct here. */
 static struct wtf_server server;
 static struct wtf_callbacks g_cb;
+
+/* Held for the graceful signal handler so it can break the run-loop without
+ * reaching into the (possibly half-built) server struct. Set after the display
+ * is created; cleared before teardown so a late SIGINT/SIGTERM cannot call
+ * wl_display_terminate on a being-destroyed display. */
+static struct wl_display *g_display = NULL;
 
 /* Cross-thread wakeup: an external thread (the F# IPC server) writes to this
  * eventfd via wtf_command_notify(); the event loop wakes and calls g_cb.drain()
@@ -1792,6 +1799,56 @@ void wtf_set_libinput_config(struct wtf_libinput_config cfg) {
 	}
 }
 
+/* GRACEFUL: SIGINT/SIGTERM. wl_display_terminate just clears display->run; the
+ * EINTR from this signal breaks wl_event_loop's poll so wl_display_run returns
+ * and the NORMAL teardown (incl. wlr_backend_destroy => DRM master drop + VT
+ * restore) runs. Only an async-signal-safe flag-clear is performed here. */
+static void handle_graceful_signal(int signo) {
+	(void)signo;
+	if (g_display != NULL) {
+		wl_display_terminate(g_display);
+	}
+}
+
+/* FATAL: SIGSEGV/SIGABRT/SIGFPE/SIGILL/SIGBUS. Async-signal-safe ONLY: write(2),
+ * then re-raise to core-dump. NO wlr_*, NO stdio, NO malloc. Real VT/console
+ * recovery is the wrapper script (scripts/wtf-session). */
+static void handle_fatal_signal(int signo) {
+	static const char msg[] =
+		"\nWTF: FATAL signal in compositor - crashing; "
+		"wtf-session will restore the console.\n";
+	ssize_t n = write(STDERR_FILENO, msg, sizeof(msg) - 1);
+	(void)n;        /* stderr is redirected to the rotating log by the wrapper,
+	                   so this single write covers both stderr and the log. */
+	raise(signo);   /* SA_RESETHAND already restored SIG_DFL => re-delivers the
+	                   original signal and core-dumps normally. */
+}
+
+/* Install the graceful + fatal handlers via sigaction (not signal()). Called
+ * once from wtf_run after g_display is set and before wl_display_run. */
+static void install_signal_handlers(void) {
+	struct sigaction sa_term = {0};
+	sa_term.sa_handler = handle_graceful_signal;
+	sigemptyset(&sa_term.sa_mask);
+	sa_term.sa_flags = 0;   /* CRITICAL: NO SA_RESTART. wl_display_terminate does
+	                           not wake poll(); we rely on the signal's EINTR to
+	                           break poll so the run-loop re-checks display->run.
+	                           SA_RESTART would hang the WM on shutdown. */
+	sigaction(SIGINT, &sa_term, NULL);
+	sigaction(SIGTERM, &sa_term, NULL);
+
+	struct sigaction sa_fatal = {0};
+	sa_fatal.sa_handler = handle_fatal_signal;
+	sigemptyset(&sa_fatal.sa_mask);
+	sa_fatal.sa_flags = SA_RESETHAND | SA_NODEFER; /* auto-reset to SIG_DFL before
+	                           entry; raise() then core-dumps. */
+	sigaction(SIGSEGV, &sa_fatal, NULL);
+	sigaction(SIGABRT, &sa_fatal, NULL);
+	sigaction(SIGFPE, &sa_fatal, NULL);
+	sigaction(SIGILL, &sa_fatal, NULL);
+	sigaction(SIGBUS, &sa_fatal, NULL);
+}
+
 int wtf_run(struct wtf_callbacks cbs) {
 	g_cb = cbs;
 
@@ -1801,6 +1858,7 @@ int wtf_run(struct wtf_callbacks cbs) {
 	server.next_id = 0;
 
 	server.wl_display = wl_display_create();
+	g_display = server.wl_display;
 	server.backend = wlr_backend_autocreate(
 		wl_display_get_event_loop(server.wl_display), NULL);
 	if (server.backend == NULL) {
@@ -1942,12 +2000,25 @@ int wtf_run(struct wtf_callbacks cbs) {
 			g_cmd_fd, WL_EVENT_READABLE, handle_cmd_fd, NULL);
 	}
 
+	/* Install signal handlers before the run-loop (and before startup-app spawn)
+	 * so SIGINT/SIGTERM run the clean teardown that releases the DRM master and
+	 * a fatal fault is logged + core-dumped rather than freezing the screen. */
+	install_signal_handlers();
+
 	/* Compositor is live — let the brain spawn its startup clients into it. */
 	if (g_cb.ready) {
 		g_cb.ready();
 	}
 
 	wl_display_run(server.wl_display);
+
+	/* The run-loop has returned: reset the graceful handlers to default and clear
+	 * g_display so a late SIGINT/SIGTERM during teardown cannot call
+	 * wl_display_terminate on a being-destroyed display. signal() is
+	 * async-signal-safe and fine here on the normal path. */
+	signal(SIGINT, SIG_DFL);
+	signal(SIGTERM, SIG_DFL);
+	g_display = NULL;
 
 	/* Teardown. */
 	if (server.xwayland != NULL) {

@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# wtf-session — the session wrapper the display manager launches instead of the
+# raw WTF host. It guarantees the user is never stuck at a frozen/black screen:
+#
+#   - captures the host's stdout+stderr to a rotating log under
+#     $XDG_STATE_HOME/wtf (default ~/.local/state/wtf),
+#   - restores the console on EVERY exit (kbd_mode -s / stty sane / clear),
+#   - bounded restart loop (3 restarts within 10s) on abnormal exit,
+#   - escalates to safe-mode (WTF_SAFE_MODE=1) for one more try,
+#   - then drops to a terminal or $SHELL as a last-resort escape hatch.
+#
+# Strict: set -u (NOT -e — the host return code is managed explicitly). Every
+# external command is guarded with `command -v`.
+
+set -u
+
+HOST="${WTF_HOST:-/usr/local/bin/wtf}"
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/wtf"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+if command -v date >/dev/null 2>&1; then
+	STAMP="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo unknown)"
+else
+	STAMP="unknown"
+fi
+LOG="$STATE_DIR/session-$STAMP.log"
+
+log() {
+	if command -v date >/dev/null 2>&1; then
+		printf '[%s] %s\n' "$(date +%H:%M:%S 2>/dev/null || echo '--:--:--')" "$*" >>"$LOG" 2>/dev/null || true
+	else
+		printf '%s\n' "$*" >>"$LOG" 2>/dev/null || true
+	fi
+}
+
+# Keep only the newest ~10 session logs.
+prune_logs() {
+	if ! command -v find >/dev/null 2>&1; then
+		return 0
+	fi
+	if ! command -v sort >/dev/null 2>&1; then
+		return 0
+	fi
+	find "$STATE_DIR" -maxdepth 1 -type f -name 'session-*.log' -printf '%T@ %p\n' 2>/dev/null \
+		| sort -n \
+		| head -n -10 \
+		| cut -d' ' -f2- \
+		| while IFS= read -r old; do
+			rm -f -- "$old" 2>/dev/null || true
+		done
+}
+
+# restore_console — idempotent; runs on EVERY exit so the user is never wedged.
+# Each step is guarded by command -v and swallows errors (harmless on a pty).
+restore_console() {
+	if command -v kbd_mode >/dev/null 2>&1; then
+		kbd_mode -s 2>/dev/null || true        # raw -> XLATE
+	fi
+	if command -v stty >/dev/null 2>&1; then
+		stty sane 2>/dev/null || true          # line discipline on controlling tty
+	fi
+	if command -v clear >/dev/null 2>&1; then
+		clear 2>/dev/null || true              # repaint
+	fi
+	# chvt deliberately NOT executed: a wrong VT switch can worsen a wedge.
+	# If ever needed, it would go here, guarded:
+	#   if command -v chvt >/dev/null 2>&1; then chvt 1 2>/dev/null || true; fi
+}
+
+# Restore on normal exit and on explicit `exit`. A session-manager SIGTERM
+# becomes a clean wrapper exit (0) that still runs the EXIT restore; the host
+# runs in the FOREGROUND so it receives the same SIGTERM, runs its own graceful
+# teardown (DRM released) and returns before the wrapper proceeds — no race.
+trap restore_console EXIT
+trap 'exit 0' INT TERM
+
+run_fallback() {
+	restore_console
+	log "entering fallback (terminal or shell)"
+	for term in foot kitty alacritty xterm; do
+		if command -v "$term" >/dev/null 2>&1; then
+			exec "$term"
+		fi
+	done
+	printf 'WTF failed; see %s. Dropping to a shell.\n' "$LOG" >&2
+	exec "${SHELL:-/bin/sh}"
+}
+
+prune_logs
+log "wtf-session starting; host=$HOST"
+
+MAX_RESTARTS=3
+WINDOW=10
+attempts=0
+if command -v date >/dev/null 2>&1; then
+	window_start="$(date +%s 2>/dev/null || echo 0)"
+else
+	window_start=0
+fi
+
+while true; do
+	if [ ! -x "$HOST" ]; then
+		log "host not executable: $HOST"
+		printf 'WTF host not found at %s\n' "$HOST" >&2
+		run_fallback
+	fi
+
+	log "launching host (attempt window count=$attempts)"
+	"$HOST" >>"$LOG" 2>&1
+	rc=$?
+	restore_console
+	log "host exited rc=$rc"
+
+	if [ "$rc" -eq 0 ]; then
+		log "clean exit — leaving"
+		exit 0
+	fi
+
+	# Sliding-window restart accounting.
+	if command -v date >/dev/null 2>&1; then
+		now="$(date +%s 2>/dev/null || echo 0)"
+	else
+		now=0
+	fi
+	if [ "$((now - window_start))" -gt "$WINDOW" ]; then
+		attempts=0
+		window_start="$now"
+	fi
+	attempts="$((attempts + 1))"
+
+	if [ "$attempts" -le "$MAX_RESTARTS" ]; then
+		log "abnormal exit — restart $attempts/$MAX_RESTARTS"
+		continue
+	fi
+
+	# Cap exceeded: one escalation attempt in safe-mode.
+	log "restart cap exceeded — escalating to WTF_SAFE_MODE=1"
+	if [ ! -x "$HOST" ]; then
+		log "host not executable for safe-mode: $HOST"
+		run_fallback
+	fi
+	WTF_SAFE_MODE=1 "$HOST" >>"$LOG" 2>&1
+	rc=$?
+	restore_console
+	log "safe-mode host exited rc=$rc"
+	if [ "$rc" -eq 0 ]; then
+		exit 0
+	fi
+	break
+done
+
+run_fallback

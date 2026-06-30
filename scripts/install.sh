@@ -48,6 +48,12 @@ export LD_LIBRARY_PATH="$PREFIX/lib/wtf:\${LD_LIBRARY_PATH:-}"
 exec "$PREFIX/lib/wtf/WTF.Host" "\$@"
 EOF
 chmod 755 "$BINWTF/wtf"
+# session wrapper (what the .desktop launches): captures a log, restores the
+# console on every exit, bounded restart loop, safe-mode escalation, fallback.
+# Its default WTF_HOST is /usr/local/bin/wtf == the launcher written just above.
+install -Dm755 scripts/wtf-session "$BINWTF/wtf-session"
+# TTY smoke test the user can run from a free VT to verify DRM/KMS startup.
+install -Dm755 scripts/smoke-drm.sh "$BINWTF/wtf-smoke-drm"
 install -Dm644 packaging/wtf.desktop "$SESS/wtf.desktop"
 
 echo ">> 4/5  copying into / (needs root)"

@@ -197,13 +197,23 @@ let private handleOnLoop (line: string) : string =
 let onDrain () : unit = bridge.Drain handleOnLoop
 
 let onReady () : unit =
+    // Safe-mode (WTF_SAFE_MODE=1): the session wrapper escalates here after a
+    // crash loop. Force a minimal known-good appearance and skip startup apps so
+    // a flaky GPU/driver or a heavy rice config cannot compound a crash loop.
+    let safeMode = (System.Environment.GetEnvironmentVariable "WTF_SAFE_MODE" = "1")
+    if safeMode then
+        eprintfn "WTF: SAFE MODE active (WTF_SAFE_MODE=1) — minimal appearance, startup apps skipped"
     // The compositor is live; open the agent door and launch startup clients so
     // you see tiled windows immediately instead of an empty output.
     let submit line = bridge.Submit(Ffi.wtf_command_notify, line)
     let path = Ipc.start submit
-    // Push the configured appearance into the renderer.
-    Ffi.wtf_set_inactive_opacity cfg.InactiveOpacity
-    Ffi.wtf_set_anim_speed cfg.AnimSpeed
+    // Push the configured appearance into the renderer (forced minimal in safe mode).
+    let inactiveOpacity = if safeMode then 1.0 else cfg.InactiveOpacity
+    let animSpeed       = if safeMode then 1.0 else cfg.AnimSpeed      // 1.0 = instant
+    let cornerRadius    = if safeMode then 0   else cfg.CornerRadius
+    let blurOn          = if safeMode then false else cfg.Blur
+    Ffi.wtf_set_inactive_opacity inactiveOpacity
+    Ffi.wtf_set_anim_speed animSpeed
     Ffi.wtf_set_border_width cfg.BorderWidth
     let border active hex =
         match Protocol.hexColor hex with
@@ -211,8 +221,8 @@ let onReady () : unit =
         | None -> ()
     border true cfg.ActiveBorder
     border false cfg.InactiveBorder
-    Ffi.wtf_set_corner_radius cfg.CornerRadius
-    Ffi.wtf_set_blur ((if cfg.Blur then 1 else 0), 0, 0)
+    Ffi.wtf_set_corner_radius cornerRadius
+    Ffi.wtf_set_blur ((if blurOn then 1 else 0), 0, 0)
     // Push the configured input devices: keyboard xkb/repeat + libinput knobs.
     // Empty xkb fields stay "" — the C side converts those to NULL for xkb defaults.
     let kb = cfg.Input.Keyboard
@@ -260,8 +270,11 @@ let onReady () : unit =
         history <- History.create cfg.HistoryLimit world
     | None -> ()
     eprintfn "WTF: ready — agent socket at %s — spawning startup: %A" path cfg.StartupApps
-    for app in cfg.StartupApps do
-        Ffi.wtf_spawn app
+    if safeMode then
+        eprintfn "WTF: safe mode — skipping %d startup app(s)" cfg.StartupApps.Length
+    else
+        for app in cfg.StartupApps do
+            Ffi.wtf_spawn app
 
 // ---- entry point ----
 [<EntryPoint>]
