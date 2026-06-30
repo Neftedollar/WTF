@@ -314,11 +314,21 @@ let private dispatch (cmd: Command) : unit =
             resync w'
         | None -> ()
     | _ ->
+        let prevFocus = World.focusedWindow world
         let w', effects = Reducer.apply cmd world
         if Reducer.isUndoable cmd && w' <> world then
             history <- History.push w' history
         world <- w'
         applyEffects effects
+        // A command that MOVED the focus (Focus/FocusMaster/Swap*/CloseFocused/
+        // workspace switch) must sync the compositor's keyboard focus + active
+        // styling: applyEffects only re-tiles (Arrange), it does NOT move seat
+        // focus, so without this a keyboard `Focus NextWindow` wouldn't actually
+        // switch which window has keyboard input or the active border. The C-side
+        // view_focus echo is guarded (no loop).
+        let newFocus = World.focusedWindow world
+        if newFocus <> prevFocus then
+            newFocus |> Option.iter Ffi.wtf_focus
         restyleWindows world
 
 // ---- callbacks invoked by the C compositor (C -> F#) ----
