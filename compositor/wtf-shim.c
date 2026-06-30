@@ -682,9 +682,27 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 
 	/* Translate libinput keycode -> xkbcommon. */
 	uint32_t keycode = event->keycode + 8;
+
+	/* Keybindings are matched in the FIRST configured xkb layout (group 0),
+	 * NOT the active group. With layout "us,ru", switching to the ru group
+	 * makes xkb_state_key_get_syms return Cyrillic keysyms (Cyrillic_o, ...)
+	 * which the F# chord table (US a-z / digits / named keys) can't name, so
+	 * EVERY WM binding (Super+j, Super+Return, ...) would die while ru is the
+	 * active layout. Querying group 0 at the CURRENT shift level yields the
+	 * US keysym regardless of the active group, so the binds work in any
+	 * layout. Clients still receive the raw keycode below and do their own
+	 * active-group translation, so typing Cyrillic into apps is unaffected.
+	 * Falls back to the active-group syms if the keymap can't be queried. */
+	struct xkb_state *xkb_state = keyboard->wlr_keyboard->xkb_state;
+	struct xkb_keymap *keymap = xkb_state_get_keymap(xkb_state);
 	const xkb_keysym_t *syms;
-	int nsyms = xkb_state_key_get_syms(
-		keyboard->wlr_keyboard->xkb_state, keycode, &syms);
+	int nsyms;
+	if (keymap != NULL && xkb_keymap_num_layouts_for_key(keymap, keycode) > 0) {
+		xkb_level_index_t level = xkb_state_key_get_level(xkb_state, keycode, 0);
+		nsyms = xkb_keymap_key_get_syms_by_level(keymap, keycode, 0, level, &syms);
+	} else {
+		nsyms = xkb_state_key_get_syms(xkb_state, keycode, &syms);
+	}
 
 	bool handled = false;
 	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
