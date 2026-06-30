@@ -137,6 +137,20 @@ the .NET SDK. It drops a `wtf` launcher + `wtfctl` in `/usr/local/bin`, the shim
 `/usr/local/lib/wtf`, a session file in `/usr/share/wayland-sessions`, and seeds
 `~/.config/wtf/config.fsx`.
 
+### NativeAOT build (lean, fast-starting native binary)
+
+An additive `-p:WtfAot=true` flavor compiles a small native binary (no 76 MB .NET
+payload) by dropping the reflection/JIT-only subsystems (config.fsx hot-reload,
+plugins, D-Bus desktop shell, LLM agent) and shipping the lean core WM with the
+built-in config — recompile to reconfigure, xMonad-style.
+
+```
+dotnet build src/WTF.Host/WTF.Host.fsproj -c Release -p:WtfAot=true  # lean graph (no clang)
+bash scripts/aot-publish.sh                                          # native binary (needs clang)
+```
+
+See [docs/AOT.md](docs/AOT.md) for the full feature matrix and the clang prerequisite.
+
 ## Layout / build
 
 ```

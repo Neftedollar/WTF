@@ -3,10 +3,23 @@ module WTF.Host.Program
 open System
 open System.Runtime.InteropServices
 open WTF.Core
+// The four reflection/JIT-only subsystems are referenced ONLY in the default (JIT)
+// build. Under -p:WtfAot=true their projects are dropped from the graph and the
+// matching WTF_NO_* symbols are defined, so these opens (and every call below that
+// touches them) are #if-gated to graceful no-ops. WtfConfig/config{}/keymap/manage/
+// AgentTools/Protocol all live in WTF.Core and STAY in both builds. See docs/AOT.md.
+#if !WTF_NO_FCS
 open WTF.Config
+#endif
+#if !WTF_NO_PLUGINS
 open WTF.Plugins
+#endif
+#if !WTF_NO_DESKTOP
 open WTF.Desktop
+#endif
+#if !WTF_NO_AGENT
 open WTF.Agent
+#endif
 
 // ---- the default configuration (xMonad-style, in F#) ----
 // Per-workspace switch/move binds, generated for tags 1..9.
@@ -75,8 +88,79 @@ let mutable cfg = defaultConfig
 // thread). Created in `main`; held module-wide so `onReady` can start the
 // hot-reload watcher and the socket handler can route {"eval"} REPL requests to
 // the SAME worker thread. `Unchecked.defaultof` until `main` assigns it (nothing
-// reads it before then).
+// reads it before then). AOT build: the engine type lives in WTF.Config (dropped
+// from the graph), so the field and every use of it is gated; config is the
+// built-in `defaultConfig` (recompile-to-reconfigure, xMonad-style).
+#if !WTF_NO_FCS
 let mutable private configEngine : IConfigEngine = Unchecked.defaultof<_>
+#endif
+
+// ---- guarded host-local subsystem shims (the ONLY place gating lives) ----
+// Each has a JIT body (calls the real subsystem) and an AOT no-op/fallback body,
+// so the rest of Program.fs is byte-for-byte identical across both builds.
+
+/// Load the live config: JIT evaluates ~/.config/wtf/config.fsx via FCS; the AOT
+/// build has no FCS in the graph, so it returns the built-in default.
+let private loadConfig () : WtfConfig =
+#if WTF_NO_FCS
+    defaultConfig
+#else
+    configEngine.Load()
+#endif
+
+/// Start the config.fsx hot-reload watcher (JIT) / no-op (AOT — no FCS).
+let private startWatching (cb: WtfConfig -> unit) : unit =
+#if !WTF_NO_FCS
+    configEngine.StartWatching(cb)
+#else
+    ignore cb
+#endif
+
+/// The live D-Bus desktop-shell snapshot spliced under "desktop" (JIT) / None (AOT).
+let private desktopSnapshot () : System.Text.Json.Nodes.JsonObject option =
+#if WTF_NO_DESKTOP
+    None
+#else
+    Some(Desktop.snapshotJson ())
+#endif
+
+/// Inject a notification through our own D-Bus daemon (JIT) / no-op (AOT).
+let private desktopNotify (summary: string) (body: string) : unit =
+#if WTF_NO_DESKTOP
+    ignore (summary, body)
+#else
+    Desktop.notify summary body
+#endif
+
+/// Become the D-Bus desktop shell (JIT) / no-op (AOT — no Tmds.DBus).
+let private desktopStart () : unit =
+#if !WTF_NO_DESKTOP
+    Desktop.start ()
+#else
+    ()
+#endif
+
+/// Recognize + drive an XF86Audio* media keysym (JIT); AOT has no D-Bus/MPRIS so
+/// media keys fall through to the chord path. Returns true if handled.
+let private tryHandleMedia (sym: uint32) : bool =
+#if WTF_NO_DESKTOP
+    ignore sym
+    false
+#else
+    match Models.MediaKey.ofKeysym sym with
+    | Some action ->
+        Desktop.sendMedia action
+        true
+    | None -> false
+#endif
+
+/// Load reflective layout plugins (JIT) / no-op (AOT — no AssemblyLoadContext path).
+let private loadPlugins () : unit =
+#if !WTF_NO_PLUGINS
+    (PluginLoader.create ()).LoadAll()
+#else
+    ()
+#endif
 
 // ---- mutable world (the event loop is single-threaded, so this is safe) ----
 let mutable world = { World.empty (Rect.create 0 0 1280 720) with Gaps = cfg.Gaps }
@@ -189,11 +273,9 @@ let onKey (mods: uint32) (sym: uint32) : int =
     // anyway): transport keys drive the active MPRIS player, volume/mute shell
     // out to wpctl/pactl. Desktop.sendMedia is non-blocking (fires a task), so
     // the single-threaded loop never stalls. Returns 1 = handled.
-    match Models.MediaKey.ofKeysym sym with
-    | Some action ->
-        Desktop.sendMedia action
+    if tryHandleMedia sym then
         1
-    | None ->
+    else
     match Chord.format mods sym with
     | Some "M-S-q" ->
         SessionIO.save world // persist the session before tearing down
@@ -227,7 +309,7 @@ let private bridge = Bridge.LoopBridge()
 let private handleOnLoop (line: string) : string =
     // Additive: splice the live D-Bus desktop-shell state under "desktop" so the
     // agent/bar can read notifications + battery/network/players too.
-    let desktop = Some(Desktop.snapshotJson ())
+    let desktop = desktopSnapshot ()
     match Protocol.parseRequest line with
     | Some Protocol.Query -> Protocol.snapshotLineWith desktop world
     | Some (Protocol.Act cmd) ->
@@ -240,8 +322,8 @@ let private handleOnLoop (line: string) : string =
     // the Aggregator), then reply with a fresh snapshot so the caller sees it land
     // under "desktop".
     | Some (Protocol.Notify (summary, body)) ->
-        Desktop.notify summary body
-        Protocol.snapshotLineWith (Some(Desktop.snapshotJson ())) world
+        desktopNotify summary body
+        Protocol.snapshotLineWith (desktopSnapshot ()) world
     // Opt-in in-process LLM brain. The real (async, off-loop) wiring lands in the
     // next step; until a Brain is constructed it is gracefully disabled.
     | Some (Protocol.Ask _) -> """{"error":"agent disabled (set ANTHROPIC_API_KEY)"}"""
@@ -341,6 +423,30 @@ let applyConfigReload (newCfg: WtfConfig) : unit =
     applyEffects [ Arrange(World.arrange world) ]
     eprintfn "WTF: config reloaded (mod=%s, %d keybinds)" cfg.ModKey cfg.Keys.Length
 
+/// Handle an {"eval":"<code>"} socket request. JIT: routes the code to the FSI
+/// worker via the config engine, marshalling any produced config/commands back
+/// onto the loop thread through the bridge. AOT: FCS is not in the graph, so the
+/// verb is gracefully unavailable. Module-level (sees bridge/applyConfigReload/
+/// dispatch/configEngine) so the gating stays out of onReady's body.
+let private handleEval (code: string) : string =
+#if WTF_NO_FCS
+    ignore code
+    """{"error":"config eval unavailable (AOT build — recompile to reconfigure)"}"""
+#else
+    let jsonReply (key: string) (value: string) : string =
+        let o = System.Text.Json.Nodes.JsonObject()
+        o[key] <- System.Text.Json.Nodes.JsonValue.Create value
+        o.ToJsonString()
+    match configEngine.Eval code with
+    | EvalConfig c ->
+        bridge.Post(Ffi.wtf_command_notify, fun () -> applyConfigReload c)
+        jsonReply "ok" "config hot-applied"
+    | EvalCommands cmds ->
+        bridge.Post(Ffi.wtf_command_notify, fun () -> cmds |> List.iter dispatch)
+        jsonReply "ok" (sprintf "dispatched %d command(s)" cmds.Length)
+    | EvalText t -> jsonReply "result" t
+#endif
+
 let onReady () : unit =
     // Safe-mode (WTF_SAFE_MODE=1): the session wrapper escalates here after a
     // crash loop. Force a minimal known-good appearance and skip startup apps so
@@ -368,57 +474,58 @@ let onReady () : unit =
     // (the only safe way to touch World/wlroots), returning a fresh snapshot; a
     // Notify drives the thread-safe daemon directly. The (async, slow) Brain.ask
     // itself runs on THIS per-client serving thread, never the loop/accept thread.
+#if !WTF_NO_AGENT
     let agentDispatch (call: AgentTools.ToolCall) : string =
         match call with
         | AgentTools.ToCommand cmd ->
             bridge.Call(Ffi.wtf_command_notify, fun () ->
                 dispatch cmd
-                Protocol.snapshotLineWith (Some(Desktop.snapshotJson ())) world)
+                Protocol.snapshotLineWith (desktopSnapshot ()) world)
         | AgentTools.ToNotify (summary, body) ->
-            Desktop.notify summary body
+            desktopNotify summary body
             """{"ok":"notified"}"""
     let brain = Brain.tryCreate agentDispatch
+#endif
     let handle (line: string) : string =
         match Protocol.parseRequest line with
-        | Some (Protocol.Eval code) ->
-            match configEngine.Eval code with
-            | EvalConfig c ->
-                bridge.Post(Ffi.wtf_command_notify, fun () -> applyConfigReload c)
-                jsonReply "ok" "config hot-applied"
-            | EvalCommands cmds ->
-                bridge.Post(Ffi.wtf_command_notify, fun () -> cmds |> List.iter dispatch)
-                jsonReply "ok" (sprintf "dispatched %d command(s)" cmds.Length)
-            | EvalText t -> jsonReply "result" t
+        | Some (Protocol.Eval code) -> handleEval code
         // The natural-language door. Runs the async LLM call on THIS serving thread
         // (off the loop): build the World+desktop snapshot context on the loop
         // thread, then let the brain drive the curated tools. Graceful when the
-        // brain is disabled (no key).
+        // brain is disabled (no key). AOT: WTF.Agent is dropped from the graph, so
+        // the verb is statically disabled.
         | Some (Protocol.Ask nl) ->
+#if WTF_NO_AGENT
+            ignore nl
+            """{"error":"agent disabled (AOT build)"}"""
+#else
             match brain with
             | None -> """{"error":"agent disabled (set ANTHROPIC_API_KEY)"}"""
             | Some b ->
                 try
                     let snapshot =
                         bridge.Call(Ffi.wtf_command_notify, fun () ->
-                            Protocol.snapshotLineWith (Some(Desktop.snapshotJson ())) world)
+                            Protocol.snapshotLineWith (desktopSnapshot ()) world)
                     jsonReply "reply" ((b.Ask snapshot nl).Result)
                 with ex ->
                     jsonReply "error" (sprintf "agent failed: %s" ex.Message)
+#endif
         | _ -> bridge.Submit(Ffi.wtf_command_notify, line)
     let path = Ipc.start handle
     // Be the desktop shell natively over D-Bus (notification daemon + logind /
     // UPower / MPRIS / NetworkManager clients). FIRE-AND-FORGET and best-effort:
     // it returns immediately and never blocks/crashes startup (no bus / name
     // taken / failure => degrade with a log). Started here, where the session bus
-    // is available, alongside Ipc.start.
-    Desktop.start ()
+    // is available, alongside Ipc.start. AOT: no-op (no Tmds.DBus in the graph).
+    desktopStart ()
     // Push the configured appearance/input/wallpaper (the reusable seam).
     applyConfig cfg
     // Start watching ~/.config/wtf/config.fsx for live hot-reload. A successful
     // re-eval (on the FSI worker thread) marshals the new config onto the loop
     // thread via the bridge; a broken edit is logged and the running config kept.
     // Skipped in safe mode (the Null engine's StartWatching is a no-op anyway).
-    configEngine.StartWatching(fun newCfg ->
+    // AOT: no-op (no FCS in the graph).
+    startWatching (fun newCfg ->
         bridge.Post(Ffi.wtf_command_notify, fun () -> applyConfigReload newCfg))
     // Restore saved settings (current tag, nmaster, ratio, gaps, per-workspace
     // layouts). Settings-only: the saved window set is dropped, since a fresh
@@ -444,10 +551,13 @@ let main _argv =
     // yet). Graceful: a missing/broken config returns `defaultConfig`, so the WM
     // ALWAYS starts. WTF_SAFE_MODE bypasses the user file entirely (the engine
     // factory returns a no-op engine). Held for the whole run (its worker thread
-    // serves future hot-reload/REPL eval).
+    // serves future hot-reload/REPL eval). AOT: no FCS engine — loadConfig returns
+    // the built-in default (recompile to reconfigure, xMonad-style).
+#if !WTF_NO_FCS
     configEngine <- ConfigEngine.create defaultConfig
+#endif
     eprintfn "WTF: loading config..."
-    cfg <- configEngine.Load()
+    cfg <- loadConfig ()
     // Fold the loaded gaps into the world and re-base history (the module-init
     // bindings above used the default config's values).
     world <- { world with Gaps = cfg.Gaps }
@@ -461,10 +571,21 @@ let main _argv =
     // GRACEFUL: LoadAll never throws — a bad/incompatible plugin logs + is skipped.
     // The factory no-ops under WTF_SAFE_MODE (built-in layouts only) and WTF_NO_PLUGINS
     // (the AOT build), so this single call is correct in every build/mode.
-    (PluginLoader.create ()).LoadAll()
+    loadPlugins ()
 
     // Root the delegates for the whole run so the GC can't collect them while
     // the C side holds their function pointers.
+    //
+    // AOT NOTE (verified-pending-ILC): these six C->F# callbacks use concrete,
+    // non-generic delegate types + Marshal.GetFunctionPointerForDelegate, rooted by
+    // the `let d* = ...` bindings across wtf_run + GC.KeepAlive below. This is
+    // NativeAOT-compatible: ILC synthesizes the reverse-pinvoke marshalling thunk at
+    // COMPILE time because every delegate type is statically known/instantiated (no
+    // dynamic code, so no IL3050), and all signatures are blittable (int/uint32/
+    // nativeint/double, no string/array marshalling in the ABI). [<UnmanagedCallersOnly>]
+    // would shave one thunk per event but is fragile in F# (no clean &Method /
+    // delegate*<> managed-function-pointer syntax), so the delegates are kept by
+    // design. Finally confirmed only by the ILC pass during PublishAot.
     let dMap = Ffi.ViewMapDelegate(onViewMap)
     let dUnmap = Ffi.ViewUnmapDelegate(onViewUnmap)
     let dKey = Ffi.KeyDelegate(onKey)
@@ -489,5 +610,7 @@ let main _argv =
     GC.KeepAlive dResize
     GC.KeepAlive dReady
     GC.KeepAlive dDrain
+#if !WTF_NO_FCS
     GC.KeepAlive configEngine
+#endif
     rc

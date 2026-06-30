@@ -5,6 +5,42 @@
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
 
+  <!-- ============================ AOT story (#15) ============================
+       The DEFAULT (no flag) build is the full JIT WM: every feature, every
+       ProjectReference, byte-for-byte unchanged. A `-p:WtfAot=true` build is an
+       ADDITIVE lean flavor: it drops the reflection/JIT-only projects from the
+       dependency graph (WTF.Config/FCS, WTF.Plugins, WTF.Desktop/Tmds.DBus,
+       WTF.Agent/Extensions.AI) and defines WTF_NO_* so the host startup calls to
+       those subsystems compile to graceful no-ops. The lean graph == WTF.Core +
+       WTF.Host(+ImageSharp) + the C shim. See docs/AOT.md. -->
+  <PropertyGroup Condition="'$(WtfAot)' == 'true'">
+    <DefineConstants>$(DefineConstants);WTF_NO_FCS;WTF_NO_PLUGINS;WTF_NO_DESKTOP;WTF_NO_AGENT</DefineConstants>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Separate output dir from the JIT flavor so switching builds in place can't
+         leave stale reflection DLLs (Tmds.DBus, FCS, ...) behind in the lean
+         closure. (BaseIntermediateOutputPath must be set before the SDK imports, so
+         it is left shared — obj is keyed per TFM/RID and does not pollute bin.) -->
+    <BaseOutputPath>bin/aot/</BaseOutputPath>
+  </PropertyGroup>
+
+  <!-- The actual native publish knobs. Guarded by BOTH WtfAot AND PublishAot so a
+       plain `-p:WtfAot=true` BUILD never attempts ILC/clang (it just compiles the
+       lean graph — verifiable without clang); only `scripts/aot-publish.sh`
+       (-p:WtfAot=true -p:PublishAot=true) trips these and links the binary. -->
+  <PropertyGroup Condition="'$(WtfAot)' == 'true' and '$(PublishAot)' == 'true'">
+    <PublishAot>true</PublishAot>
+    <StackTraceSupport>false</StackTraceSupport>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <DebuggerSupport>false</DebuggerSupport>
+    <EventSourceSupport>false</EventSourceSupport>
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <AutoreleasePoolSupport>false</AutoreleasePoolSupport>
+    <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+    <OptimizationPreference>Size</OptimizationPreference>
+  </PropertyGroup>
+
   <ItemGroup>
     <Compile Include="Ffi.fs" />
     <Compile Include="Chord.fs" />
@@ -20,11 +56,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- WTF.Core is the pure brain — always in the graph (JIT and AOT). -->
     <ProjectReference Include="..\WTF.Core\WTF.Core.fsproj" />
-    <ProjectReference Include="..\WTF.Config\WTF.Config.fsproj" />
-    <ProjectReference Include="..\WTF.Plugins\WTF.Plugins.fsproj" />
-    <ProjectReference Include="..\WTF.Desktop\WTF.Desktop.fsproj" />
-    <ProjectReference Include="..\WTF.Agent\WTF.Agent.fsproj" />
+    <!-- The reflection/JIT-only projects are dropped from the AOT graph. This is
+         what actually keeps FCS / Tmds.DBus / Extensions.AI / Anthropic.SDK out of
+         the ILC closure; the matching WTF_NO_* defines no-op their host call sites. -->
+    <ProjectReference Include="..\WTF.Config\WTF.Config.fsproj" Condition="'$(WtfAot)' != 'true'" />
+    <ProjectReference Include="..\WTF.Plugins\WTF.Plugins.fsproj" Condition="'$(WtfAot)' != 'true'" />
+    <ProjectReference Include="..\WTF.Desktop\WTF.Desktop.fsproj" Condition="'$(WtfAot)' != 'true'" />
+    <ProjectReference Include="..\WTF.Agent\WTF.Agent.fsproj" Condition="'$(WtfAot)' != 'true'" />
   </ItemGroup>
 
 </Project>
