@@ -1773,7 +1773,16 @@ static void server_new_layer_surface(struct wl_listener *listener, void *data) {
 	if (li > 3) li = 3;
 	ls->scene = wlr_scene_layer_surface_v1_create(srv->layer_tree[li],
 		layer_surface);
-	ls->scene->tree->node.data = ls;
+	/* CRITICAL: do NOT set node.data on a layer-surface tree. desktop_toplevel_at
+	 * walks up the scene graph to the first node whose data is non-NULL and returns
+	 * it AS A struct wtf_toplevel * — the invariant across this file is "node.data
+	 * set => managed toplevel" (see the xwayland-unmanaged note that keeps it NULL
+	 * for the same reason). A layer surface (e.g. the omnibox) is hit-tested on
+	 * click; if its node carried `ls`, focus_toplevel/begin_interactive would read
+	 * wtf_toplevel fields off a wtf_layer_surface and crash the compositor. The ls
+	 * back-pointer isn't needed here: every listener recovers it via wl_container_of,
+	 * and pointer events still reach the surface via desktop_toplevel_at's *surface
+	 * out-param (resolved from the scene buffer, independent of this tree walk). */
 
 	ls->map.notify = layer_surface_map;
 	wl_signal_add(&layer_surface->surface->events.map, &ls->map);
