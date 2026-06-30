@@ -31,3 +31,23 @@ type DBusInterfaceInfo =
     { /// Full interface name, e.g. "org.freedesktop.Accounts".
       Name: string
       Members: DBusMemberInfo[] }
+
+/// Runtime erasure target for the Apps config Type Provider. A value typed as a
+/// provided app type (e.g. `Apps.Firefox`) IS one of these records at runtime;
+/// the provided literal members (AppId/Exec/Name) erase to baked constants.
+type AppInfo =
+    { /// Window app-id used by rules: StartupWMClass if present, else the
+      /// desktop-file id (basename minus ".desktop").
+      AppId: string
+      /// The Exec command with FreeDesktop field codes (%u %F …) stripped.
+      Exec: string
+      /// Human-readable application name (Name= from [Desktop Entry]).
+      Name: string }
+
+/// Runtime erasure target for one XKB entry (a layout or an option) parsed from
+/// evdev.lst. The provided literal members (Code/Description) erase to constants.
+type XkbEntry =
+    { /// The xkb token, e.g. "ru" (layout) or "grp:alt_shift_toggle" (option).
+      Code: string
+      /// The human-readable description column.
+      Description: string }

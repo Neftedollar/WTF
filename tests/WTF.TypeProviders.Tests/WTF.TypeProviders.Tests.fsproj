@@ -14,6 +14,7 @@
   <ItemGroup>
     <Compile Include="Tests.fs" />
     <Compile Include="InternalTests.fs" />
+    <Compile Include="ConfigProvidersTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -25,6 +26,27 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="data/org.wtf.Fixtures.xml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- Config-provider fixtures (#15): a hermetic .desktop application dir + a
+         trimmed evdev.lst, so the Apps/Xkb providers scan a known fixture instead
+         of the live system. -->
+    <None Include="data/applications/firefox.desktop">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="data/applications/foot.desktop">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="data/applications/hidden.desktop">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="data/applications/settings.desktop">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="data/applications/notanapp.desktop">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="data/evdev.lst">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

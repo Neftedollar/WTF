@@ -39,6 +39,26 @@ TMPCTL="$STAGE/.ctl"; pub src/wtfctl/wtfctl.fsproj "$TMPCTL"
 pub src/WTF.Bar/WTF.Bar.fsproj "$LIBWTF/bar"
 pub src/WTF.Omnibox/WTF.Omnibox.fsproj "$LIBWTF/omnibox"
 
+# Reference dlls for the STRONGLY-TYPED config (#15). The seeded config.fsx #r's
+# WTF.Core.dll + WTF.TypeProviders.dll so the F# language server (FsAutoComplete)
+# and `dotnet fsi` can resolve the config DSL + the Apps/Layouts/Xkb Type
+# Providers. These are framework-dependent (NOT the single-file host bundle), on
+# disk next to each other so the config's #r — and the WM loader's sibling lookup
+# of WTF.TypeProviders.dll beside WTF.Core.dll — both resolve.
+echo "   staging config reference dlls (WTF.Core + WTF.TypeProviders) for the editor"
+REFTMP="$STAGE/.ref"
+# A plain (framework-dependent) publish brings WTF.Core.dll + FSharp.Core.dll on
+# disk; the TP build adds WTF.TypeProviders.dll. These sit next to each other so
+# the config's #r and the loader's sibling lookup both resolve.
+dotnet publish src/WTF.Config/WTF.Config.fsproj -c Release -o "$REFTMP" >/dev/null
+dotnet build   src/WTF.TypeProviders/WTF.TypeProviders.fsproj -c Release -o "$REFTMP/tp" >/dev/null
+install -Dm644 "$REFTMP/WTF.Core.dll"        "$LIBWTF/WTF.Core.dll"
+install -Dm644 "$REFTMP/tp/WTF.TypeProviders.dll" "$LIBWTF/WTF.TypeProviders.dll"
+if [ -f "$REFTMP/FSharp.Core.dll" ]; then
+  install -Dm644 "$REFTMP/FSharp.Core.dll" "$LIBWTF/FSharp.Core.dll"
+fi
+rm -rf "$REFTMP"
+
 echo ">> 3/5  assembling the install tree under $STAGE"
 install -Dm644 compositor/build/libwtf_shim.so "$LIBWTF/libwtf_shim.so"
 # scenefx runtime lib next to the shim so the launcher's LD_LIBRARY_PATH finds it
@@ -70,6 +90,18 @@ export LD_LIBRARY_PATH="$PREFIX/lib/wtf/omnibox:\${LD_LIBRARY_PATH:-}"
 exec "$PREFIX/lib/wtf/omnibox/wtf-omnibox" "\$@"
 EOF
 chmod 755 "$BINWTF/wtf-omnibox"
+# wtf-edit: opens ~/.config/wtf/config.fsx with the F# LSP (FsAutoComplete) set up
+# so the config Type Provider gives autocomplete (`Apps.`, `Layouts.`). See
+# docs/CONFIG-EDITING.md.
+install -Dm755 scripts/wtf-edit "$BINWTF/wtf-edit"
+# A pristine copy of the seed config, templated with the INSTALLED #r paths, so
+# wtf-edit can re-seed a deleted config and the install can seed a fresh one.
+TEMPLATE="$STAGE/usr/share/wtf/config.fsx"
+mkdir -p "$(dirname "$TEMPLATE")"
+sed -E \
+  -e "s|^#r \".*WTF\\.Core\\.dll\"|#r \"$PREFIX/lib/wtf/WTF.Core.dll\"|" \
+  -e "s|^#r \".*WTF\\.TypeProviders\\.dll\"|#r \"$PREFIX/lib/wtf/WTF.TypeProviders.dll\"|" \
+  examples/config.fsx > "$TEMPLATE"
 # session wrapper (what the .desktop launches): captures a log, restores the
 # console on every exit, bounded restart loop, safe-mode escalation, fallback.
 # Its default WTF_HOST is /usr/local/bin/wtf == the launcher written just above.
@@ -90,7 +122,19 @@ fi
 
 echo ">> 5/5  seeding a default user config (~/.config/wtf/config.fsx)"
 mkdir -p "$HOME/.config/wtf"
-[ -f "$HOME/.config/wtf/config.fsx" ] || cp examples/config.fsx "$HOME/.config/wtf/config.fsx"
+# Seed from the installed template (templated with the /usr/local/lib/wtf #r paths
+# so the editor's F# LSP resolves WTF.Core + WTF.TypeProviders). Falls back to the
+# repo seed if the template copy isn't on disk yet.
+if [ ! -f "$HOME/.config/wtf/config.fsx" ]; then
+  if [ -f "$PREFIX/share/wtf/config.fsx" ]; then
+    cp "$PREFIX/share/wtf/config.fsx" "$HOME/.config/wtf/config.fsx"
+  else
+    cp examples/config.fsx "$HOME/.config/wtf/config.fsx"
+  fi
+fi
+
+echo
+echo ">> Edit your config with autocomplete:  wtf-edit   (see docs/CONFIG-EDITING.md)"
 
 echo
 echo ">> Installed. Log out and pick \"WTF\" in your display manager,"

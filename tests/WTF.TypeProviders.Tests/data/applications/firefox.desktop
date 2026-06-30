@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Name=Firefox
+Comment=Browse the World Wide Web
+Exec=/usr/lib/firefox/firefox %u
+Icon=firefox
+Terminal=false
+Type=Application
+StartupWMClass=firefox
+Categories=Network;WebBrowser;

@@ -27,8 +27,9 @@
             consumption model: copied from the package's src/, .fsi before .fs). -->
     <Compile Include="ProvidedTypes.fsi" />
     <Compile Include="ProvidedTypes.fs" />
-    <!-- 3. The provider itself. -->
+    <!-- 3. The providers. -->
     <Compile Include="DBusIntrospectionProvider.fs" />
+    <Compile Include="ConfigProviders.fs" />
   </ItemGroup>
 
   <ItemGroup>

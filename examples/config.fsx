@@ -9,10 +9,23 @@
 //   * You can also run it standalone to type-check / preview it:
 //         dotnet fsi examples/config.fsx
 //     There WTF_RUNTIME is undefined, so the dev `#r` provides WTF.Core.
+//
+//   * STRONGLY-TYPED + MACHINE-AWARE (#15): the second assembly below is the WTF
+//     config Type Provider. With it referenced, an editor running the F# LSP
+//     (FsAutoComplete) gives you autocomplete + typo-proofing driven by YOUR
+//     machine: type `Layouts.` to see the valid layouts, or `Apps.` to see your
+//     INSTALLED apps (e.g. `Apps.Firefox.AppId`). A typo like `SetLayout "tll"`
+//     or an uninstalled app becomes a COMPILE ERROR — caught in the editor AND at
+//     WM config-load time (the loader compiles this file through FCS). Run
+//     `wtf-edit` to open this file with the LSP set up; see docs/CONFIG-EDITING.md.
+//     The WM's loader injects its own `#r` for BOTH assemblies under WTF_RUNTIME,
+//     so the two dev `#r` lines below are skipped when loaded by the WM.
 #if !WTF_RUNTIME
 #r "../src/WTF.Core/bin/Debug/net10.0/WTF.Core.dll"
+#r "../src/WTF.TypeProviders/bin/Debug/netstandard2.0/WTF.TypeProviders.dll"
 #endif
 open WTF.Core
+open WTF.TypeProviders   // the config Type Provider: Apps / Layouts / Xkb
 
 // ---- 1. Keybindings: every chord compiles to a semantic Command ----
 let myKeys =
@@ -24,9 +37,11 @@ let myKeys =
         bind "M-S-j"     SwapNext
         bind "M-S-k"     SwapPrev
         bind "M-S-c"     CloseFocused
-        bind "M-space"   (SetLayout "bsp")
-        bind "M-t"       (SetLayout "tall")
-        bind "M-g"       (SetLayout "grid")
+        // Layout names come from the `Layouts` Type Provider — autocompleted and
+        // typo-proof. `Layouts.Bsp` is the literal "bsp"; a wrong name won't compile.
+        bind "M-space"   (SetLayout Layouts.Bsp)
+        bind "M-t"       (SetLayout Layouts.Tall)
+        bind "M-g"       (SetLayout Layouts.Grid)
         bind "M-h"       (SetRatio 0.4)
         bind "M-l"       (SetRatio 0.6)
         bind "M-comma"   (SetMaster 2)
@@ -41,6 +56,15 @@ let myManage =
         rule (appIs "firefox")              (ShiftToWorkspace "2")
         rule (appIs "Spotify")              (ShiftToWorkspace "9")
         rule (titleContains "Picture-in-Picture") FloatWindow
+
+        // ---- machine-aware rules via the `Apps` Type Provider ----
+        // `Apps.` lists YOUR installed .desktop apps; `Apps.Firefox.AppId` is the
+        // window app-id those apps match on. Uncomment + rename to an app you have
+        // (autocomplete `Apps.` in an LSP editor to see the exact names). It is
+        // commented so this seed compiles on ANY machine — an app you don't have
+        // installed would be a compile error (which is the whole point: typo-proof).
+        //   rule (appIs Apps.Firefox.AppId)  (ShiftToWorkspace "2")
+        //   rule (appIs Apps.Foot.AppId)     (ShiftToWorkspace "1")
     }
 
 // ---- 3. The whole config, assembled declaratively ----
@@ -49,7 +73,7 @@ let wtfConfig =
     config {
         modKey "Super"
         terminal "foot"
-        defaultLayout "tall"
+        defaultLayout Layouts.Tall   // typo-proof layout name from the Type Provider
         keys myKeys
         manageHook myManage
         startup [ "wtf-bar"; "foot" ]

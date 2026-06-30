@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=GNOME Settings (Tweaks)
+Comment=Tune advanced settings
+Exec=gnome-tweaks %F
+Icon=org.gnome.tweaks
+Terminal=false
+Type=Application
+StartupWMClass=gnome-tweaks
+Categories=GTK;Settings;

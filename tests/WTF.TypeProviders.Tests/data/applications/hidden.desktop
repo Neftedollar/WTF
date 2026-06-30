@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=HiddenThing
+Exec=hiddenthing
+Type=Application
+NoDisplay=true

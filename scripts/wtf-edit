@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# wtf-edit — open your WTF config (~/.config/wtf/config.fsx) for editing with the
+# F# language server (FsAutoComplete) set up, so you get autocomplete + typo
+# checking driven by the WTF config Type Provider (type `Apps.` to see your
+# INSTALLED apps, `Layouts.` for the valid layouts). See docs/CONFIG-EDITING.md.
+#
+#   wtf-edit            ensure fsautocomplete + correct #r paths, then $EDITOR it
+#   wtf-edit --setup    just verify fsautocomplete + print per-editor LSP snippets
+#   wtf-edit --help     this help
+#
+# It is GRACEFUL: a missing language server or unresolved dll only prints a hint;
+# the editor still opens. Works both from an install (/usr/local/...) and the dev
+# tree (run scripts/wtf-edit from a checkout).
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/wtf"
+CONFIG="$CONFIG_DIR/config.fsx"
+
+# Where the install places the reference dlls + the seed template.
+INSTALL_LIB="/usr/local/lib/wtf"
+INSTALL_TEMPLATE="/usr/local/share/wtf/config.fsx"
+
+# Resolve this script's own dir so the dev tree (a git checkout) also works.
+SELF="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SELF/.." 2>/dev/null && pwd || echo "")"
+
+note() { printf '%s\n' "$*" >&2; }
+
+# ---- locate the two dlls the config #r's: installed first, then the dev tree ----
+find_dll() {
+  # $1 = WTF.Core | WTF.TypeProviders ; prints an absolute path if found.
+  local name="$1" p
+  for p in \
+    "$INSTALL_LIB/$name.dll" \
+    "$REPO_ROOT/src/$name/bin/Release/net"*"/$name.dll" \
+    "$REPO_ROOT/src/$name/bin/Debug/net"*"/$name.dll" \
+    "$REPO_ROOT/src/$name/bin/Release/netstandard2.0/$name.dll" \
+    "$REPO_ROOT/src/$name/bin/Debug/netstandard2.0/$name.dll"; do
+    if [ -f "$p" ]; then printf '%s\n' "$p"; return 0; fi
+  done
+  return 1
+}
+
+# ---- (a) ensure the F# language server is available ----
+ensure_fsac() {
+  if command -v fsautocomplete >/dev/null 2>&1; then
+    note "fsautocomplete: $(command -v fsautocomplete)"
+    return 0
+  fi
+  note "fsautocomplete (the F# LSP) was not found on PATH."
+  if command -v dotnet >/dev/null 2>&1; then
+    note ">> installing it: dotnet tool install -g fsautocomplete"
+    if dotnet tool install -g fsautocomplete >&2; then
+      note "installed. It lives in ~/.dotnet/tools."
+    else
+      note "install failed — run manually: dotnet tool install -g fsautocomplete"
+    fi
+    case ":$PATH:" in
+      *":$HOME/.dotnet/tools:"*) ;;
+      *) note "NOTE: add ~/.dotnet/tools to PATH:  export PATH=\"\$HOME/.dotnet/tools:\$PATH\"" ;;
+    esac
+  else
+    note "The .NET SDK (dotnet) is not installed. Install it, then run:"
+    note "    dotnet tool install -g fsautocomplete"
+  fi
+}
+
+# ---- (b) make sure config.fsx exists + its #r lines point at REAL dlls ----
+ensure_config() {
+  mkdir -p "$CONFIG_DIR"
+  if [ ! -f "$CONFIG" ]; then
+    if [ -f "$INSTALL_TEMPLATE" ]; then
+      cp "$INSTALL_TEMPLATE" "$CONFIG"
+      note "seeded $CONFIG from $INSTALL_TEMPLATE"
+    elif [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/examples/config.fsx" ]; then
+      cp "$REPO_ROOT/examples/config.fsx" "$CONFIG"
+      note "seeded $CONFIG from $REPO_ROOT/examples/config.fsx"
+    else
+      note "no config and no template found — start from examples/config.fsx"
+      return 0
+    fi
+  fi
+
+  local core tp
+  core="$(find_dll WTF.Core || true)"
+  tp="$(find_dll WTF.TypeProviders || true)"
+  if [ -n "$core" ]; then
+    sed -i -E "s|^#r \".*WTF\.Core\.dll\"|#r \"$core\"|" "$CONFIG"
+  else
+    note "WARNING: WTF.Core.dll not found — autocomplete may not resolve."
+  fi
+  if [ -n "$tp" ]; then
+    sed -i -E "s|^#r \".*WTF\.TypeProviders\.dll\"|#r \"$tp\"|" "$CONFIG"
+  else
+    note "WARNING: WTF.TypeProviders.dll not found — the Apps/Layouts hints need it."
+  fi
+  [ -n "$core" ] && note "config #r WTF.Core         -> $core"
+  [ -n "$tp" ]   && note "config #r WTF.TypeProviders -> $tp"
+}
+
+print_setup() {
+  cat >&2 <<'EOF'
+
+How the autocomplete works
+  The editor's F# language server (fsautocomplete) loads the WTF config Type
+  Provider exactly like the compiler. For a bare .fsx it resolves types from the
+  file's own #r lines (wtf-edit keeps those pointing at the real dlls). Then:
+    * type `Layouts.`  -> the valid layout names (Bsp, Tall, Wide, Grid, Full)
+    * type `Apps.`     -> YOUR installed .desktop apps (Apps.Firefox.AppId, ...)
+    * type `Xkb.Layouts.` / `Xkb.Options.` -> keyboard layouts / options
+  A typo or an app you don't have installed is a red squiggle in the editor AND a
+  config-load error in the WM (it then falls back to the built-in default).
+  The lists are read when the editor/WM loads the script — reload after you
+  install a new app to see it.
+
+Per-editor setup (full details: docs/CONFIG-EDITING.md)
+  VSCode : install the "Ionide-fsharp" extension (it bundles fsautocomplete);
+           open ~/.config/wtf as a folder.
+  Neovim : nvim-lspconfig -> require'lspconfig'.fsautocomplete.setup{}
+  Emacs  : eglot or lsp-mode pointed at fsautocomplete for fsharp-mode.
+  Helix  : languages.toml -> language-server fsautocomplete = { command = "fsautocomplete" }
+EOF
+}
+
+open_editor() {
+  local ed="${VISUAL:-${EDITOR:-}}"
+  if [ -z "$ed" ]; then
+    for cand in nvim vim hx code emacs nano; do
+      if command -v "$cand" >/dev/null 2>&1; then ed="$cand"; break; fi
+    done
+  fi
+  if [ -z "$ed" ]; then
+    note "No \$EDITOR/\$VISUAL set and no known editor found. Your config is at:"
+    note "    $CONFIG"
+    return 0
+  fi
+  exec $ed "$CONFIG"
+}
+
+case "${1:-}" in
+  -h|--help)
+    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2
+    ;;
+  --setup)
+    ensure_fsac
+    ensure_config
+    print_setup
+    ;;
+  "")
+    ensure_fsac
+    ensure_config
+    open_editor
+    ;;
+  *)
+    note "unknown option: $1 (try --help)"
+    exit 2
+    ;;
+esac

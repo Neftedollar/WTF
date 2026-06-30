@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <Compile Include="ConfigLoaderTests.fs" />
+    <Compile Include="TypeProviderConfigTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,6 +20,13 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\WTF.Core\WTF.Core.fsproj" />
     <ProjectReference Include="..\..\src\WTF.Config\WTF.Config.fsproj" />
+    <!-- Reference the config Type Provider (#15) so its dll lands NEXT TO
+         WTF.Core.dll in this test's output. The loader's `#r WTF.TypeProviders`
+         injection finds it there as a sibling of WTF.Core.dll — exactly how the
+         dev build and install.sh place it — proving a TP-using config.fsx loads
+         through the real FCS path. The test .fs uses provided types only inside
+         config STRINGS evaluated by FCS, never at this project's compile time. -->
+    <ProjectReference Include="..\..\src\WTF.TypeProviders\WTF.TypeProviders.fsproj" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,16 @@
+// Trimmed evdev.lst fixture for the Xkb.parseLst test.
+
+! model
+  pc105           Generic 105-key PC
+
+! layout
+  us              English (US)
+  ru              Russian
+  de              German
+
+! variant
+  dvorak          us: English (Dvorak)
+
+! option
+  grp:alt_shift_toggle   Alt+Shift
+  caps:escape            Make Caps Lock an additional Esc

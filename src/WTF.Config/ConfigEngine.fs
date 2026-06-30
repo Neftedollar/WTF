@@ -135,6 +135,19 @@ type FsiConfigEngine(defaultConfig: WtfConfig, configPath: string) =
             let corePath = typeof<WtfConfig>.Assembly.Location
             try s.EvalInteraction(sprintf "#r @\"%s\"" corePath) with ex -> log (sprintf "ref WTF.Core failed: %s" ex.Message)
             try s.EvalInteraction("open WTF.Core") with ex -> log (sprintf "open WTF.Core failed: %s" ex.Message)
+            // Also inject `#r WTF.TypeProviders.dll` (the config Type-Provider
+            // assembly, #15) so a strongly-typed config can write `Apps.Firefox.AppId`
+            // / `Layouts.Bsp` WITHOUT its own `#r` (its dev `#r` is guarded by
+            // `#if !WTF_RUNTIME`, which is defined here). We look for it as a sibling
+            // of WTF.Core.dll — exactly where the dev build and install.sh place it.
+            // No project reference is needed (keeps WTF.Core/WTF.Config dependency
+            // free); a missing dll (e.g. single-file publish) is silently skipped,
+            // and a config that ALSO `#r`s it is harmless (FSI dedups by identity).
+            if not (String.IsNullOrEmpty corePath) then
+                let tpPath = Path.Combine(Path.GetDirectoryName corePath, "WTF.TypeProviders.dll")
+                if File.Exists tpPath then
+                    try s.EvalInteraction(sprintf "#r @\"%s\"" tpPath)
+                    with ex -> log (sprintf "ref WTF.TypeProviders failed: %s" ex.Message)
             session <- Some s
             s
 
