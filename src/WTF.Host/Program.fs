@@ -404,6 +404,14 @@ let onViewFocus (id: int) : unit =
     if World.focusedWindow world <> Some id then
         dispatch (Focus(ById id))
 
+// SECURITY: per-key logging of UNBOUND chords records every typed character
+// (incl. text typed into password fields / 1Password) into the session log — a
+// de-facto keylogger. Bound WM hotkeys (Super+...) are safe + useful to log; raw
+// unbound keystrokes are gated behind WTF_DEBUG_KEYS=1 (off by default) so normal
+// sessions never leak typed content while the diagnostic stays available on demand.
+let private wtfDebugKeys =
+    not (System.String.IsNullOrEmpty(System.Environment.GetEnvironmentVariable "WTF_DEBUG_KEYS"))
+
 let onKey (mods: uint32) (sym: uint32) : int =
     // Media keys are the one INPUT->DBus flow. Recognize XF86Audio* keysyms
     // BEFORE the Chord path (Chord can't name them so they'd fall through to 0
@@ -425,7 +433,7 @@ let onKey (mods: uint32) (sym: uint32) : int =
             dispatch cmd
             1
         | None ->
-            eprintfn "WTF: key %s -> (unbound)" chord
+            if wtfDebugKeys then eprintfn "WTF: key %s -> (unbound)" chord
             0
     | None -> 0
 
