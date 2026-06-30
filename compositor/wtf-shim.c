@@ -43,6 +43,7 @@
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
+#include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_pointer.h>
 #include <scenefx/types/wlr_scene.h>
 #include <scenefx/types/fx/blur_data.h>
@@ -2306,6 +2307,13 @@ int wtf_run(struct wtf_callbacks cbs) {
 	wlr_gamma_control_manager_v1_create(server.wl_display);
 
 	server.output_layout = wlr_output_layout_create(server.wl_display);
+
+	/* xdg-output (zxdg_output_manager_v1): advertises each output's LOGICAL
+	 * position + size to clients. Screenshot/recording/layout tools (grim,
+	 * wf-recorder, wlr-randr) need this to learn the output geometry; without it
+	 * they capture a 0x0 / mis-placed frame. Backed by the output_layout above so
+	 * it stays in sync as outputs are added/removed. */
+	wlr_xdg_output_manager_v1_create(server.wl_display, server.output_layout);
 
 	wl_list_init(&server.outputs);
 	server.new_output.notify = server_new_output;

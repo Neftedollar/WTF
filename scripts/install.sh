@@ -43,7 +43,10 @@ pub src/WTF.Host/WTF.Host.fsproj "$LIBWTF"
 dotnet build src/WTF.TypeProviders/WTF.TypeProviders.fsproj -c Release >/dev/null
 TPDLL=$(find src/WTF.TypeProviders/bin/Release -name 'WTF.TypeProviders.dll' | head -1)
 [ -n "$TPDLL" ] && cp "$TPDLL" "$LIBWTF/"
-TMPCTL="$STAGE/.ctl"; pub src/wtfctl/wtfctl.fsproj "$TMPCTL"
+# wtfctl is published self-contained MULTI-file into its own dir (like bar/omnibox);
+# a launcher in bin/ execs it from there so its sibling runtime dlls resolve. Copying
+# just the apphost binary breaks with "wtfctl.dll does not exist".
+pub src/wtfctl/wtfctl.fsproj "$LIBWTF/ctl"
 # The two client apps (the status bar + the omnibox launcher), each into its own
 # dir under lib/wtf so libwtf_panel.so can sit next to the binary it DllImports.
 pub src/WTF.Bar/WTF.Bar.fsproj "$LIBWTF/bar"
@@ -76,8 +79,11 @@ install -Dm644 compositor/.scenefx/lib/x86_64-linux-gnu/libscenefx-0.2.so "$LIBW
 # libwtf_panel.so next to BOTH client binaries so their DllImport("wtf_panel") resolves.
 install -Dm644 compositor/build/libwtf_panel.so "$LIBWTF/bar/libwtf_panel.so"
 install -Dm644 compositor/build/libwtf_panel.so "$LIBWTF/omnibox/libwtf_panel.so"
-install -Dm755 "$TMPCTL/wtfctl" "$BINWTF/wtfctl"
-rm -rf "$TMPCTL"
+cat > "$BINWTF/wtfctl" <<EOF
+#!/bin/sh
+exec "$PREFIX/lib/wtf/ctl/wtfctl" "\$@"
+EOF
+chmod 755 "$BINWTF/wtfctl"
 # launcher that points the runtime loader at the bundled shim
 cat > "$BINWTF/wtf" <<EOF
 #!/bin/sh
