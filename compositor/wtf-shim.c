@@ -25,6 +25,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <signal.h>
+#include <execinfo.h>   /* backtrace() in the fatal signal handler */
 #include <drm_fourcc.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
@@ -2222,6 +2223,16 @@ static void handle_fatal_signal(int signo) {
 	ssize_t n = write(STDERR_FILENO, msg, sizeof(msg) - 1);
 	(void)n;        /* stderr is redirected to the rotating log by the wrapper,
 	                   so this single write covers both stderr and the log. */
+	/* Dump the call stack so a silent SIGSEGV is diagnosable from the log.
+	 * backtrace()/backtrace_symbols_fd() write straight to the fd without malloc
+	 * (async-signal-safe enough for a crash path); addresses resolve against
+	 * libwtf_shim.so via addr2line even when static symbols aren't exported. */
+	static const char bt_hdr[] = "WTF: backtrace (addr2line against libwtf_shim.so):\n";
+	n = write(STDERR_FILENO, bt_hdr, sizeof(bt_hdr) - 1);
+	(void)n;
+	void *frames[48];
+	int nframes = backtrace(frames, 48);
+	backtrace_symbols_fd(frames, nframes, STDERR_FILENO);
 	raise(signo);   /* SA_RESETHAND already restored SIG_DFL => re-delivers the
 	                   original signal and core-dumps normally. */
 }
