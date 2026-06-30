@@ -414,25 +414,15 @@ static bool animate_toplevels(void) {
 		}
 		int px = (int)lround(t->anim_x);
 		int py = (int)lround(t->anim_y);
-		/* Compensate for the xdg-surface GEOMETRY offset. A CSD client (GTK apps
-		 * like gnome-text-editor) draws its shadow in a transparent margin AROUND
-		 * the real window, so its buffer is larger than the geometry and geo.x/y
-		 * are the top-left inset. set_size sized the GEOMETRY to width×height, so
-		 * to land the geometry box (not the buffer) at the tile origin we shift the
-		 * node by -geo.x/-geo.y. Without this the buffer overflows to the right onto
-		 * the neighbor and the border rect bleeds blue through the shadow margin.
-		 * (The interactive-resize path already does this; the layout path didn't.)
-		 * XWayland has no such offset (geo stays 0). */
-		int gx = 0, gy = 0;
-		if (!t->is_xwayland && t->xdg_toplevel != NULL) {
-			struct wlr_box geo;
-			wlr_xdg_surface_get_geometry(t->xdg_toplevel->base, &geo);
-			gx = geo.x;
-			gy = geo.y;
-		}
-		wlr_scene_node_set_position(&t->scene_tree->node, px - gx, py - gy);
+		/* Place the scene node (buffer origin) at the tile origin. A CSD client's
+		 * geometry then sits inset by its shadow margin INSIDE the tile — the shadow
+		 * fills the gap and the window fits. (An earlier attempt shifted the node by
+		 * -geo to align the geometry box to the tile, but that pushed the buffer's
+		 * shadow margin off the screen edge and CLIPPED the window — visibly broken.
+		 * The proper way to remove CSD insets is decoration negotiation, not a
+		 * position hack.) */
+		wlr_scene_node_set_position(&t->scene_tree->node, px, py);
 		if (t->border != NULL) {
-			/* Border hugs the GEOMETRY box (content), positioned in tile space. */
 			wlr_scene_node_set_position(&t->border->node,
 				px - g_border_width, py - g_border_width);
 		}
