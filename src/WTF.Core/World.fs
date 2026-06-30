@@ -95,6 +95,6 @@ module World =
         let ws = currentWorkspace w
         match ws.Stack, Registry.resolve ws.Layout w.Nmaster w.Ratio with
         | Some st, Some layout ->
-            let layout = if w.Gaps > 0 then Layout.withGaps w.Gaps layout else layout
+            let layout = if w.Gaps > 0 then Layout.withGaps (w.Gaps * 1<lpx>) layout else layout
             layout w.Screen st
         | _ -> []

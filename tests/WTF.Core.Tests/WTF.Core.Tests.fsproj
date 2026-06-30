@@ -7,9 +7,12 @@
 
   <ItemGroup>
     <Compile Include="StackTests.fs" />
+    <Compile Include="GeometryTests.fs" />
     <Compile Include="LayoutTests.fs" />
+    <Compile Include="HistoryTests.fs" />
     <Compile Include="ReducerTests.fs" />
     <Compile Include="ProtocolTests.fs" />
+    <Compile Include="SessionTests.fs" />
     <Compile Include="ConfigTests.fs" />
   </ItemGroup>
 

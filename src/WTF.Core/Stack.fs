@@ -52,6 +52,18 @@ module Stack =
 
     // --- structural edits ---
 
+    /// Re-point the focus onto a given value (by equality); no-op if absent.
+    /// The Up/Down split is fully recoverable from (visual order, focus value),
+    /// so this is the inverse used to rebuild a zipper from serialized state.
+    let focus x s =
+        let xs = toList s
+        if List.contains x xs then
+            let up = xs |> List.takeWhile ((<>) x) |> List.rev
+            match xs |> List.skipWhile ((<>) x) with
+            | f :: down -> { Focus = f; Up = up; Down = down }
+            | [] -> s
+        else s
+
     /// Insert above the focus and focus the new element (xMonad's insertUp).
     let insertUp x s = { Focus = x; Up = s.Up; Down = s.Focus :: s.Down }
 

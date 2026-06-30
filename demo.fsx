@@ -29,4 +29,4 @@ let show name (layout: Layout<int>) n =
 
 show "Tall (1 master, 50%%)" (Layout.tall 1 0.5) 4
 show "BSP" Layout.bsp 5
-show "Tall + gaps" (Layout.withGaps 40 (Layout.tall 1 0.6)) 3
+show "Tall + gaps" (Layout.withGaps 40<lpx> (Layout.tall 1 0.6)) 3

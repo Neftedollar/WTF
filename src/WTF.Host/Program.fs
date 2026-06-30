@@ -35,6 +35,9 @@ let private baseKeys =
         bind "M-equal"   IncGaps
         bind "M-minus"   DecGaps
         bind "M-Tab"     NextWorkspace
+        bind "M-z"       Undo
+        bind "M-S-z"     Redo
+        bind "M-S-s"     SaveSession
     }
 
 let cfg =
@@ -57,7 +60,10 @@ let mutable world = { World.empty (Rect.create 0 0 1280 720) with Gaps = cfg.Gap
 let private applyEffects effects =
     for e in effects do
         match e with
-        | Arrange rects -> for (id, r) in rects do Ffi.wtf_configure (id, r.X, r.Y, r.Width, r.Height)
+        | Arrange rects ->
+            for (id, r) in rects do
+                let x, y, w, h = Scaling.configure cfg.Scale r
+                Ffi.wtf_configure (id, x, y, w, h)
         | SpawnProcess cmd -> Ffi.wtf_spawn cmd
         | CloseSurface id -> Ffi.wtf_close id
         | RenderOpacity o -> Ffi.wtf_set_inactive_opacity o
@@ -67,6 +73,59 @@ let private applyEffects effects =
             Ffi.wtf_set_border_color ((if active then 1 else 0), r, g, b)
         | RenderCornerRadius radius -> Ffi.wtf_set_corner_radius radius
         | RenderBlur on -> Ffi.wtf_set_blur ((if on then 1 else 0), 0, 0)
+
+// ---- undo/redo history (Core owns the logic, Host owns the cell) ----
+let mutable history = History.create cfg.HistoryLimit world
+
+/// Re-sync the compositor to a world that was swapped in out-of-band (undo/redo
+/// /restore): re-tile and re-focus. Mirrors the onViewUnmap pattern exactly.
+let private resync (w: World) =
+    applyEffects [ Arrange(World.arrange w) ]
+    World.focusedWindow w |> Option.iter Ffi.wtf_focus
+
+/// Settings-only restore: adopt a saved session's Current / Nmaster / Ratio /
+/// Gaps and per-workspace layout names, but keep the *live* window set — a fresh
+/// compositor has no surfaces backing the saved ids, so the stacks/Windows map
+/// are intentionally dropped (the compositor re-maps real surfaces).
+let private restoreSettings (saved: World) (live: World) : World =
+    let layoutOf tag =
+        saved.Workspaces
+        |> List.tryFind (fun ws -> ws.Tag = tag)
+        |> Option.map (fun ws -> ws.Layout)
+    { live with
+        Current = (if live.Workspaces |> List.exists (fun ws -> ws.Tag = saved.Current) then saved.Current else live.Current)
+        Nmaster = saved.Nmaster
+        Ratio = saved.Ratio
+        Gaps = saved.Gaps
+        Workspaces =
+            live.Workspaces
+            |> List.map (fun ws ->
+                match layoutOf ws.Tag with
+                | Some l -> { ws with Layout = l }
+                | None -> ws) }
+
+/// The single choke point for every command. History is recorded here and
+/// nowhere else, so it can never desync. Undo/Redo/Save/LoadSession are
+/// intercepted (the pure reducer can't see history); everything else runs
+/// through the reducer and records an undo point iff it actually changed World.
+let private dispatch (cmd: Command) : unit =
+    match cmd with
+    | Undo -> History.undo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
+    | Redo -> History.redo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
+    | SaveSession -> SessionIO.save world
+    | LoadSession ->
+        match SessionIO.load () with
+        | Some saved ->
+            let w' = restoreSettings saved world
+            world <- w'
+            resync w'
+        | None -> ()
+    | _ ->
+        let w', effects = Reducer.apply cmd world
+        if Reducer.isUndoable cmd && w' <> world then
+            history <- History.push w' history
+        world <- w'
+        applyEffects effects
 
 // ---- callbacks invoked by the C compositor (C -> F#) ----
 
@@ -95,19 +154,23 @@ let onViewUnmap (id: int) : unit =
 
 let onKey (mods: uint32) (sym: uint32) : int =
     match Chord.format mods sym with
-    | Some "M-S-q" -> Ffi.wtf_quit (); 1 // host-level: quit the compositor
+    | Some "M-S-q" ->
+        SessionIO.save world // persist the session before tearing down
+        Ffi.wtf_quit ()
+        1 // host-level: quit the compositor
     | Some chord ->
         match Keymap.lookup cfg chord with
         | Some cmd ->
-            let w', effects = Reducer.apply cmd world
-            world <- w'
-            applyEffects effects
+            dispatch cmd
             1
         | None -> 0
     | None -> 0
 
 let onOutputResize (width: int) (height: int) : unit =
-    world <- { world with Screen = Rect.create 0 0 width height }
+    // The compositor reports device (physical) px; fold the output scale back to
+    // logical so the brain stays in its single `lpx` coordinate space.
+    let toL (v: int) : int = Px.rawL (Px.toLogical cfg.Scale (v * 1<ppx>))
+    world <- { world with Screen = Rect.create 0 0 (toL width) (toL height) }
     applyEffects [ Arrange(World.arrange world) ]
 
 // ---- agent-first IPC, marshalled onto the loop thread by the bridge ----
@@ -119,9 +182,7 @@ let private handleOnLoop (line: string) : string =
     match Protocol.parseRequest line with
     | Some Protocol.Query -> Protocol.snapshotLine world
     | Some (Protocol.Act cmd) ->
-        let w', effects = Reducer.apply cmd world
-        world <- w'
-        applyEffects effects
+        dispatch cmd
         Protocol.snapshotLine world
     | None -> """{"error":"unrecognized command"}"""
 
@@ -145,6 +206,14 @@ let onReady () : unit =
     border false cfg.InactiveBorder
     Ffi.wtf_set_corner_radius cfg.CornerRadius
     Ffi.wtf_set_blur ((if cfg.Blur then 1 else 0), 0, 0)
+    // Restore saved settings (current tag, nmaster, ratio, gaps, per-workspace
+    // layouts). Settings-only: the saved window set is dropped, since a fresh
+    // compositor has no surfaces backing those ids. Re-base history afterwards.
+    match SessionIO.load () with
+    | Some saved ->
+        world <- restoreSettings saved world
+        history <- History.create cfg.HistoryLimit world
+    | None -> ()
     eprintfn "WTF: ready — agent socket at %s — spawning startup: %A" path cfg.StartupApps
     for app in cfg.StartupApps do
         Ffi.wtf_spawn app

@@ -10,8 +10,10 @@
     <Compile Include="Stack.fs" />
     <Compile Include="Layout.fs" />
     <Compile Include="World.fs" />
+    <Compile Include="History.fs" />
     <Compile Include="Command.fs" />
     <Compile Include="Protocol.fs" />
+    <Compile Include="Session.fs" />
     <Compile Include="Config.fs" />
   </ItemGroup>
 

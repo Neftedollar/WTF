@@ -34,7 +34,7 @@ let ``full gives every window the whole screen`` (s: Stack<int>) =
 
 [<Property>]
 let ``gaps keep tiles strictly inside the screen`` (s: Stack<int>) =
-    Layout.withGaps 10 (Layout.tall 1 0.5) screen s
+    Layout.withGaps 10<lpx> (Layout.tall 1 0.5) screen s
     |> List.forall (fun (_, r) -> inside screen r)
 
 [<Property>]

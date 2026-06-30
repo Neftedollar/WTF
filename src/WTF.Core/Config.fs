@@ -29,7 +29,9 @@ type WtfConfig =
       ActiveBorder: string              // appearance: focused border color (#hex)
       InactiveBorder: string            // appearance: unfocused border color (#hex)
       CornerRadius: int                 // appearance: rounded corners (scenefx)
-      Blur: bool }                      // appearance: backdrop blur (scenefx)
+      Blur: bool                        // appearance: backdrop blur (scenefx)
+      Scale: float                      // HiDPI output scale (physical px per logical px); 1.0 = logical px (default)
+      HistoryLimit: int }               // undo depth: max retained past states
 
 module WtfConfig =
     let defaults =
@@ -47,7 +49,9 @@ module WtfConfig =
           ActiveBorder = "#89b4fa"
           InactiveBorder = "#45475a"
           CornerRadius = 0
-          Blur = false }
+          Blur = false
+          Scale = 1.0
+          HistoryLimit = 64 }
 
 // --- predicate helpers for manage rules (read like English) ---
 [<AutoOpen>]
@@ -111,6 +115,10 @@ type ConfigBuilder() =
     member _.CornerRadius(c, v) = { c with CornerRadius = v }
     [<CustomOperation "blur">]
     member _.Blur(c, v) = { c with Blur = v }
+    [<CustomOperation "scale">]
+    member _.Scale(c, v) = { c with Scale = v }
+    [<CustomOperation "historyLimit">]
+    member _.HistoryLimit(c, v) = { c with HistoryLimit = v }
 
 /// `agent { focusApp "firefox"; layout "bsp"; moveTo "2" }` -> Command list.
 /// Agent-first: an LLM (or a script) expresses a *program of intents* declaratively,

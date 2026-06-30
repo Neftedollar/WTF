@@ -38,6 +38,12 @@ type Command =
     | SetBorderColor of bool * float * float * float  // active?, r, g, b (0..1)
     | SetCornerRadius of int         // rounded corners (scenefx)
     | SetBlur of bool                // backdrop blur (scenefx)
+    // history / session — first-class in the vocabulary, but carried out by the
+    // host (history lives outside the pure World); the reducer treats them as no-ops:
+    | Undo                           // revert the last undoable World change
+    | Redo                           // re-apply an undone change
+    | SaveSession                    // persist the canonical World to disk
+    | LoadSession                    // restore a saved session
     // emitted by the compositor, not the agent:
     | AddWindow of WindowInfo        // a surface was mapped
     | RemoveWindow of WindowId       // a surface was unmapped
@@ -57,14 +63,28 @@ type Effect =
 module Reducer =
 
     /// Re-point the focus of a stack onto a specific id (no-op if absent).
-    let private focusId id st =
-        let xs = Stack.toList st
-        if List.contains id xs then
-            let up = xs |> List.takeWhile ((<>) id) |> List.rev
-            match xs |> List.skipWhile ((<>) id) with
-            | f :: down -> { Focus = f; Up = up; Down = down }
-            | [] -> st
-        else st
+    let private focusId id st = Stack.focus id st
+
+    /// Which commands record an undo point: user-initiated, reversible *World*
+    /// mutations only. Everything else is excluded — compositor lifecycle
+    /// (Add/RemoveWindow) can't be safely reverted against live surfaces;
+    /// Spawn/CloseFocused are irreversible or produce no World delta; the
+    /// renderer knobs change appearance, not World; and the history/session
+    /// commands themselves are host-handled.
+    let isUndoable (cmd: Command) : bool =
+        match cmd with
+        | Focus _ | FocusMaster
+        | SwapNext | SwapPrev | SwapMaster
+        | SwitchWorkspace _ | MoveToWorkspace _ | NextWorkspace | PrevWorkspace
+        | SetLayout _ | NextLayout
+        | SetMaster _ | IncMaster | DecMaster
+        | SetRatio _
+        | SetGaps _ | IncGaps | DecGaps -> true
+        | CloseFocused | Spawn _
+        | SetInactiveOpacity _ | SetAnimationSpeed _ | SetBorderWidth _
+        | SetBorderColor _ | SetCornerRadius _ | SetBlur _
+        | Undo | Redo | SaveSession | LoadSession
+        | AddWindow _ | RemoveWindow _ -> false
 
     let private resolveSelector (w: World) sel (st: Stack<WindowId>) =
         match sel with
@@ -213,6 +233,10 @@ module Reducer =
         | SetBorderColor(a, r, g, b) -> w, [ RenderBorderColor(a, r, g, b) ]
         | SetCornerRadius radius -> w, [ RenderCornerRadius(max 0 radius) ]
         | SetBlur on -> w, [ RenderBlur on ]
+
+        // Host-handled (history/session). Total no-op arm keeps the reducer
+        // pure and exhaustive; the real work happens in the host's dispatch.
+        | Undo | Redo | SaveSession | LoadSession -> w, []
 
         | AddWindow info ->
             let newCur =

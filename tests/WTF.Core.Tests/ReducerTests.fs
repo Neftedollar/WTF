@@ -99,6 +99,30 @@ let ``appearance commands emit render effects, not world changes`` () =
     let _, e2 = Reducer.apply (SetAnimationSpeed 0.5) w
     Assert.Equal<Effect list>([ RenderAnimSpeed 0.5 ], e2)
 
+[<Fact>]
+let ``undo redo and session commands are pure reducer no-ops`` () =
+    let w = worldWith 2
+    for cmd in [ Undo; Redo; SaveSession; LoadSession ] do
+        let w', e = Reducer.apply cmd w
+        Assert.Equal<World>(w, w')
+        Assert.Empty(e)
+
+[<Fact>]
+let ``isUndoable allows reversible world mutations and excludes the rest`` () =
+    let undoable =
+        [ Focus Focused; FocusMaster; SwapNext; SwapPrev; SwapMaster
+          SwitchWorkspace "2"; MoveToWorkspace "2"; NextWorkspace; PrevWorkspace
+          SetLayout "bsp"; NextLayout; SetMaster 2; IncMaster; DecMaster
+          SetRatio 0.6; SetGaps 4; IncGaps; DecGaps ]
+    let notUndoable =
+        [ CloseFocused; Spawn "x"
+          SetInactiveOpacity 0.5; SetAnimationSpeed 0.3; SetBorderWidth 2
+          SetBorderColor(true, 0.0, 0.0, 0.0); SetCornerRadius 4; SetBlur true
+          Undo; Redo; SaveSession; LoadSession
+          AddWindow(win 9 "z"); RemoveWindow 9 ]
+    Assert.All(undoable, fun c -> Assert.True(Reducer.isUndoable c, sprintf "%A should be undoable" c))
+    Assert.All(notUndoable, fun c -> Assert.False(Reducer.isUndoable c, sprintf "%A should not be undoable" c))
+
 [<Property>]
 let ``every command keeps window-set and stack consistent`` (n: int) =
     let n = (abs n % 6) + 1

@@ -10,6 +10,7 @@
     <Compile Include="Chord.fs" />
     <Compile Include="Bridge.fs" />
     <Compile Include="Ipc.fs" />
+    <Compile Include="Session.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

@@ -11,10 +11,10 @@ module Protocol =
 
     let private rectJson (r: Rect) =
         let o = JsonObject()
-        o["x"] <- JsonValue.Create r.X
-        o["y"] <- JsonValue.Create r.Y
-        o["w"] <- JsonValue.Create r.Width
-        o["h"] <- JsonValue.Create r.Height
+        o["x"] <- JsonValue.Create(int r.X)
+        o["y"] <- JsonValue.Create(int r.Y)
+        o["w"] <- JsonValue.Create(int r.Width)
+        o["h"] <- JsonValue.Create(int r.Height)
         o :> JsonNode
 
     /// A rich, semantic snapshot: workspaces, the windows in each (in order),
@@ -66,10 +66,10 @@ module Protocol =
         for (id, r) in World.arrange w do
             let a = JsonObject()
             a["id"] <- JsonValue.Create id
-            a["x"] <- JsonValue.Create r.X
-            a["y"] <- JsonValue.Create r.Y
-            a["w"] <- JsonValue.Create r.Width
-            a["h"] <- JsonValue.Create r.Height
+            a["x"] <- JsonValue.Create(int r.X)
+            a["y"] <- JsonValue.Create(int r.Y)
+            a["w"] <- JsonValue.Create(int r.Width)
+            a["h"] <- JsonValue.Create(int r.Height)
             arrange.Add a
         root["arrange"] <- arrange
         root
@@ -172,6 +172,12 @@ module Protocol =
                 | null -> None
                 | v -> Some(SetCornerRadius(v.GetValue<int>()))
             | Some "blur" -> Some(SetBlur(flag "on"))
+            | Some "undo" -> Some Undo
+            | Some "redo" -> Some Redo
+            | Some "session" ->
+                if flag "save" then Some SaveSession
+                elif flag "restore" then Some LoadSession
+                else None
             | _ -> None
         with _ -> None
 
