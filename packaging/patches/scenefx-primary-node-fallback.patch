@@ -1,8 +1,16 @@
 diff --git a/render/fx_renderer/util.c b/render/fx_renderer/util.c
-index d4fcec3..783d8bf 100644
+index d4fcec3..b0f9ba9 100644
 --- a/render/fx_renderer/util.c
 +++ b/render/fx_renderer/util.c
-@@ -47,6 +47,24 @@ static int open_drm_render_node(void) {
+@@ -1,4 +1,7 @@
++#include <dirent.h>
+ #include <fcntl.h>
++#include <stdio.h>
++#include <string.h>
+ #include <unistd.h>
+ #include <wlr/util/log.h>
+ #include <wlr/types/wlr_buffer.h>
+@@ -47,6 +50,50 @@ static int open_drm_render_node(void) {
  			break;
  		}
  	}
@@ -22,6 +30,32 @@ index d4fcec3..783d8bf 100644
 +					break;
 +				}
 +			}
++		}
++	}
++	if (fd < 0) {
++		/* WTF patch, last resort: enumerate /dev/dri DIRECTLY. drmGetDevices2
++		 * depends on sysfs topology that containers/exotic VMs (hyperv_drm)
++		 * don't always expose; the device nodes themselves still work. Prefer
++		 * render nodes, then fall back to cards (software GL via kms_swrast). */
++		const char *prefixes[] = { "renderD", "card" };
++		for (size_t pi = 0; pi < 2 && fd < 0; pi++) {
++			struct dirent **ents = NULL;
++			int n = scandir("/dev/dri", &ents, NULL, alphasort);
++			for (int i = 0; i < n; i++) {
++				if (fd < 0 && strncmp(ents[i]->d_name, prefixes[pi],
++						strlen(prefixes[pi])) == 0) {
++					char path[64];
++					snprintf(path, sizeof(path), "/dev/dri/%s", ents[i]->d_name);
++					fd = open(path, O_RDWR | O_CLOEXEC);
++					if (fd >= 0) {
++						wlr_log(WLR_ERROR, "No DRM device via drmGetDevices2; "
++							"opened '%s' directly (software GL if no render node)",
++							path);
++					}
++				}
++				free(ents[i]);
++			}
++			free(ents);
 +		}
 +	}
  	if (fd < 0) {
