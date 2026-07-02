@@ -28,28 +28,50 @@ open WTF.Core
 open WTF.TypeProviders   // the config Type Provider: Apps / Layouts / Xkb
 
 // ---- 1. Keybindings: every chord compiles to a semantic Command ----
+// NOTE: `keys` REPLACES the built-in map, so this seed covers the full day-one
+// set from docs/quickstart.md. Trim or rebind freely — it's your program.
 let myKeys =
     keymap {
+        // launch & close
         bind "M-Return"  (Spawn "foot")
-        bind "M-p"       (Spawn "wtf-omnibox")
+        bind "M-p"       (once (Spawn "wtf-omnibox"))  // `once` = singleton launch
+        bind "M-S-c"     CloseFocused
+        // focus & stack
         bind "M-j"       (Focus NextWindow)
         bind "M-k"       (Focus PrevWindow)
+        bind "M-m"       FocusMaster
         bind "M-S-j"     SwapNext
         bind "M-S-k"     SwapPrev
-        bind "M-S-c"     CloseFocused
-        bind "M-S-r"     ReloadConfig   // re-read this config live (also auto on save)
+        bind "M-S-Return" SwapMaster    // promote the focused window to master
         // Layout names come from the `Layouts` Type Provider — autocompleted and
         // typo-proof. `Layouts.Bsp` is the literal "bsp"; a wrong name won't compile.
-        bind "M-space"   (SetLayout Layouts.Bsp)
+        bind "M-space"   NextLayout     // cycle
         bind "M-t"       (SetLayout Layouts.Tall)
+        bind "M-w"       (SetLayout Layouts.Wide)
+        bind "M-b"       (SetLayout Layouts.Bsp)
         bind "M-g"       (SetLayout Layouts.Grid)
+        bind "M-f"       (SetLayout Layouts.Full)
         bind "M-h"       (SetRatio 0.4)
         bind "M-l"       (SetRatio 0.6)
-        bind "M-comma"   (SetMaster 2)
-        bind "M-1"       (SwitchWorkspace "1")
-        bind "M-2"       (SwitchWorkspace "2")
-        bind "M-S-2"     (MoveToWorkspace "2")
+        bind "M-period"  IncMaster
+        bind "M-comma"   DecMaster
+        bind "M-equal"   IncGaps
+        bind "M-minus"   DecGaps
+        bind "M-S-space" ToggleFloat
+        bind "M-S-f"     ToggleFullscreen
+        // workspaces (M-1..9 / M-S-1..9 are GENERATED below — config is code)
+        bind "M-Tab"     NextWorkspace
+        // session & history
+        bind "M-z"       Undo
+        bind "M-S-z"     Redo
+        bind "M-S-r"     ReloadConfig   // re-read this config live (also auto on save)
     }
+
+// Config is code: generate the 18 workspace binds instead of typing them out.
+let workspaceKeys =
+    [ for i in 1 .. 9 do
+        yield sprintf "M-%d" i,   SwitchWorkspace (string i)
+        yield sprintf "M-S-%d" i, MoveToWorkspace (string i) ]
 
 // ---- 2. ManageHook: rules for where new windows go ----
 let myManage =
@@ -75,7 +97,7 @@ let wtfConfig =
         modKey "Super"
         terminal "foot"
         defaultLayout Layouts.Tall   // typo-proof layout name from the Type Provider
-        keys myKeys
+        keys (myKeys @ workspaceKeys)
         manageHook myManage
         startup [ "wtf-bar"; "foot" ]
 

@@ -52,4 +52,6 @@ compile-checked literals. See [Configuration](configuration.md).
 | [Appearance](appearance.md) | Borders, shadows, blur, wallpapers, ricing |
 | [wtfctl](wtfctl.md) | CLI control, raw JSON, the agent socket |
 | [Troubleshooting](troubleshooting.md) | Logs, safe mode, crash recovery |
+| [FAQ](faq.md) | Stability, F#, .NET-at-runtime, NVIDIA, multi-monitor, agents |
+| [Architecture](architecture.md) | The "F# brain, C body" split, repo layout |
 | [Config editing setup](CONFIG-EDITING.md) | `wtf-edit`, F# LSP autocomplete |

@@ -37,7 +37,7 @@ right:
 └────────────┴──────┘
 ```
 
-- `M-h` / `M-l` — shrink / grow the master area
+- `M-h` / `M-l` — narrow / widen the master area (to 40% / 60%)
 - `M-S-Return` — promote the focused window to master
 - `M-period` / `M-comma` — more / fewer master windows
 - `M-t` `M-w` `M-b` `M-g` `M-f` — jump straight to `tall`, `wide`, `bsp`,

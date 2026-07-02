@@ -1,6 +1,42 @@
 # Installation
 
-## Requirements
+## Prebuilt packages (fastest — no toolchain)
+
+Every [release](https://github.com/Neftedollar/WTF/releases) ships prebuilt
+artifacts for x86_64 and aarch64. They are built on Ubuntu 24.04 (glibc 2.39),
+so they run on Debian 13+, Ubuntu 24.04+, and current Fedora/Arch/openSUSE —
+**no .NET SDK, no meson, no compiler** on your machine.
+
+**`.deb`** (Debian 13+ / Ubuntu 24.04+; package name `wtf-wm`):
+
+```sh
+sudo apt install ./wtf-wm_0.1.0_amd64.deb    # apt resolves the runtime deps
+```
+
+The `.deb` installs under `/usr` and registers the login session. It does
+*not* seed `~/.config/wtf/config.fsx` — run `wtf-edit` once before your first
+login to seed it from the packaged template (otherwise the built-in defaults
+apply, which assume `kitty` and `wofi`).
+
+**Tarball** (Fedora, Arch, openSUSE, or anything else):
+
+```sh
+tar xf wtf-0.1.0-linux-x64.tar.gz && cd wtf-0.1.0
+sudo bash scripts/install-deps.sh     # system runtime libraries (once)
+bash scripts/install-stage.sh stage   # preflight check + atomic install into /usr/local
+```
+
+`install-stage.sh` runs an `ldd` preflight of the bundled libraries (so a
+missing system library fails loudly *now*, with package hints — not at first
+login), then installs atomically and seeds your `config.fsx`.
+(`install-deps.sh` is shared with source builds, so it also pulls build tools
+— more than the prebuilt strictly needs, but it is the supported path.)
+
+Then skip ahead to [First login](#first-login) — or try it risk-free first:
+run `wtf` from a terminal *inside* your current desktop session and WTF opens
+nested as a regular window.
+
+## Requirements (source build)
 
 - Linux with a GPU that does GLES2 (any Mesa driver; llvmpipe works for VMs)
 - Stable system libraries only: libinput, libdrm, libseat, libxkbcommon,
@@ -27,10 +63,10 @@ missing — you will not discover a missing library at first login. Every
 supported distro is exercised in CI: full build → install → headless boot of
 the real compositor → IPC smoke test.
 
-## Build & install
+## Build & install from source
 
 ```sh
-git clone <repo> && cd WTF
+git clone https://github.com/Neftedollar/WTF.git && cd WTF
 bash scripts/install.sh
 ```
 
@@ -63,6 +99,9 @@ icon on the password screen; SDDM: the session dropdown).
 
 Alternatives:
 
+- **Nested, zero risk**: run `wtf` from a terminal *inside* your current
+  desktop session — WTF opens as a regular window with a full compositor in
+  it. Close the window (or `Super+Shift+q`) when done; nothing else is touched.
 - From a free TTY: run `wtf-session` (recommended — you get the restart loop
   and logging) or plain `wtf`.
 - DRM smoke test without logging in: `wtf-smoke-drm` from a TTY.
