@@ -1,170 +1,201 @@
 # WTF — Wayland Tiling, F#
 
-A tiling window manager for Linux/Wayland, with the **configurability of xMonad**,
-the **looks of Hyprland** (animations / transparency / blur / rounded corners),
-and a first-class **agent-first control surface**.
+[![ci](https://github.com/Neftedollar/WTF/actions/workflows/ci.yml/badge.svg)](https://github.com/Neftedollar/WTF/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/Neftedollar/WTF)](https://github.com/Neftedollar/WTF/releases)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Status: 0.1 beta — ready to test.** Builds, installs as a login session, tiles
-real windows on the GPU, driven by an F# brain. Rices live over a socket
-(gaps, borders, opacity, animations, rounded corners, blur). 49 tests green.
+**A tiling Wayland compositor whose configuration is real F# code — typo-proof,
+hot-reloading, and drivable by scripts and LLM agents.**
 
-## The big architectural decision: "F# brain, C body"
+WTF is for you if you liked xMonad's "your window manager is a program" idea
+and want it on Wayland — with a compiler catching your config mistakes, modern
+eye-candy (blur, rounded corners, macOS-style shadows), and a control socket
+designed for automation from day one.
 
-Writing a full Wayland compositor in pure F# is a multi-year research project
-(you'd reimplement DRM/KMS, GBM/EGL, libinput). Instead we split the system
-exactly like the Haskell [`tiny-wlhs`](https://github.com/l-Shane-l/tiny-wlhs)
-project proved works:
-
+```fsharp
+// ~/.config/wtf/config.fsx — this is the actual config format
+let wtfConfig =
+    config {
+        modKey "Super"
+        terminal "foot"
+        defaultLayout Layouts.Tall        // Type Provider: a typo won't compile
+        keys (keymap {
+            bind "M-Return" (Spawn "foot")
+            bind "M-j"      (Focus NextWindow)
+            bind "M-space"  (SetLayout Layouts.Bsp)
+        })
+        manageHook (manage {
+            rule (appIs "firefox") (ShiftToWorkspace "2")
+            rule (titleContains "Picture-in-Picture") FloatWindow
+        })
+        gaps 8
+        cornerRadius 10
+        blur true
+        shadow true                       // macOS-style drop shadows (scenefx)
+        wallpaper (Dynamic ("~/pics/catalina.heic", Fill))  // time-of-day .heic
+    }
 ```
-        ┌──────────────────────────────┐   narrow, blittable C ABI    ┌────────────────────────┐
-        │  C SHIM  (the "body")         │   ids + rectangles + intents │  F# BRAIN (this repo)  │
-        │  derived from wlroots/tinywl  │ <──────────────────────────> │                        │
-        │                               │                              │  • StackSet (zipper)   │
-        │  • backend / renderer / EGL   │   C calls UP  → arrange()     │  • Layout functions    │
-        │  • wl_display event loop      │   F# calls DOWN → move/focus  │  • workspaces, focus   │
-        │  • wl_listener plumbing       │                              │  • keybinds, config    │
-        │  • input capture, surfaces    │   only flat data crosses     │  • IPC / agent control │
-        │  • animations, blur, damage   │   (never wlroots structs)    │                        │
-        └──────────────────────────────┘                              └────────────────────────┘
+
+Save the file and the running WM applies it instantly. A typo? The config is
+rejected, the error goes to the log, and the **last good config stays active**
+— your session never dies from a missing parenthesis.
+
+> **Status: 0.1 beta.** Dogfooded daily as the author's main session. Single
+> monitor is the well-trodden path today (multi-monitor tiling is the top
+> roadmap item). Every commit runs a full build → install → headless boot →
+> IPC smoke test on five distros in CI. Expect rough edges; the crash story
+> below is honest about them.
+
+## Screenshots
+
+<!-- TODO: add real screenshots/GIFs before or shortly after launch:
+     1. tiled session with gaps + shadows + blur (the money shot)
+     2. config.fsx in an editor showing Apps./Layouts. autocomplete
+     3. a short GIF: edit gaps in config.fsx, save, layout reflows live
+     4. a short GIF: `wtfctl ask "put the browser on workspace 2"` -->
+*Screenshots coming — the project is launching from the author's daily-driver
+machine. Until then, the 60-second nested run below is the fastest way to see it.*
+
+## Try it in 60 seconds
+
+**Prebuilt — no .NET SDK, no meson, no compile.** Grab it from the
+[latest release](https://github.com/Neftedollar/WTF/releases/latest):
+
+```sh
+# Debian 13+ / Ubuntu 24.04+ (apt resolves the runtime deps):
+wget https://github.com/Neftedollar/WTF/releases/latest/download/wtf-wm_0.1.0_amd64.deb
+sudo apt install ./wtf-wm_0.1.0_amd64.deb
+
+# Any other distro of the supported set (Fedora, Arch, openSUSE) — the tarball:
+tar xf wtf-0.1.0-linux-x64.tar.gz && cd wtf-0.1.0
+sudo bash scripts/install-deps.sh    # system runtime libraries (once)
+bash scripts/install-stage.sh stage  # atomic install into /usr/local
 ```
 
-- **C side** owns everything performance-critical and protocol-heavy, and it is
-  the *only* thing that breaks when wlroots bumps its (unstable) ABI.
-- **F# side** is 100% safe, pure, property-tested code. A layout is literally
-  `Rect -> Stack<'a> -> ('a * Rect) list`. C calls it on discrete events,
-  gets back rectangles, and animates windows *towards* them.
+**Zero-risk first look — run it nested.** You don't have to log out or trust
+it with your session: run `wtf` from a terminal *inside* your current desktop
+and WTF opens as a regular window with a full compositor running in it.
+Play with `Super+Return`, `Super+j/k`, `Super+space`; close the window when
+you're done. Nothing outside that window is touched.
 
-Rejected: full P/Invoke of wlroots from F# (hand-mirrored structs, pinned
-listeners, breaks every release). See the research report in git history.
+```sh
+wtf            # nested session in a window
+wtfctl state   # in another terminal: the whole WM state as JSON
+```
+
+**Make it your session.** Log out and pick **WTF** in your display manager
+(GDM/SDDM). First steps: [Quickstart](docs/quickstart.md).
+
+Building from source instead (any of the 5 CI distros, ~x86_64/aarch64):
+
+```sh
+sudo bash scripts/install-deps.sh   # deps incl. the .NET SDK if missing
+bash scripts/install.sh             # build + atomic install + session entry
+```
+
+wlroots and scenefx are **vendored and bundled** — no distro wlroots package
+needed, and the installed WM is **self-contained** (no .NET runtime required on
+the target). Details: [Installation](docs/installation.md).
+
+## Why WTF
+
+**Config with a compiler behind it.** `~/.config/wtf/config.fsx` is a real F#
+program. Machine-aware Type Providers turn *your machine* into types:
+`Apps.` autocompletes to your installed applications (`Apps.Firefox.AppId`),
+`Layouts.` to the valid layout names — a rule for an app you don't have, or
+`SetLayout "tll"`, is a **compile error** in your editor, not a broken session.
+`wtf-edit` sets up the F# language server for you. And because config is code,
+appearance can be a function: per-app border colors, opacity rules, themes that
+follow the wallpaper palette. See [Configuration](docs/configuration.md).
+
+**Hot-reload with a safety net.** Every save recompiles and applies the config
+live; a config that doesn't compile is rejected and the last good one stays
+active. Off the main thread — the session never stutters or dies from an edit.
+
+**Agent-first control.** The entire WM state is one JSON document; every action
+is a semantic command (`focus the browser`, not `press Super+J`) on an NDJSON
+unix socket. `wtfctl` is the human CLI; `wtfctl tools` emits a machine-readable
+tool manifest so an LLM agent can discover the vocabulary; `wtfctl ask "put the
+browser on workspace 2"` is the opt-in natural-language driver. Scripts,
+`socat`, or an agent — same door. See [wtfctl & the control socket](docs/wtfctl.md).
+
+**Looks, live-tunable.** Rounded corners, backdrop blur, macOS-style drop
+shadows (via scenefx), slide/fade animations, per-window opacity, gaps, colored
+focus borders — every knob works over the socket (`wtfctl corners 12`,
+`wtfctl blur on`), so you iterate on your rice live and bake the result into
+config. Wallpapers: solid, image, or **dynamic time-of-day `.heic`** (the
+macOS dynamic wallpaper format, decoded with libheif) with a color palette
+that follows the current frame. See [Appearance](docs/appearance.md).
+
+**Crash-resilient by design.** The login manager runs a session wrapper, not
+the raw compositor: on an abnormal exit it restarts WTF (bounded), then falls
+back to **safe mode** (default config, no eye-candy), then returns you to the
+greeter — and every session writes a complete log with backtraces to
+`~/.local/state/wtf/`. See [Troubleshooting](docs/troubleshooting.md).
+
+**Tested like a library, smoked like a product.** The window-management brain
+is pure F# — 786 xUnit/FsCheck tests green. CI boots the real installed
+compositor headless on Debian, Ubuntu, Fedora, Arch, and openSUSE and drives
+it over IPC on every commit.
+
+Also in the box: workspaces 1–9 with per-workspace layouts, `tall`/`wide`/
+`bsp`/`grid`/`full` plus custom F#-defined layouts, floating & fullscreen,
+window rules, XWayland, server-side decoration negotiation, a status bar and
+launcher (omnibox), screenshot/screencast portals, undo/redo of window
+arrangements, and an optional [NativeAOT build](docs/AOT.md).
+
+## How it compares
+
+Honest positioning — these are all good projects; WTF exists because no one of
+them combines these particular properties.
+
+| | WTF | xMonad | sway | Hyprland |
+|---|---|---|---|---|
+| Config model | **F# code**, compile-checked + Type-Provider autocomplete, hot-reload with last-good fallback | Haskell code, recompile to apply | text file (i3 syntax) | text file (+ plugins) |
+| Display server | Wayland | X11 | Wayland | Wayland |
+| Eye-candy | blur, rounded corners, shadows, animations (scenefx) | none built in | none by design | the reference point — deepest effects stack |
+| Scriptable control | NDJSON socket, semantic commands, LLM tool manifest | X11 tools / custom | `swaymsg` IPC | `hyprctl` IPC |
+| Multi-monitor | not yet (top roadmap item) | yes | yes, mature | yes, mature |
+| Maturity | **0.1 beta** | decades | very mature, i3-compatible | mature, huge community |
+
+If you need multi-monitor today, or maximum stability, sway and Hyprland are
+the safer choices — genuinely. If you want your WM to be a typed program with
+an agent-grade API, that's the niche WTF is built for.
 
 ## Documentation
 
-User documentation lives in [`docs/`](docs/index.md): [install](docs/installation.md) ·
-[quickstart](docs/quickstart.md) · [configuration](docs/configuration.md) ·
-[keybindings](docs/keybindings.md) · [appearance & ricing](docs/appearance.md) ·
-[wtfctl & agent socket](docs/wtfctl.md) · [troubleshooting](docs/troubleshooting.md)
+| | |
+|---|---|
+| [Installation](docs/installation.md) | prebuilts, source build, first login |
+| [Quickstart](docs/quickstart.md) | first session, the ten keys of day one |
+| [Configuration](docs/configuration.md) | the `config.fsx` DSL end to end |
+| [Keybindings](docs/keybindings.md) | chord syntax, full default map |
+| [Appearance](docs/appearance.md) | borders, shadows, blur, wallpapers |
+| [wtfctl](docs/wtfctl.md) | CLI, raw JSON protocol, the agent socket |
+| [Troubleshooting](docs/troubleshooting.md) | logs, safe mode, crash recovery |
+| [FAQ](docs/faq.md) | stability, F#, .NET-at-runtime, NVIDIA, agents |
+| [Architecture](docs/architecture.md) | the "F# brain, C body" split, repo map |
+| [Config editing](docs/CONFIG-EDITING.md) | `wtf-edit`, F# LSP autocomplete |
+| [NativeAOT](docs/AOT.md) | the lean native-binary flavor |
 
-## The three pillars
+## Architecture in one paragraph
 
-| Pillar | Where it lives | How |
-|---|---|---|
-| **xMonad flexibility** | F# brain | Config *is* F# code, recompiled — layouts are plain functions, trivial to add. Pure + FsCheck-tested. |
-| **Hyprland beauty** | C shim renderer | F# emits *target* rectangles; the C renderer interpolates (animations), and applies blur/opacity/rounded corners. Beauty = how we travel to the rects F# chose. |
-| **Agent-first** | F# IPC boundary | A clean structured control protocol (query state, issue semantic commands) designed for an LLM driver, not just a CLI. The brain already holds all state as immutable data — easy to serialize and command. |
+**F# brain, C body.** All window-management logic — layouts, workspaces,
+focus, rules, your config — is a pure, property-tested F# core. A thin C shim
+over wlroots 0.18 + scenefx owns the GPU, input, and Wayland protocol; only
+flat data (ids, rectangles, intents) crosses the boundary. A layout is
+literally `Rect -> Stack<'a> -> ('a * Rect) list`: C calls the brain on
+discrete events, gets rectangles back, and animates windows towards them.
+The full story, the rejected alternatives, and the repo map:
+[docs/architecture.md](docs/architecture.md).
 
-## Status
+## Contributing
 
-- [x] `.NET 10 LTS` toolchain (in `~/.dotnet`)
-- [x] **Layout engine** — `Rect`, `Stack` zipper, `full`/`tall`/`bsp` layouts, gaps
-- [x] **Multi-workspace `World`** — 9 tags, view / move-window-to-tag
-- [x] **Named layout registry** — pluggable `LayoutFactory`, agent-discoverable
-- [x] **Agent-first control** — `Command`/`Selector` intents, pure `Reducer`,
-      `Effect`s for the compositor
-- [x] **JSON protocol** — `Protocol.snapshot` (state for the LLM) +
-      `Protocol.parse` (commands from the LLM)
-- [x] xMonad-parity layouts: `tall`/`wide`(Mirror)/`bsp`/`grid`/`full` + `mirror`/`reflect` modifiers
-- [x] **Config via computation expressions** — `config`/`keymap`/`manage`/`agent`
-      CEs over our object model (`Config.fs`); `ManageHook` window rules
-- [x] Property + unit tests (FsCheck/xUnit) — 39 passing
-- [x] Visualisers: `demo.fsx`, `agent-demo.fsx`, `examples/config.fsx`
-- [x] **FFI boundary**: `compositor/wtf.h` C ABI; `WTF.Host` F# host
-      (delegates up, P/Invoke down, chord translation) — compiles
-- [x] **C compositor shim** (`compositor/wtf-shim.c`, wlroots 0.18) — builds `libwtf_shim.so`
-- [x] **First graphical beta WORKS** — runs nested, GLES2 renderer, auto-spawns
-      terminals; the F# brain tiles real Wayland windows (verified: two kitty
-      terminals → master/stack split). `scripts/build.sh` + `scripts/run.sh`.
-- [x] **Agent-first door** — NDJSON unix socket (`$XDG_RUNTIME_DIR/wtf.sock`),
-      `wtfctl` CLI + LLM channel; cross-thread→loop-thread bridge via eventfd
-- [x] **Eye-candy** — slide+fade animations, active/inactive opacity, colored
-      focus borders, **rounded corners + backdrop blur via scenefx** — all in the
-      C renderer, all live-tunable over the socket
-- [x] **Installable beta** — self-contained publish + login-session file
-- [ ] Shadows (scenefx); floating windows; multi-output; interactive keybind pass
+Bug reports with a session log are gold — see
+[Troubleshooting](docs/troubleshooting.md#reporting-a-bug) for what to attach.
+Dev setup, the test/smoke matrix, and where help is most wanted (packaging,
+multi-monitor, wlroots 0.19): [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Agent control protocol (`wtfctl` / LLM)
+## License
 
-The compositor serves newline-delimited JSON on `$XDG_RUNTIME_DIR/wtf.sock`:
-send one command per line, get the full world snapshot back. Friendly CLI:
-
-```
-wtfctl state                  # the world snapshot (what an LLM reads)
-wtfctl layout bsp | next      # tall|wide|bsp|grid|full, or cycle
-wtfctl focus next|prev|master | focus app firefox   # focus (no pixels)
-wtfctl swap next|prev|master  # reorder / promote to master
-wtfctl master inc|dec | master 2     # master-pane count
-wtfctl ratio 0.6              # master-pane width
-wtfctl workspace 2|next|prev | move 2
-wtfctl spawn kitty | close
-wtfctl gaps 16|inc|dec        # live gaps
-wtfctl opacity 0.85           # live inactive-window transparency
-wtfctl anim 0.4               # live animation speed
-wtfctl border width 3         # live border thickness
-wtfctl border active "#f38ba8"   # live focused-border color
-wtfctl border inactive "#45475a"
-wtfctl corners 12             # live rounded-corner radius (scenefx)
-wtfctl blur on|off            # live backdrop blur (scenefx)
-wtfctl '{"cmd":"focus","by":"next"}'   # raw JSON (same door an agent uses)
-```
-
-## Ricing
-
-Appearance is configured in `~/.config/wtf/config.fsx` (gaps, border width +
-colors, inactive opacity, animation speed) **and** adjustable **live** over the
-socket — so you can iterate on your theme with `wtfctl` and bake the result into
-config. A theme is just a few `wtfctl` lines you can drop in a startup script:
-
-```sh
-wtfctl gaps 12
-wtfctl border width 3
-wtfctl border active "#cba6f7"
-wtfctl border inactive "#313244"
-wtfctl opacity 0.90
-```
-
-All the rice essentials are in: gaps, colored focus borders, per-window opacity,
-slide/fade animations, **rounded corners and backdrop blur** (via **scenefx**,
-the SwayFX scene-graph fork — built automatically by `scripts/build-scenefx.sh`).
-Every one of these is live-tunable over the socket. (Blur is opt-in/experimental;
-shadows are the next scenefx addition.)
-
-## Try it / install
-
-```
-sudo bash scripts/install-deps.sh   # wlroots 0.18 + wayland build deps (Debian 13)
-bash scripts/build.sh               # libwtf_shim.so + F# host
-bash scripts/run.sh                 # run WTF nested in your current session
-
-# install as a real login session (appears in gdm/sddm as "WTF"):
-bash scripts/install.sh             # self-contained — target needs NO .NET
-```
-
-The installer publishes a **self-contained** build, so machines you install on only
-need the wlroots/wayland *runtime* libraries (present on any wlroots desktop), not
-the .NET SDK. It drops a `wtf` launcher + `wtfctl` in `/usr/local/bin`, the shim in
-`/usr/local/lib/wtf`, a session file in `/usr/share/wayland-sessions`, and seeds
-`~/.config/wtf/config.fsx`.
-
-### NativeAOT build (lean, fast-starting native binary)
-
-An additive `-p:WtfAot=true` flavor compiles a small native binary (no 76 MB .NET
-payload) by dropping the reflection/JIT-only subsystems (config.fsx hot-reload,
-plugins, D-Bus desktop shell, LLM agent) and shipping the lean core WM with the
-built-in config — recompile to reconfigure, xMonad-style.
-
-```
-dotnet build src/WTF.Host/WTF.Host.fsproj -c Release -p:WtfAot=true  # lean graph (no clang)
-bash scripts/aot-publish.sh                                          # native binary (needs clang)
-```
-
-See [docs/AOT.md](docs/AOT.md) for the full feature matrix and the clang prerequisite.
-
-## Layout / build
-
-```
-src/WTF.Core        # the F# brain (no system deps — runs on bare .NET)
-tests/WTF.Core.Tests
-demo.fsx            # ASCII visualiser
-
-dotnet test         # run property tests
-dotnet fsi demo.fsx # see layouts
-```
+[MIT](LICENSE).
