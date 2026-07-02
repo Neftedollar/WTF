@@ -1,0 +1,43 @@
+name: pages
+
+# Deploys the website (site/ + docs/*.md rendered to HTML) to GitHub Pages.
+# No paths filter on purpose: any push to master redeploys, so the published
+# docs at /docs/ are always generated from the current docs/*.md — the
+# markdown in the repo stays the single source of truth, nothing is committed.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build site (landing + docs rendered from docs/*.md)
+        run: |
+          pip install markdown
+          python3 scripts/build-site.py
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
