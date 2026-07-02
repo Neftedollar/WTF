@@ -1,5 +1,9 @@
 # WTF — a Wayland Tiling window manager, configured in F#
 
+> This documentation is published at
+> **[neftedollar.github.io/WTF/docs](https://neftedollar.github.io/WTF/docs/)** —
+> rebuilt from `docs/*.md` on every push, so the site never drifts from these files.
+
 WTF is a tiling Wayland compositor in the xMonad tradition: your window manager
 is a program, and its configuration is **real F# code** with autocomplete,
 type-checking, and hot-reload. Typos in your config are compile errors caught in
