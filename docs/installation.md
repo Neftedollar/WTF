@@ -10,7 +10,7 @@ so they run on Debian 13+, Ubuntu 24.04+, and current Fedora/Arch/openSUSE —
 **`.deb`** (Debian 13+ / Ubuntu 24.04+; package name `wtf-wm`):
 
 ```sh
-sudo apt install ./wtf-wm_0.1.0_amd64.deb    # apt resolves the runtime deps
+sudo apt install ./wtf-wm_0.1.1_amd64.deb    # apt resolves the runtime deps
 ```
 
 The `.deb` installs under `/usr` and registers the login session. It does
@@ -21,7 +21,7 @@ apply, which assume `kitty` and `wofi`).
 **Tarball** (Fedora, Arch, openSUSE, or anything else):
 
 ```sh
-tar xf wtf-0.1.0-linux-x64.tar.gz && cd wtf-0.1.0
+tar xf wtf-0.1.1-linux-x64.tar.gz && cd wtf-0.1.1
 sudo bash scripts/install-deps.sh     # system runtime libraries (once)
 bash scripts/install-stage.sh stage   # preflight check + atomic install into /usr/local
 ```

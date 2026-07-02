@@ -63,11 +63,11 @@ machine. Until then, the 60-second nested run below is the fastest way to see it
 
 ```sh
 # Debian 13+ / Ubuntu 24.04+ (apt resolves the runtime deps):
-wget https://github.com/Neftedollar/WTF/releases/latest/download/wtf-wm_0.1.0_amd64.deb
-sudo apt install ./wtf-wm_0.1.0_amd64.deb
+wget https://github.com/Neftedollar/WTF/releases/latest/download/wtf-wm_0.1.1_amd64.deb
+sudo apt install ./wtf-wm_0.1.1_amd64.deb
 
 # Any other distro of the supported set (Fedora, Arch, openSUSE) — the tarball:
-tar xf wtf-0.1.0-linux-x64.tar.gz && cd wtf-0.1.0
+tar xf wtf-0.1.1-linux-x64.tar.gz && cd wtf-0.1.1
 sudo bash scripts/install-deps.sh    # system runtime libraries (once)
 bash scripts/install-stage.sh stage  # atomic install into /usr/local
 ```
