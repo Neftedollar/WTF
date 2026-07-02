@@ -1,0 +1,49 @@
+name: Feature request
+description: Propose an improvement or a new capability
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing: WTF's config is code, so a lot of "features" are
+        already expressible in `config.fsx` (custom layouts, per-app rules,
+        dynamic colors) or over the socket (`wtfctl`). If you tried that route
+        and hit a wall, say where — that's the most useful part.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that you currently can't (or can't do cleanly)?
+      placeholder: |
+        I want my browser workspace on my second monitor, but ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should WTF do? Config DSL sketches and `wtfctl` command sketches are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you tried
+      description: config.fsx snippets, wtfctl scripts, plugins — and where they fell short.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Layouts / tiling
+        - Config DSL / Type Providers
+        - Appearance (borders, blur, shadows, wallpapers)
+        - wtfctl / agent socket / LLM
+        - Multi-monitor
+        - Bar / omnibox
+        - Packaging / install
+        - Other
+    validations:
+      required: true

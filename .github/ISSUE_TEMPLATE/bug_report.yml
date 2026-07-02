@@ -1,0 +1,80 @@
+name: Bug report
+description: Something crashed, misbehaved, or surprised you
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks — a report with a session log is usually fixable the same week.
+        Every WTF session writes a complete log (including crash backtraces) to
+        `~/.local/state/wtf/session-<timestamp>.log`.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: |
+        Opened a third kitty window on workspace 2 with the bsp layout and ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: WTF version / commit
+      description: Release tag (e.g. v0.1.0), `.deb` version, or `git rev-parse --short HEAD` for source builds.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Distro
+      placeholder: "e.g. Fedora 42, Arch (2026-06), Debian 13"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU & driver
+      description: "`lspci | grep -i vga` is enough; mention NVIDIA/hybrid setups explicitly."
+      placeholder: "AMD Radeon 780M, Mesa 25.x"
+    validations:
+      required: true
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How were you running WTF?
+      options:
+        - Login session (display manager)
+        - wtf-session from a TTY
+        - Nested (`wtf` inside another session)
+        - Headless / other
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Session log tail
+      description: |
+        The end of the newest log usually contains the crash/error:
+        `tail -n 100 "$(ls -t ~/.local/state/wtf/session-*.log | head -1)"`
+        If there was a crash, include the backtrace block. Logs contain no secrets by design, but skim before posting.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Your config.fsx (if relevant)
+      description: "`~/.config/wtf/config.fsx` — or note if you were on the seed config / safe mode."
+      render: fsharp
+    validations:
+      required: false
+  - type: textarea
+    id: state
+    attributes:
+      label: wtfctl state (if the session is still alive)
+      description: "`wtfctl state` output helps for layout/focus/workspace bugs."
+      render: json
+    validations:
+      required: false
