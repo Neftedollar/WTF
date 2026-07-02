@@ -35,12 +35,23 @@ echo ">> building wlroots -> $PREFIX"
 # support enabled (the WM builds against its own wlroots, so this must be on).
 # Backend/feature deps that are missing (e.g. no xcb headers => no x11
 # nested backend) degrade via meson auto features instead of failing.
-meson setup "$SRC/build" "$SRC" \
-  --prefix="$PREFIX" --libdir=lib \
-  -Dexamples=false \
-  -Drenderers=gles2 \
-  -Dxwayland=enabled \
-  >/dev/null
+# -Dwerror=false: 0.18 sources + a NEWER toolchain/libinput trip -Werror
+# (e.g. libinput 1.29 added LIBINPUT_SWITCH_KEYPAD_SLIDE => unhandled-enum
+# error on Arch). Warnings in pinned third-party code are not our errors.
+# Setup log goes to a FILE and is dumped on failure — never swallow the
+# reason a distro can't configure the build.
+SETUP_LOG="$SRC/meson-setup.log"
+if ! meson setup "$SRC/build" "$SRC" \
+    --prefix="$PREFIX" --libdir=lib \
+    -Dwerror=false \
+    -Dexamples=false \
+    -Drenderers=gles2 \
+    -Dxwayland=enabled \
+    >"$SETUP_LOG" 2>&1; then
+  echo "build-wlroots.sh: meson setup FAILED — full log:" >&2
+  cat "$SETUP_LOG" >&2
+  exit 1
+fi
 ninja -C "$SRC/build"
 ninja -C "$SRC/build" install >/dev/null
 PC_DIR="$(dirname "$(find "$PREFIX" -name 'wlroots-0.18.pc' -print -quit)")"

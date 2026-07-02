@@ -1,0 +1,31 @@
+# Maintainer: WTF <https://github.com/Neftedollar/WTF/issues>
+# AUR source package: builds WTF from a tagged release with the same scripts
+# CI validates on archlinux:latest. wlroots + scenefx are vendored (pinned)
+# into /usr/lib/wtf by the build — no wlroots dependency on the host.
+pkgname=wtf-wm
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Wayland tiling window manager configured in F# (xMonad-style, scenefx effects, agent-first socket)"
+arch=(x86_64 aarch64)
+url="https://github.com/Neftedollar/WTF"
+license=(MIT)
+depends=(libinput seatd libxkbcommon libdrm mesa pixman systemd-libs libxcb)
+makedepends=(git meson ninja pkgconf scdoc dotnet-sdk hwdata libdisplay-info libliftoff
+             xcb-util-renderutil xcb-util-wm wayland-protocols)
+optdepends=('xorg-xwayland: X11 application support'
+            'xdg-desktop-portal-wlr: screenshots/screencast portals'
+            'grim: screenshot CLI'
+            'libheif: dynamic .heic wallpapers'
+            'kitty: default terminal')
+source=("$pkgname::git+$url.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname"
+  WTF_ALLOW_ROOT=1 WTF_STAGE_ONLY=1 WTF_PREFIX=/usr bash scripts/install.sh
+}
+
+package() {
+  cd "$pkgname"
+  cp -a build/stage/. "$pkgdir"/
+}

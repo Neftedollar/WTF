@@ -26,7 +26,14 @@ rm -rf "$SRC"
 git clone --depth 1 --branch "$TAG" https://github.com/wlrfx/scenefx.git "$SRC"
 
 echo ">> building scenefx -> $PREFIX"
-meson setup "$SRC/build" "$SRC" --prefix="$PREFIX" --libdir=lib -Dexamples=false >/dev/null
+# -Dwerror=false + visible setup log: same reasoning as build-wlroots.sh.
+SETUP_LOG="$SRC/meson-setup.log"
+if ! meson setup "$SRC/build" "$SRC" --prefix="$PREFIX" --libdir=lib \
+    -Dwerror=false -Dexamples=false >"$SETUP_LOG" 2>&1; then
+  echo "build-scenefx.sh: meson setup FAILED — full log:" >&2
+  cat "$SETUP_LOG" >&2
+  exit 1
+fi
 ninja -C "$SRC/build"
 ninja -C "$SRC/build" install >/dev/null
 PC_DIR="$(dirname "$(find "$PREFIX" -name 'scenefx-0.2.pc' -print -quit)")"

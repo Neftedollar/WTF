@@ -28,7 +28,10 @@ if [ -d "$HOME/.dotnet" ]; then
 fi
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 
-PREFIX=/usr/local
+# Overridable for packaging (.deb/PKGBUILD/rpm use /usr): every consumer of
+# the install prefix (launchers, wtf.desktop Exec, wtf-session's default host,
+# wtf-edit's dll paths, the config template) is TEMPLATED at stage time below.
+PREFIX="${WTF_PREFIX:-/usr/local}"
 # RID must match the HOST arch: the C shim/scenefx are compiled natively, and
 # `dotnet publish -r linux-x64` on aarch64 "succeeds" — then exec-format-fails
 # at first login (the worst failure mode: builds clean, breaks at boot).
@@ -150,7 +153,10 @@ chmod 755 "$BINWTF/wtf-omnibox"
 # wtf-edit: opens ~/.config/wtf/config.fsx with the F# LSP (FsAutoComplete) set up
 # so the config Type Provider gives autocomplete (`Apps.`, `Layouts.`). See
 # docs/CONFIG-EDITING.md.
-install -Dm755 scripts/wtf-edit "$BINWTF/wtf-edit"
+sed -e "s|^INSTALL_LIB=.*|INSTALL_LIB=\"$PREFIX/lib/wtf\"|" \
+    -e "s|^INSTALL_TEMPLATE=.*|INSTALL_TEMPLATE=\"$PREFIX/share/wtf/config.fsx\"|" \
+    scripts/wtf-edit > "$BINWTF/wtf-edit"
+chmod 755 "$BINWTF/wtf-edit"
 # A pristine copy of the seed config, templated with the INSTALLED #r paths, so
 # wtf-edit can re-seed a deleted config and the install can seed a fresh one.
 TEMPLATE="$STAGE/usr/share/wtf/config.fsx"
@@ -161,87 +167,31 @@ sed -E \
   examples/config.fsx > "$TEMPLATE"
 # session wrapper (what the .desktop launches): captures a log, restores the
 # console on every exit, bounded restart loop, safe-mode escalation, fallback.
-# Its default WTF_HOST is /usr/local/bin/wtf == the launcher written just above.
-install -Dm755 scripts/wtf-session "$BINWTF/wtf-session"
+# Its default WTF_HOST is templated to $PREFIX/bin/wtf (the launcher above).
+sed -e "s|^HOST=\"\${WTF_HOST:-.*}\"|HOST=\"\${WTF_HOST:-$PREFIX/bin/wtf}\"|" \
+    scripts/wtf-session > "$BINWTF/wtf-session"
+chmod 755 "$BINWTF/wtf-session"
 # TTY smoke test the user can run from a free VT to verify DRM/KMS startup.
 install -Dm755 scripts/smoke-drm.sh "$BINWTF/wtf-smoke-drm"
-install -Dm644 packaging/wtf.desktop "$SESS/wtf.desktop"
+sed -e "s|^Exec=.*|Exec=$PREFIX/bin/wtf-session|" \
+    packaging/wtf.desktop > "$SESS/wtf.desktop"
+chmod 644 "$SESS/wtf.desktop"
 # xdg-desktop-portal routing (screenshots/screencast -> wlr, file-picker -> gtk),
 # selected when XDG_CURRENT_DESKTOP=wtf. Needs the portal packages installed.
 install -Dm644 packaging/wtf-portals.conf "$STAGE/usr/share/xdg-desktop-portal/wtf-portals.conf"
 
-echo ">> 4/5  copying into / (needs root; atomic per-file — safe over a LIVE session)"
-# NEVER `cp -a stage/. /` here. cp overwrites destination files IN PLACE, which
-# corrupts the text pages of the running compositor's mmap'd libwtf_shim.so and
-# WTF.Host — the live session dies with SIGSEGV the moment the copy touches
-# them, and the wtf-session restart loop then execs HALF-WRITTEN binaries and
-# dies with SIGBUS (including safe-mode). Seen live 2026-07-01 00:23: running
-# install.sh from inside a WTF session killed it 3+1 times in one second.
-# Atomic install instead: write each file next to its destination, then
-# rename(2) it into place. A running process keeps the OLD inode alive, and no
-# reader/exec can ever observe a partially-written file.
-# Preflight: every staged native lib must resolve on THIS machine's system
-# libs (wlroots-0.18, libinput, ...). Catch a missing/mismatched dependency
-# NOW with package hints — not at first login as a DllNotFoundException
-# crash-loop with no display.
-if command -v ldd >/dev/null 2>&1; then
-  MISSING="$(LD_LIBRARY_PATH="$LIBWTF" ldd "$LIBWTF"/libwtf_shim.so "$LIBWTF"/libscenefx-0.2.so 2>/dev/null \
-               | grep 'not found' | sort -u || true)"
-  if [ -n "$MISSING" ]; then
-    echo "install.sh: staged libraries have UNRESOLVED dependencies on this machine:" >&2
-    echo "$MISSING" >&2
-    echo "  Debian/Ubuntu: bash scripts/install-deps.sh   (wlroots-0.18, libinput, ...)" >&2
-    echo "  Fedora: dnf install wlroots libinput | Arch: pacman -S wlroots0.18 libinput" >&2
-    exit 1
-  fi
+# Release/packaging builds stop here: the stage IS the artifact (tarball root,
+# .deb payload, PKGBUILD/rpm buildroot source).
+if [ -n "${WTF_STAGE_ONLY:-}" ]; then
+  echo ">> stage-only build complete: $STAGE (prefix $PREFIX)"
+  exit 0
 fi
 
-SUDO=""
-if [ "$(id -u)" -ne 0 ]; then
-  SUDO="sudo"
-  # Honor an askpass helper when configured (e.g. driven by an agent with no tty).
-  [ -n "${SUDO_ASKPASS:-}" ] && SUDO="sudo -A"
-fi
-$SUDO bash -euo pipefail -s "$STAGE" <<'ATOMIC_INSTALL'
-STAGE="$1"
-cd "$STAGE"
-find . -mindepth 1 -type d -print0 | while IFS= read -r -d '' d; do
-  mkdir -p "/${d#./}"
-done
-# Abort mid-run (disk full, read-only /usr on ostree) must not litter /usr with
-# half-written temp files: clean the in-flight temp explicitly on either
-# failure (a trap in the parent can't see `tmp` — the loop is a pipe subshell).
-find . \( -type f -o -type l \) -print0 | while IFS= read -r -d '' f; do
-  dst="/${f#./}"
-  tmp="$dst.wtf-new.$$"
-  cp -a "$f" "$tmp" || { rm -f "$tmp"; exit 1; }  # -a keeps mode/symlink
-  mv -f "$tmp" "$dst" || { rm -f "$tmp"; exit 1; } # rename(2): atomic swap
-done
-# Sweep stale temps from PREVIOUS aborted installs (bounded to our trees).
-find "/usr/local/lib/wtf" "/usr/local/bin" -maxdepth 2 -name '*.wtf-new.*' -delete 2>/dev/null || true
-ATOMIC_INSTALL
-if pgrep -f 'lib/wtf/WTF\.Host' >/dev/null 2>&1; then
-  echo "   NOTE: a live WTF session is running. It safely keeps the OLD binaries"
-  echo "   (old inodes) until restart: M-S-r reloads only config.fsx; log out and"
-  echo "   back in (Super+Shift+q) to pick up the new build."
-fi
-
-echo ">> 5/5  seeding a default user config (~/.config/wtf/config.fsx)"
-mkdir -p "$HOME/.config/wtf"
-# Seed from the installed template (templated with the /usr/local/lib/wtf #r paths
-# so the editor's F# LSP resolves WTF.Core + WTF.TypeProviders). Falls back to the
-# repo seed if the template copy isn't on disk yet.
-if [ ! -f "$HOME/.config/wtf/config.fsx" ]; then
-  if [ -f "$PREFIX/share/wtf/config.fsx" ]; then
-    cp "$PREFIX/share/wtf/config.fsx" "$HOME/.config/wtf/config.fsx"
-  else
-    cp examples/config.fsx "$HOME/.config/wtf/config.fsx"
-  fi
-fi
+echo ">> 4-5/5  installing the stage (atomic) + seeding the user config"
+# The preflight ldd check, atomic per-file rename(2) copy (safe over a LIVE
+# session), and config seeding all live in install-stage.sh — shared with the
+# prebuilt release tarballs, whose stage is built in CI.
+bash scripts/install-stage.sh "$STAGE"
 
 echo
 echo ">> Edit your config with autocomplete:  wtf-edit   (see docs/CONFIG-EDITING.md)"
-
-echo
-echo ">> Installed. Log out and pick \"WTF\" in your display manager,"
-echo "   or run 'wtf' from a TTY. Control it live with 'wtfctl state'."

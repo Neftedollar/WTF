@@ -1,0 +1,62 @@
+name: release
+
+# Prebuilt artifacts on every version tag:
+#   wtf-<ver>-linux-{x64,arm64}.tar.gz   self-contained tree + install script
+#   wtf-wm_<ver>_{amd64,arm64}.deb        binary package (PREFIX=/usr)
+# Built inside ubuntu:24.04 — the oldest glibc (2.39) of the supported set,
+# so the binaries run on Debian 13+, Ubuntu 24.04+, and current
+# Fedora/Arch/openSUSE. Users of prebuilts need no SDK/meson at all.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ubuntu:24.04
+    steps:
+      - name: git for checkout
+        run: apt-get update && apt-get install -y git
+      - uses: actions/checkout@v4
+      - name: dependencies (+ .NET SDK)
+        run: bash scripts/install-deps.sh
+      - name: stage (tarball layout, PREFIX=/usr/local)
+        run: WTF_ALLOW_ROOT=1 WTF_STAGE_ONLY=1 bash scripts/install.sh
+      - name: tarball
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          DIST="dist/wtf-$VER"
+          mkdir -p "$DIST/scripts" "$DIST/examples"
+          cp -a build/stage "$DIST/stage"
+          cp scripts/install-stage.sh scripts/install-deps.sh "$DIST/scripts/"
+          cp examples/config.fsx "$DIST/examples/"
+          cp README.md "$DIST/" || true
+          printf '%s\n' \
+            'Prebuilt WTF. Install:' \
+            '  sudo bash scripts/install-deps.sh   # runtime libs (once)' \
+            '  bash scripts/install-stage.sh stage # atomic install into /usr/local' \
+            > "$DIST/INSTALL"
+          tar -C dist -czf "wtf-$VER-linux-${{ matrix.arch }}.tar.gz" "wtf-$VER"
+      - name: stage (deb layout, PREFIX=/usr) + .deb
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          WTF_ALLOW_ROOT=1 WTF_STAGE_ONLY=1 WTF_PREFIX=/usr bash scripts/install.sh
+          bash scripts/build-deb.sh "$VER"
+      - name: upload to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            wtf-*-linux-*.tar.gz
+            build/wtf-wm_*.deb

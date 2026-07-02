@@ -21,7 +21,7 @@ APT_PKGS=(
   # x11 backend (nested-in-X11) + xwayland support:
   libxcb1-dev libxcb-composite0-dev libxcb-dri3-dev libxcb-present-dev
   libxcb-render0-dev libxcb-render-util0-dev libxcb-shm0-dev
-  libxcb-xfixes0-dev libxcb-icccm4-dev libxcb-res0-dev libxcb-errors-dev
+  libxcb-xfixes0-dev libxcb-icccm4-dev libxcb-res0-dev
   libxcb-ewmh-dev xwayland
   # runtime desktop-shell tooling: portals + screenshot CLIs
   xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk
@@ -56,18 +56,22 @@ PACMAN_PKGS=(
   libheif
 )
 
+# openSUSE: rely on pkgconfig() CAPABILITIES for libraries — package names
+# drift (libseat-devel / pkg-config resolved differently on Tumbleweed),
+# capabilities don't.
 ZYPPER_PKGS=(
-  gcc gcc-c++ meson ninja pkg-config scdoc git curl
-  wayland-devel wayland-protocols-devel libxkbcommon-devel
-  libdrm-devel libgbm-devel libpixman-1-0-devel
-  libinput-devel libseat-devel systemd-devel
-  Mesa-libEGL-devel Mesa-libGLESv3-devel
-  hwdata libdisplay-info-devel libliftoff-devel
-  libxcb-devel xcb-util-renderutil-devel xcb-util-wm-devel xcb-util-errors-devel
-  xwayland
+  gcc gcc-c++ meson ninja pkgconf scdoc git curl
+  hwdata xwayland
   xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk
-  grim slurp
-  libheif1
+  grim slurp libheif1
+)
+ZYPPER_CAPS=(
+  "pkgconfig(wayland-server)" "pkgconfig(wayland-scanner)" "pkgconfig(wayland-protocols)"
+  "pkgconfig(xkbcommon)" "pkgconfig(libdrm)" "pkgconfig(gbm)"
+  "pkgconfig(pixman-1)" "pkgconfig(libinput)" "pkgconfig(libseat)"
+  "pkgconfig(libudev)" "pkgconfig(egl)" "pkgconfig(glesv2)"
+  "pkgconfig(libdisplay-info)" "pkgconfig(libliftoff)"
+  "pkgconfig(xcb)" "pkgconfig(xcb-renderutil)" "pkgconfig(xcb-icccm)"
 )
 
 # ---------------- install via the detected package manager ----------------
@@ -75,6 +79,9 @@ if command -v apt-get >/dev/null 2>&1; then
   echo ">> apt (Debian/Ubuntu): installing ${#APT_PKGS[@]} packages"
   apt-get update
   apt-get install -y "${APT_PKGS[@]}"
+  # Optional for wlroots (better X11-backend errors); Ubuntu 24.04 lacks it.
+  apt-get install -y libxcb-errors-dev 2>/dev/null || \
+    echo "   (libxcb-errors-dev unavailable — fine, it's optional)"
 elif command -v dnf >/dev/null 2>&1; then
   echo ">> dnf (Fedora): installing ${#DNF_PKGS[@]} packages"
   dnf install -y "${DNF_PKGS[@]}"
@@ -82,8 +89,11 @@ elif command -v pacman >/dev/null 2>&1; then
   echo ">> pacman (Arch): installing ${#PACMAN_PKGS[@]} packages"
   pacman -Sy --noconfirm --needed "${PACMAN_PKGS[@]}"
 elif command -v zypper >/dev/null 2>&1; then
-  echo ">> zypper (openSUSE): installing ${#ZYPPER_PKGS[@]} packages"
-  zypper --non-interactive install "${ZYPPER_PKGS[@]}"
+  echo ">> zypper (openSUSE): installing ${#ZYPPER_PKGS[@]} packages + ${#ZYPPER_CAPS[@]} capabilities"
+  zypper --non-interactive install "${ZYPPER_PKGS[@]}" "${ZYPPER_CAPS[@]}"
+  # Optional capability (xcb-errors is not packaged on openSUSE).
+  zypper --non-interactive install "pkgconfig(xcb-errors)" >/dev/null 2>&1 || \
+    echo "   (xcb-errors unavailable — fine, it's optional)"
 else
   echo "install-deps.sh: no supported package manager (apt/dnf/pacman/zypper)" >&2
   exit 1
@@ -94,7 +104,14 @@ fi
 # per-user into ~/.dotnet of the INVOKING user (we run under sudo), matching
 # what scripts/install.sh looks for.
 TARGET_USER="${SUDO_USER:-$(id -un)}"
-TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+if [ -n "${SUDO_USER:-}" ]; then
+  TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+else
+  # NOT under sudo (containers/CI): honor $HOME as-is. CI sets HOME to a
+  # non-passwd path (/github/home); getent would put the SDK where the build
+  # step's $HOME/.dotnet check never looks.
+  TARGET_HOME="$HOME"
+fi
 if command -v dotnet >/dev/null 2>&1 || [ -x "$TARGET_HOME/.dotnet/dotnet" ]; then
   echo ">> dotnet present — skipping SDK install"
 else
