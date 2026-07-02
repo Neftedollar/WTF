@@ -13,3 +13,6 @@ build/
 bin/aot/
 compositor/.wlroots/
 build/wlroots-src/
+
+# generated website staging (scripts/build-site.py)
+_site/
