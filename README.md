@@ -50,13 +50,15 @@ rejected, the error goes to the log, and the **last good config stays active**
 
 ## Screenshots
 
-<!-- TODO: add real screenshots/GIFs before or shortly after launch:
-     1. tiled session with gaps + shadows + blur (the money shot)
-     2. config.fsx in an editor showing Apps./Layouts. autocomplete
-     3. a short GIF: edit gaps in config.fsx, save, layout reflows live
-     4. a short GIF: `wtfctl ask "put the browser on workspace 2"` -->
-*Screenshots coming — the project is launching from the author's daily-driver
-machine. Until then, the 60-second nested run below is the fastest way to see it.*
+<!-- TODO (remaining captures):
+     1. config.fsx in an editor showing Apps./Layouts. autocomplete
+     2. a short GIF: edit gaps in config.fsx, save, layout reflows live
+     3. a short GIF: `wtfctl ask "put the browser on workspace 2"` -->
+![WTF tiling btop, fastfetch and a Claude Code session — rounded corners, gaps, gradient wallpaper](docs/assets/hero.png)
+
+*A real capture from the author's daily-driver session — the agent in the
+bottom-right window is developing WTF from inside WTF. GIFs (hot-reload,
+`wtfctl ask`) coming.*
 
 ## Try it in 60 seconds
 

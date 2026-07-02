@@ -282,13 +282,12 @@ footer a:hover{color:var(--blue)}
   </div>
   <p class="caption"><b>Save the file and the running WM applies it instantly.</b> A typo? The config is rejected, the error goes to the log, and the last good config stays active — your session never dies from a missing parenthesis. In an editor with the F# LSP (<code>wtf-edit</code> sets it up), <code>Apps.</code> autocompletes to <em>your installed applications</em> and <code>Layouts.</code> to the valid layouts — a rule for an app you don't have is a compile error, not a broken session.</p>
 
-  <!-- SCREENSHOT SLOT: replace this .shot div with <img> / <video> of a real session
-       (tiled windows + gaps + shadows + blur — the money shot). Keep alt text. -->
   <div class="shot" id="screenshot-slot">
-    <span class="mono">[ screenshot slot ]</span>
-    Real session captures are coming — WTF is launching straight from the author's daily-driver machine.
-    Until then, the <a href="#nested">60-second nested run</a> below is the fastest way to see it with your own eyes.
+    <img src="shot-hero.png" width="1920" height="1080" loading="lazy"
+         alt="WTF tiling three kitty terminals on the author's laptop: btop as the master window with an active blue border, fastfetch reporting WM: WTF.Host (Wayland), and a Claude Code session working inside the compositor it builds — rounded corners, gaps and a gradient wallpaper visible between windows."
+         style="width:100%;height:auto;border-radius:12px;display:block">
   </div>
+  <p class="caption">A real capture from the author's daily-driver session — the agent in the bottom-right window is developing WTF from <em>inside</em> WTF. More captures (hot-reload GIF, <code>wtfctl ask</code>) coming.</p>
 </section>
 
 <section class="wrap" id="why">
