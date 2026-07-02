@@ -58,15 +58,24 @@ machine. Until then, the 60-second nested run below is the fastest way to see it
 
 ## Try it in 60 seconds
 
-**Prebuilt — no .NET SDK, no meson, no compile.** Grab it from the
+**One line, any supported distro** (Debian, Ubuntu, Fedora, Arch, openSUSE;
+x86_64/aarch64). Detects your package manager and fetches the latest prebuilt
+release — no .NET SDK, no meson, no compile:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Neftedollar/WTF/master/scripts/get-wtf.sh | bash
+```
+
+Prefer to see what you run? [Read the script](scripts/get-wtf.sh) — it only
+downloads a release asset and runs the same installers documented in
+[Installation](docs/installation.md). Manual equivalent from the
 [latest release](https://github.com/Neftedollar/WTF/releases/latest):
 
 ```sh
 # Debian 13+ / Ubuntu 24.04+ (apt resolves the runtime deps):
-wget https://github.com/Neftedollar/WTF/releases/latest/download/wtf-wm_0.1.1_amd64.deb
 sudo apt install ./wtf-wm_0.1.1_amd64.deb
 
-# Any other distro of the supported set (Fedora, Arch, openSUSE) — the tarball:
+# Any other distro of the supported set — the tarball:
 tar xf wtf-0.1.1-linux-x64.tar.gz && cd wtf-0.1.1
 sudo bash scripts/install-deps.sh    # system runtime libraries (once)
 bash scripts/install-stage.sh stage  # atomic install into /usr/local

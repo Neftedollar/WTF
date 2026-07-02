@@ -1,5 +1,16 @@
 # Installation
 
+## One-liner (any supported distro)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Neftedollar/WTF/master/scripts/get-wtf.sh | bash
+```
+
+[`get-wtf.sh`](../scripts/get-wtf.sh) detects your architecture and package
+manager, resolves the latest release, and runs the exact same steps as the
+manual paths below (`.deb` via apt on Debian/Ubuntu; tarball + atomic install
+elsewhere). Nothing hidden — read it first if you prefer.
+
 ## Prebuilt packages (fastest — no toolchain)
 
 Every [release](https://github.com/Neftedollar/WTF/releases) ships prebuilt
