@@ -60,6 +60,9 @@ void wtf_close(int id);
  * fullscreen and hides its border; 0 leaves it. Full-screen *positioning* is
  * still driven by the brain via wtf_configure (it sends the Screen rect). */
 void wtf_set_fullscreen(int id, int on);
+/* Show/hide a toplevel wholesale (workspace visibility). Hidden windows keep
+ * their geometry; their scene nodes (window+border+shadow) are disabled. */
+void wtf_set_hidden(int id, int hidden);
 /* Spawn a program via `/bin/sh -c cmd`. */
 void wtf_spawn(const char *cmd);
 /* Stop the compositor event loop. */

@@ -192,6 +192,8 @@ struct wtf_toplevel {
 	bool   has_win_border;      /* false (calloc) => fall back to global active/inactive */
 	double win_opacity;         /* override opacity target, used when has_win_opacity */
 	bool   has_win_opacity;     /* false (calloc) => fall back to global active/inactive */
+	bool   hidden;              /* on a non-current workspace (scene nodes disabled) */
+	bool   fullscreen;          /* brain-driven fs flag (border stays hidden while set) */
 	bool   floating;            /* set by the brain; tiled (false) windows ignore
 	                               interactive move/resize (the layout owns their size) */
 
@@ -2203,9 +2205,35 @@ void wtf_set_fullscreen(int id, int on) {
 		}
 	}
 	/* Hide the colored border while fullscreen (a fullscreen window owns the whole
-	 * screen; a frame around it would be wrong); restore it when leaving. */
+	 * screen; a frame around it would be wrong); restore it when leaving —
+	 * unless the window is on a hidden workspace (wtf_set_hidden owns it then). */
+	t->fullscreen = (on != 0);
 	if (t->border != NULL) {
-		wlr_scene_node_set_enabled(&t->border->node, on == 0);
+		wlr_scene_node_set_enabled(&t->border->node, !t->fullscreen && !t->hidden);
+	}
+	schedule_frame();
+}
+
+/* Show/hide a toplevel wholesale (the brain calls this as the workspace
+ * visibility changes: windows on non-current workspaces are HIDDEN). Scene
+ * nodes are disabled, not moved — no fake off-screen geometry, no client
+ * resize, instant on both directions. Border re-enable respects the
+ * fullscreen flag (a fullscreen window keeps its chrome hidden). */
+void wtf_set_hidden(int id, int hidden) {
+	struct wtf_toplevel *t = toplevel_by_id(id);
+	if (t == NULL || t->hidden == (hidden != 0)) {
+		return; /* unknown id or no change — keep this idempotent + cheap */
+	}
+	t->hidden = (hidden != 0);
+	bool show = !t->hidden;
+	if (t->scene_tree != NULL) {
+		wlr_scene_node_set_enabled(&t->scene_tree->node, show);
+	}
+	if (t->border != NULL) {
+		wlr_scene_node_set_enabled(&t->border->node, show && !t->fullscreen);
+	}
+	if (t->shadow != NULL) {
+		wlr_scene_node_set_enabled(&t->shadow->node, show);
 	}
 	schedule_frame();
 }

@@ -94,6 +94,10 @@ module Ffi =
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_fullscreen(int id, int on)
 
+    /// Workspace visibility: hidden windows keep geometry, scene nodes disabled.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_hidden(int id, int hidden)
+
     // ---- input configuration (keyboard xkb/repeat + libinput pointer/touchpad) ----
 
     /// Mirrors `struct wtf_libinput_config` in compositor/wtf.h EXACTLY. Fully

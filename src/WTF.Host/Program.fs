@@ -213,6 +213,13 @@ let private applyEffects effects =
     for e in effects do
         match e with
         | Arrange rects ->
+            // Visibility is DERIVED from the arrange list: it contains exactly
+            // the windows of the CURRENT workspace, so everything mapped but
+            // absent belongs to another workspace and gets hidden. This is the
+            // whole workspace-switch story on the C side (idempotent per id).
+            let visible = rects |> List.map fst |> Set.ofList
+            for KeyValue(id, _) in world.Windows do
+                Ffi.wtf_set_hidden (id, (if Set.contains id visible then 0 else 1))
             for (id, r) in rects do
                 let x, y, w, h = Scaling.configure cfg.Scale r
                 Ffi.wtf_configure (id, x, y, w, h)
