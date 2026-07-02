@@ -23,6 +23,9 @@ APT_PKGS=(
   libxcb-render0-dev libxcb-render-util0-dev libxcb-shm0-dev
   libxcb-xfixes0-dev libxcb-icccm4-dev libxcb-res0-dev
   libxcb-ewmh-dev xwayland
+  # .NET needs ICU at build- and runtime (minimal containers lack it —
+  # dotnet aborts with SIGABRT); -dev is version-agnostic and pulls the lib:
+  libicu-dev
   # runtime desktop-shell tooling: portals + screenshot CLIs
   xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk
   grim slurp
@@ -38,14 +41,18 @@ DNF_PKGS=(
   mesa-libEGL-devel mesa-libGLES-devel
   hwdata libdisplay-info-devel libliftoff-devel
   libxcb-devel xcb-util-renderutil-devel xcb-util-wm-devel xcb-util-errors-devel
-  xorg-x11-server-Xwayland
+  # xwayland.pc (wlroots -Dxwayland=enabled resolves it, else it tries to
+  # build a whole xserver subproject) + kernel uapi headers (dma-buf.h):
+  xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel kernel-headers
+  # .NET needs ICU at build- and runtime:
+  libicu
   xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk
   grim slurp
   libheif
 )
 
 PACMAN_PKGS=(
-  base-devel meson ninja pkgconf scdoc git curl
+  base-devel meson ninja pkgconf scdoc git curl icu
   wayland wayland-protocols libxkbcommon
   libdrm pixman libinput seatd mesa
   hwdata libdisplay-info libliftoff
@@ -61,6 +68,8 @@ PACMAN_PKGS=(
 # capabilities don't.
 ZYPPER_PKGS=(
   gcc gcc-c++ meson ninja pkgconf scdoc git curl
+  # dotnet-install.sh needs these basics (missing in minimal containers):
+  findutils tar gzip
   hwdata xwayland
   xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk
   grim slurp libheif1
@@ -72,6 +81,7 @@ ZYPPER_CAPS=(
   "pkgconfig(libudev)" "pkgconfig(egl)" "pkgconfig(glesv2)"
   "pkgconfig(libdisplay-info)" "pkgconfig(libliftoff)"
   "pkgconfig(xcb)" "pkgconfig(xcb-renderutil)" "pkgconfig(xcb-icccm)"
+  "pkgconfig(icu-uc)"
 )
 
 # ---------------- install via the detected package manager ----------------

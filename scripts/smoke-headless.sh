@@ -18,7 +18,11 @@ HOST="${1:-/usr/local/bin/wtf}"
 # is listening ("Connection refused").
 export XDG_RUNTIME_DIR="/tmp/wtf-smoke-$$"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
-export WLR_BACKEND=headless
+# wlroots reads WLR_BACKENDS (PLURAL). Also drop any inherited display so
+# autocreate can't silently pick a nested x11/wayland backend on a dev machine
+# — this test must exercise the same headless path everywhere.
+export WLR_BACKENDS=headless
+unset DISPLAY WAYLAND_DISPLAY
 export WLR_LIBINPUT_NO_DEVICES=1
 LOG="$XDG_RUNTIME_DIR/smoke.log"
 SOCK="$XDG_RUNTIME_DIR/wtf.sock"

@@ -40,9 +40,13 @@ echo ">> building wlroots -> $PREFIX"
 # error on Arch). Warnings in pinned third-party code are not our errors.
 # Setup log goes to a FILE and is dumped on failure — never swallow the
 # reason a distro can't configure the build.
+# c_std=c11: wlroots 0.18 asks for c23, which needs meson >= 1.4 — Ubuntu
+# 24.04 ships 1.3. The code is c11-clean (0.17 built as c11); pinning c11
+# keeps one meson floor across every distro.
 SETUP_LOG="$SRC/meson-setup.log"
 if ! meson setup "$SRC/build" "$SRC" \
     --prefix="$PREFIX" --libdir=lib \
+    -Dc_std=c11 \
     -Dwerror=false \
     -Dexamples=false \
     -Drenderers=gles2 \
