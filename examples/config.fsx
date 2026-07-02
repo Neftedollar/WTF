@@ -89,12 +89,22 @@ let wtfConfig =
         cornerRadius 10             // rounded corners (scenefx)
         blur true                   // backdrop blur behind windows (scenefx)
 
-        // ---- wallpaper: solid color or a decoded+scaled image ----
+        // ---- macOS-style drop shadow under every window (scenefx) ----
+        shadow true
+        // shadowSigma 24.0         // blur spread in px
+        // shadowColor "#000000"    // shadow color
+        // shadowOpacity 0.45       // shadow alpha 0..1
+        // shadowOffset 0 8         // (dx, dy) px; light from above => dy > 0
+
+        // ---- wallpaper: solid color, image, or a DYNAMIC (time-of-day) .heic ----
         // The image is DECODED in the F# host (ImageSharp) and its raw pixels are
         // handed to C — it scales to the output and re-scales on resize. A leading
         // `~` expands to your home dir. A missing/bad image logs + falls back.
+        // Dynamic = a macOS dynamic wallpaper (multi-frame .heic, libheif): the
+        // frame matching the time of day is shown and switches automatically.
         wallpaper (Color "#1e1e2e")                  // solid Catppuccin base
         // wallpaper (Image ("~/pics/bg.png", Fill)) // Fill|Fit|Stretch|Center|Tile
+        // wallpaper (Dynamic ("~/pics/catalina.heic", Fill))
 
         // ---- input devices: applied per device type as each attaches ----
         // `input` plugs an InputConfig; build it with the `inputDevices { ... }`

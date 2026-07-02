@@ -87,6 +87,10 @@ module Ffi =
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_blur(int enabled, int radius, int passes)
 
+    /// macOS-style drop shadow under every window (scenefx shadow nodes).
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_shadow(int enabled, double sigma, double r, double g, double b, double a, int dx, int dy)
+
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_fullscreen(int id, int on)
 

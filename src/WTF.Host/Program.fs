@@ -489,6 +489,32 @@ let onDrain () : unit =
     bridge.DrainActions()
     bridge.DrainCalls()
 
+// ---- dynamic wallpaper timer ------------------------------------------------
+// A Dynamic (.heic) wallpaper switches frames on a time-of-day schedule. The
+// timer fires on a thread-pool thread, so the re-apply is Post'ed onto the loop
+// thread (wlroots single-owner rule). Rescheduled after every apply; a config
+// change away from Dynamic yields no next delay and the timer simply stops.
+let mutable private wallpaperTimer : System.Threading.Timer option = None
+
+let rec private scheduleWallpaperTick () =
+    wallpaperTimer |> Option.iter (fun t -> t.Dispose())
+    wallpaperTimer <- None
+    match Wallpaper.nextSwitchDelay activeWallpaper with
+    | None -> ()
+    | Some delay ->
+        eprintfn "WTF: dynamic wallpaper: next frame switch in %O" delay
+        let t =
+            new System.Threading.Timer(
+                (fun _ ->
+                    bridge.Post(Ffi.wtf_command_notify, fun () ->
+                        eprintfn "WTF: dynamic wallpaper: switching frame"
+                        Wallpaper.apply activeWallpaper (Px.rawL world.Screen.Width) (Px.rawL world.Screen.Height)
+                        activePalette <- Wallpaper.paletteOf activeWallpaper
+                        restyleWindows world
+                        scheduleWallpaperTick ())),
+                null, delay, System.Threading.Timeout.InfiniteTimeSpan)
+        wallpaperTimer <- Some t
+
 /// Push a config's appearance + input + wallpaper into the C compositor at the
 /// CURRENT output size. The reusable seam shared by `onReady` and (next step)
 /// the hot-reload path: anything PUSHED to C (appearance/input/wallpaper) must be
@@ -513,6 +539,12 @@ let applyConfig (c: WtfConfig) : unit =
     border false c.InactiveBorder
     Ffi.wtf_set_corner_radius cornerRadius
     Ffi.wtf_set_blur ((if blurOn then 1 else 0), 0, 0)
+    // macOS-style drop shadow (scenefx). Forced off in safe mode with the rest
+    // of the eye-candy; a bad ShadowColor degrades to black, never fails.
+    let shadowOn = if safeMode then false else c.Shadow
+    let sdx, sdy = c.ShadowOffset
+    let sr, sg, sb = Protocol.hexColor c.ShadowColor |> Option.defaultValue (0.0, 0.0, 0.0)
+    Ffi.wtf_set_shadow ((if shadowOn then 1 else 0), c.ShadowSigma, sr, sg, sb, c.ShadowOpacity, sdx, sdy)
     // Input devices: keyboard xkb/repeat + libinput knobs.
     // Empty xkb fields stay "" — the C side converts those to NULL for xkb defaults.
     let kb = c.Input.Keyboard
@@ -563,6 +595,8 @@ let applyConfig (c: WtfConfig) : unit =
     // wallpaper's cached decode (Wallpaper.loadOriginal); best-effort (falls back to
     // the built-in default for a solid color / missing image).
     activePalette <- Wallpaper.paletteOf activeWallpaper
+    // (Re)arm the frame-switch timer — a no-op unless the wallpaper is Dynamic.
+    scheduleWallpaperTick ()
     // E1: reconcile dynamic appearance overrides. If a borderColor/windowOpacity
     // FUNCTION was REMOVED on reload, clear the per-window style (both knobs, the
     // only clear the ABI offers) for every window we previously pushed, wipe the

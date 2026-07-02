@@ -92,6 +92,11 @@ void wtf_clear_window_style(int id);
 void wtf_set_corner_radius(int radius);
 /* Backdrop blur: enable/disable + radius and pass count (<=0 keeps current). */
 void wtf_set_blur(int enabled, int radius, int passes);
+/* macOS-style drop shadow under every window (scenefx shadow nodes). sigma =
+ * blur spread in px (<=0 keeps current), color RGBA in 0..1, (dx,dy) = offset
+ * in px (macOS look: dx=0, dy>0 -- light from above). */
+void wtf_set_shadow(int enabled, double sigma, double r, double g, double b,
+		double a, int dx, int dy);
 
 /* ---- wallpaper (BACKGROUND layer, drawn below layer-shell bg clients) ---- */
 /* Set an image wallpaper from raw RGBA pixels. `rgba` is exactly width*height*4

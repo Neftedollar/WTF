@@ -17,6 +17,35 @@ open WTF.Core
 // one wallpaper is ever active, so a single slot suffices.
 let mutable private cached: (string * Image<Rgba32>) option = None
 
+// Cache the decoded DYNAMIC wallpaper frames (keyed by resolved path). Decoding
+// a multi-frame .heic is expensive (N full-resolution images through libheif),
+// so it happens once per path; the time-of-day switch just re-scales a frame.
+let mutable private dynCache: (string * Image<Rgba32>[]) option = None
+
+let private clearDynCache () =
+    dynCache |> Option.iter (fun (_, imgs) -> imgs |> Array.iter (fun i -> i.Dispose()))
+    dynCache <- None
+
+/// Load (or reuse the cached) frame set of a dynamic .heic. [] on any failure
+/// (missing file, no libheif, decode error) — logged inside Heif.decodeFrames.
+let internal loadFrames (path: string) : Image<Rgba32>[] =
+    match dynCache with
+    | Some (p, imgs) when p = path -> imgs
+    | _ ->
+        clearDynCache ()
+        let imgs = Heif.decodeFrames path |> Array.ofList
+        if imgs.Length > 0 then
+            eprintfn "WTF: dynamic wallpaper %s: %d frames" path imgs.Length
+            dynCache <- Some(path, imgs)
+        imgs
+
+/// Which frame of an N-frame day cycle is current at `now`. Frames are spread
+/// evenly over 24h from midnight, in stored order (Apple day wallpapers store
+/// them in day order; solar/h24 plist metadata can refine this later).
+let internal frameIndexAt (count: int) (now: System.DateTime) : int =
+    if count <= 0 then 0
+    else min (count - 1) (int (now.TimeOfDay.TotalHours / 24.0 * float count))
+
 /// Expand a leading `~` to the user's home directory (config stores `~/pics/...`).
 let internal expand (path: string) : string =
     if path = "~" || path.StartsWith("~/") then
@@ -59,38 +88,43 @@ let internal loadOriginal (path: string) : Image<Rgba32> option =
             eprintfn "WTF: wallpaper load failed for %s: %s" path ex.Message
             None
 
-/// Decode + scale `path` to exactly w x h and push the RGBA32 bytes to the C
-/// shim. Returns true on success, false (after logging) on any failure.
-let internal pushImage (path: string) (mode: WallpaperMode) (w: int) (h: int) : bool =
+/// Scale an already-decoded original to exactly w x h and push the RGBA32
+/// bytes to the C shim. `label` is only for the failure log.
+let private pushScaled (original: Image<Rgba32>) (mode: WallpaperMode)
+        (w: int) (h: int) (label: string) : bool =
     if w <= 0 || h <= 0 then
         false
     else
-        match loadOriginal path with
-        | None -> false
-        | Some original ->
-            try
-                // Clone so the cached ORIGINAL is preserved for the next resize.
-                let opts =
-                    ResizeOptions(
-                        Size = Size(w, h),
-                        Mode = resizeModeOf mode,
-                        Position = AnchorPositionMode.Center
-                    )
-                use img = original.Clone(fun x -> x.Resize(opts) |> ignore)
-                // Crop/Stretch/Pad/BoxPad all yield an exact w x h canvas. Guard
-                // anyway: a final exact-size pad keeps the contract if a mode ever
-                // returns a different canvas.
-                if img.Width <> w || img.Height <> h then
-                    img.Mutate(fun x ->
-                        x.Resize(ResizeOptions(Size = Size(w, h), Mode = ResizeMode.Pad)) |> ignore)
-                // Rgba32 -> bytes in memory order R,G,B,A, stride = w*4.
-                let buf = Array.zeroCreate<byte> (w * h * 4)
-                img.CopyPixelDataTo(buf)
-                Ffi.wtf_set_wallpaper(buf, w, h)
-                true
-            with ex ->
-                eprintfn "WTF: wallpaper scale failed for %s: %s" path ex.Message
-                false
+        try
+            // Clone so the cached ORIGINAL is preserved for the next resize.
+            let opts =
+                ResizeOptions(
+                    Size = Size(w, h),
+                    Mode = resizeModeOf mode,
+                    Position = AnchorPositionMode.Center
+                )
+            use img = original.Clone(fun x -> x.Resize(opts) |> ignore)
+            // Crop/Stretch/Pad/BoxPad all yield an exact w x h canvas. Guard
+            // anyway: a final exact-size pad keeps the contract if a mode ever
+            // returns a different canvas.
+            if img.Width <> w || img.Height <> h then
+                img.Mutate(fun x ->
+                    x.Resize(ResizeOptions(Size = Size(w, h), Mode = ResizeMode.Pad)) |> ignore)
+            // Rgba32 -> bytes in memory order R,G,B,A, stride = w*4.
+            let buf = Array.zeroCreate<byte> (w * h * 4)
+            img.CopyPixelDataTo(buf)
+            Ffi.wtf_set_wallpaper(buf, w, h)
+            true
+        with ex ->
+            eprintfn "WTF: wallpaper scale failed for %s: %s" label ex.Message
+            false
+
+/// Decode + scale `path` to exactly w x h and push the RGBA32 bytes to the C
+/// shim. Returns true on success, false (after logging) on any failure.
+let internal pushImage (path: string) (mode: WallpaperMode) (w: int) (h: int) : bool =
+    match loadOriginal path with
+    | None -> false
+    | Some original -> pushScaled original mode w h path
 
 // =====================================================================
 // PALETTE EXTRACTION (impure; host-only — WTF.Core stays ImageSharp-free).
@@ -167,11 +201,8 @@ let private medianCut (n: int) (pixels: Px[]) : Color.Color list =
 /// sampler — a deterministic resample (no Random, no time) so the fixture test is
 /// reproducible — then quantized via median-cut. Fully-transparent pixels (A==0)
 /// are skipped.
-let internal dominantColors (n: int) (path: string) : Color.Color list =
+let internal dominantOfImage (n: int) (original: Image<Rgba32>) : Color.Color list =
     try
-        match loadOriginal path with
-        | None -> []
-        | Some original ->
             // Fixed size + fixed sampler => deterministic downscale.
             use small =
                 original.Clone(fun x ->
@@ -197,8 +228,13 @@ let internal dominantColors (n: int) (path: string) : Color.Color list =
                 i <- i + 4
             medianCut n (pixels.ToArray())
     with ex ->
-        eprintfn "WTF: wallpaper palette extraction failed for %s: %s" path ex.Message
+        eprintfn "WTF: wallpaper palette extraction failed: %s" ex.Message
         []
+
+let internal dominantColors (n: int) (path: string) : Color.Color list =
+    match loadOriginal path with
+    | None -> []
+    | Some original -> dominantOfImage n original
 
 /// The STRUCTURED palette for a wallpaper choice (the user-facing result — the
 /// raw dominant list never escapes). An Image extracts 8 dominant colors and
@@ -217,6 +253,15 @@ let paletteOf (wp: Wallpaper) : Palette.Palette =
         match dominantColors 8 (expand path) with
         | [] -> Palette.defaultPalette
         | cs -> Palette.ofColors cs
+    | Dynamic (path, _) ->
+        // Palette of the CURRENT frame (it legitimately changes across the day;
+        // recomputed wherever the wallpaper is re-applied).
+        let frames = loadFrames (expand path)
+        if frames.Length = 0 then Palette.defaultPalette
+        else
+            match dominantOfImage 8 frames.[frameIndexAt frames.Length System.DateTime.Now] with
+            | [] -> Palette.defaultPalette
+            | cs -> Palette.ofColors cs
 
 /// Apply the configured wallpaper into the BACKGROUND layer at output size w x h.
 /// Best-effort: a Color parses + pushes a solid rect; an Image decodes+scales and,
@@ -225,15 +270,42 @@ let apply (wp: Wallpaper) (w: int) (h: int) : unit =
     match wp with
     | NoWallpaper ->
         clearCache ()
+        clearDynCache ()
         Ffi.wtf_clear_wallpaper ()
     | Color hex ->
         clearCache () // not an image anymore — release the decoded original
+        clearDynCache ()
         match Protocol.hexColor hex with
         | Some (r, g, b) -> Ffi.wtf_set_wallpaper_color (r, g, b)
         | None ->
             eprintfn "WTF: wallpaper color %s is not a valid hex; clearing" hex
             Ffi.wtf_clear_wallpaper ()
     | Image (path, mode) ->
+        clearDynCache ()
         if not (pushImage (expand path) mode w h) then
             // Bad/missing image: fall back to no wallpaper (never crash startup).
             Ffi.wtf_clear_wallpaper ()
+    | Dynamic (path, mode) ->
+        clearCache ()
+        let frames = loadFrames (expand path)
+        if frames.Length = 0 then
+            Ffi.wtf_clear_wallpaper ()
+        else
+            let idx = frameIndexAt frames.Length System.DateTime.Now
+            if not (pushScaled frames.[idx] mode w h (sprintf "%s[frame %d]" path idx)) then
+                Ffi.wtf_clear_wallpaper ()
+
+/// Time until the NEXT dynamic-frame boundary (None for static wallpapers, so
+/// the host schedules no timer). +2s past the boundary so the switch lands on
+/// the far side; never sooner than 30s (a pathological frame count must not
+/// hot-loop the timer).
+let nextSwitchDelay (wp: Wallpaper) : System.TimeSpan option =
+    match wp with
+    | Dynamic (path, _) ->
+        let frames = loadFrames (expand path)
+        if frames.Length = 0 then None
+        else
+            let slot = 24.0 * 3600.0 / float frames.Length
+            let elapsed = System.DateTime.Now.TimeOfDay.TotalSeconds
+            Some(System.TimeSpan.FromSeconds(max 30.0 (slot - (elapsed % slot) + 2.0)))
+    | _ -> None

@@ -54,6 +54,8 @@
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_xdg_decoration_v1.h>
+#include <wlr/types/wlr_server_decoration.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
 #include <wlr/xwayland.h>
 #include <wlr/util/box.h>
@@ -97,6 +99,7 @@ struct wtf_server {
 	struct wlr_xdg_shell *xdg_shell;
 	struct wl_listener new_xdg_toplevel;
 	struct wl_listener new_xdg_popup;
+	struct wl_listener new_toplevel_decoration;
 	struct wl_list toplevels;
 
 	/* Layer-shell (bars, wallpaper, launchers, notifications). */
@@ -181,6 +184,7 @@ struct wtf_toplevel {
 	bool anim_init;             /* false until the first wtf_configure */
 	int cw, ch;                 /* configured content size (for border sizing) */
 	struct wlr_scene_rect *border;  /* colored frame behind the window */
+	struct wlr_scene_shadow *shadow; /* scenefx drop shadow below the border */
 
 	/* --- E1 per-window style overrides (driven by the F# brain per window) --- */
 	float  win_border[4];       /* override border RGBA, used when has_win_border */
@@ -323,6 +327,12 @@ static float g_inactive_border[4] = {0.27f, 0.28f, 0.35f, 1.0f};  /* unfocused *
 static int g_corner_radius = 0;           /* rounded corners (0 = sharp) */
 static bool g_blur_enabled = false;       /* backdrop blur behind windows */
 static struct blur_data g_blur;           /* blur params (init in wtf_run) */
+/* macOS-style drop shadow (scenefx shadow node per toplevel, below border). */
+static bool  g_shadow_enabled = false;
+static float g_shadow_sigma = 24.0f;      /* blur spread in px */
+static float g_shadow_color[4] = {0.0f, 0.0f, 0.0f, 0.45f};
+static int   g_shadow_dx = 0;             /* offset (macOS: light from above */
+static int   g_shadow_dy = 8;             /*  => shadow shifted down)        */
 
 /* ---- input config (xkb keymap + key repeat, set via wtf_set_keymap) ---- */
 /* Each xkb field is NULL => let xkb pick its compile default for that field. */
@@ -382,6 +392,41 @@ static void node_apply_fx(struct wlr_scene_node *node, int radius, bool blur) {
 	}
 }
 
+/* Create/resize/destroy a toplevel's drop shadow to match the current global
+ * shadow style + the toplevel's configured size. The shadow node sits BELOW
+ * the border (and window) and extends `margin` px beyond the window on every
+ * side, shifted by the configured offset — the macOS look. Total: safe to
+ * call at any time, including before the first configure (cw/ch == 0). */
+static void sync_shadow(struct wtf_toplevel *t) {
+	if (!g_shadow_enabled || t->scene_tree == NULL || t->cw <= 0 || t->ch <= 0) {
+		if (t->shadow != NULL) {
+			wlr_scene_node_destroy(&t->shadow->node);
+			t->shadow = NULL;
+		}
+		return;
+	}
+	int m = (int)ceilf(g_shadow_sigma);
+	int w = t->cw + 2 * m;
+	int h = t->ch + 2 * m;
+	if (t->shadow == NULL) {
+		t->shadow = wlr_scene_shadow_create(server.toplevel_tree, w, h,
+			g_corner_radius, g_shadow_sigma, g_shadow_color);
+		if (t->shadow == NULL) {
+			return; /* eye-candy only: never fatal */
+		}
+		wlr_scene_node_place_below(&t->shadow->node,
+			t->border != NULL ? &t->border->node : &t->scene_tree->node);
+	} else {
+		wlr_scene_shadow_set_size(t->shadow, w, h);
+		wlr_scene_shadow_set_blur_sigma(t->shadow, g_shadow_sigma);
+		wlr_scene_shadow_set_color(t->shadow, g_shadow_color);
+	}
+	wlr_scene_shadow_set_corner_radius(t->shadow,
+		g_corner_radius > 0 ? g_corner_radius + g_border_width : 0);
+	wlr_scene_node_set_position(&t->shadow->node,
+		t->x - m + g_shadow_dx, t->y - m + g_shadow_dy);
+}
+
 /* Re-apply the current corner-radius / blur style to one toplevel. */
 static void style_toplevel(struct wtf_toplevel *t) {
 	if (t->scene_tree != NULL) {
@@ -425,6 +470,11 @@ static bool animate_toplevels(void) {
 		if (t->border != NULL) {
 			wlr_scene_node_set_position(&t->border->node,
 				px - g_border_width, py - g_border_width);
+		}
+		if (t->shadow != NULL) {
+			int m = (int)ceilf(g_shadow_sigma);
+			wlr_scene_node_set_position(&t->shadow->node,
+				px - m + g_shadow_dx, py - m + g_shadow_dy);
 		}
 
 		double dop = t->target_opacity - t->opacity;
@@ -1323,6 +1373,9 @@ static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
 	if (toplevel->border != NULL) {
 		wlr_scene_node_destroy(&toplevel->border->node);
 	}
+	if (toplevel->shadow != NULL) {
+		wlr_scene_node_destroy(&toplevel->shadow->node);
+	}
 	free(toplevel);
 }
 
@@ -1497,6 +1550,10 @@ static void xwl_destroy_scene(struct wtf_toplevel *toplevel) {
 	if (toplevel->border != NULL) {
 		wlr_scene_node_destroy(&toplevel->border->node);
 		toplevel->border = NULL;
+	}
+	if (toplevel->shadow != NULL) {
+		wlr_scene_node_destroy(&toplevel->shadow->node);
+		toplevel->shadow = NULL;
 	}
 	if (toplevel->scene_tree != NULL) {
 		wlr_scene_node_destroy(&toplevel->scene_tree->node);
@@ -1768,6 +1825,60 @@ static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
 }
 
 /* ------------------------------------------------------------------ */
+/* decoration negotiation: ask clients NOT to draw their own frame     */
+/* ------------------------------------------------------------------ */
+/* WTF draws the one true border (+ scenefx shadow); a client that also
+ * draws CSD (titlebar + drop shadow baked into its buffer) makes windows
+ * look inconsistent and lets its shadow spill over neighbors. Answer
+ * SERVER_SIDE to every xdg-decoration request, and advertise the KDE
+ * server-decoration protocol (GTK3-era clients) defaulting to SERVER.
+ * Clients that can't comply (GTK4/libadwaita headerbars) at least drop
+ * their shadows via the TILED state sent in wtf_configure. */
+
+struct wtf_decoration {
+	struct wlr_xdg_toplevel_decoration_v1 *decoration;
+	struct wl_listener request_mode;
+	struct wl_listener destroy;
+};
+
+static void decoration_request_mode(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_decoration *d = wl_container_of(listener, d, request_mode);
+	wlr_xdg_toplevel_decoration_v1_set_mode(d->decoration,
+		WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+}
+
+static void decoration_destroy(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_decoration *d = wl_container_of(listener, d, destroy);
+	wl_list_remove(&d->request_mode.link);
+	wl_list_remove(&d->destroy.link);
+	free(d);
+}
+
+static void server_new_toplevel_decoration(struct wl_listener *listener,
+		void *data) {
+	(void)listener;
+	struct wlr_xdg_toplevel_decoration_v1 *decoration = data;
+
+	struct wtf_decoration *d = calloc(1, sizeof(*d));
+	if (d == NULL) {
+		/* Still answer the protocol so the client isn't left hanging. */
+		wlr_xdg_toplevel_decoration_v1_set_mode(decoration,
+			WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+		return;
+	}
+	d->decoration = decoration;
+	d->request_mode.notify = decoration_request_mode;
+	wl_signal_add(&decoration->events.request_mode, &d->request_mode);
+	d->destroy.notify = decoration_destroy;
+	wl_signal_add(&decoration->events.destroy, &d->destroy);
+
+	wlr_xdg_toplevel_decoration_v1_set_mode(decoration,
+		WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+}
+
+/* ------------------------------------------------------------------ */
 /* layer-shell (bars, wallpaper, launchers, notifications)            */
 /* ------------------------------------------------------------------ */
 
@@ -1923,6 +2034,7 @@ void wtf_configure(int id, int x, int y, int width, int height) {
 		wlr_scene_rect_set_size(t->border,
 			width + 2 * g_border_width, height + 2 * g_border_width);
 	}
+	sync_shadow(t);    /* (re)create + size the drop shadow for the new tile */
 	style_toplevel(t); /* (re)apply rounded corners + blur */
 	if (!t->anim_init) {
 		/* First placement: start the slide from just below the target so the
@@ -1939,6 +2051,9 @@ void wtf_configure(int id, int x, int y, int width, int height) {
 	 * windows do not overlap, so their relative raise order is irrelevant. This
 	 * reorders within toplevel_tree only — the TOP/OVERLAY layer trees still sit
 	 * above it, so bars/popups/menus are unaffected. */
+	if (t->shadow != NULL) {
+		wlr_scene_node_raise_to_top(&t->shadow->node);
+	}
 	if (t->border != NULL) {
 		wlr_scene_node_raise_to_top(&t->border->node);
 	}
@@ -2141,6 +2256,24 @@ void wtf_set_corner_radius(int radius) {
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		style_toplevel(t);
+	}
+	schedule_frame();
+}
+
+void wtf_set_shadow(int enabled, double sigma, double r, double g, double b,
+		double a, int dx, int dy) {
+	g_shadow_enabled = (enabled != 0);
+	if (sigma > 0) g_shadow_sigma = (float)sigma;
+	g_shadow_color[0] = (float)r;
+	g_shadow_color[1] = (float)g;
+	g_shadow_color[2] = (float)b;
+	g_shadow_color[3] = (float)a;
+	g_shadow_dx = dx;
+	g_shadow_dy = dy;
+	/* Re-sync every mapped toplevel (create/resize/drop its shadow node). */
+	struct wtf_toplevel *t;
+	wl_list_for_each(t, &server.toplevels, link) {
+		sync_shadow(t);
 	}
 	schedule_frame();
 }
@@ -2488,6 +2621,22 @@ int wtf_run(struct wtf_callbacks cbs) {
 	wl_signal_add(&server.xdg_shell->events.new_toplevel, &server.new_xdg_toplevel);
 	server.new_xdg_popup.notify = server_new_xdg_popup;
 	wl_signal_add(&server.xdg_shell->events.new_popup, &server.new_xdg_popup);
+
+	/* Decoration negotiation (uniform borders): xdg-decoration for modern
+	 * clients + the KDE server-decoration protocol for GTK3-era ones. */
+	struct wlr_xdg_decoration_manager_v1 *deco_mgr =
+		wlr_xdg_decoration_manager_v1_create(server.wl_display);
+	if (deco_mgr != NULL) {
+		server.new_toplevel_decoration.notify = server_new_toplevel_decoration;
+		wl_signal_add(&deco_mgr->events.new_toplevel_decoration,
+			&server.new_toplevel_decoration);
+	}
+	struct wlr_server_decoration_manager *kde_deco_mgr =
+		wlr_server_decoration_manager_create(server.wl_display);
+	if (kde_deco_mgr != NULL) {
+		wlr_server_decoration_manager_set_default_mode(kde_deco_mgr,
+			WLR_SERVER_DECORATION_MANAGER_MODE_SERVER);
+	}
 
 	server.cursor = wlr_cursor_create();
 	wlr_cursor_attach_output_layout(server.cursor, server.output_layout);

@@ -74,6 +74,10 @@ type Wallpaper =
     | NoWallpaper
     | Color of string
     | Image of path: string * mode: WallpaperMode
+    /// A macOS-style dynamic wallpaper: a multi-frame .heic whose frames span the
+    /// day (Apple's format, decoded in the host via libheif). The host shows the
+    /// frame matching the time of day and switches on frame boundaries.
+    | Dynamic of path: string * mode: WallpaperMode
 
 // --- dynamic appearance model (E1: appearance as functions of context) ---
 
@@ -116,6 +120,11 @@ type WtfConfig =
       InactiveBorder: string            // appearance: unfocused border color (#hex)
       CornerRadius: int                 // appearance: rounded corners (scenefx)
       Blur: bool                        // appearance: backdrop blur (scenefx)
+      Shadow: bool                      // appearance: macOS-style drop shadow (scenefx)
+      ShadowSigma: float                // shadow blur spread in px
+      ShadowColor: string               // shadow color (#hex)
+      ShadowOpacity: float              // shadow alpha 0..1
+      ShadowOffset: int * int           // shadow (dx, dy) offset in px; macOS look = (0, 8)
       Scale: float                      // HiDPI output scale (physical px per logical px); 1.0 = logical px (default)
       HistoryLimit: int                 // undo depth: max retained past states
       Input: InputConfig                // keyboard/mouse/touchpad device settings
@@ -142,6 +151,11 @@ module WtfConfig =
           InactiveBorder = "#45475a"
           CornerRadius = 0
           Blur = false
+          Shadow = false
+          ShadowSigma = 24.0
+          ShadowColor = "#000000"
+          ShadowOpacity = 0.45
+          ShadowOffset = (0, 8)
           Scale = 1.0
           HistoryLimit = 64
           Input =
@@ -270,6 +284,16 @@ type ConfigBuilder() =
     member _.CornerRadius(c, v) = { c with CornerRadius = v }
     [<CustomOperation "blur">]
     member _.Blur(c, v) = { c with Blur = v }
+    [<CustomOperation "shadow">]
+    member _.Shadow(c, v) = { c with Shadow = v }
+    [<CustomOperation "shadowSigma">]
+    member _.ShadowSigma(c, v) = { c with ShadowSigma = v }
+    [<CustomOperation "shadowColor">]
+    member _.ShadowColor(c, v: string) = { c with ShadowColor = v }
+    [<CustomOperation "shadowOpacity">]
+    member _.ShadowOpacity(c, v) = { c with ShadowOpacity = v }
+    [<CustomOperation "shadowOffset">]
+    member _.ShadowOffset(c, dx: int, dy: int) = { c with ShadowOffset = (dx, dy) }
     [<CustomOperation "scale">]
     member _.Scale(c, v) = { c with Scale = v }
     [<CustomOperation "historyLimit">]
