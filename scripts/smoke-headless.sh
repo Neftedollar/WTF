@@ -26,6 +26,9 @@ mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
 export WLR_BACKENDS=headless
 unset DISPLAY WAYLAND_DISPLAY
 export WLR_LIBINPUT_NO_DEVICES=1
+# CI/VMs render via Mesa software GL (llvmpipe/kms_swrast) — wlroots refuses
+# it unless explicitly allowed.
+export WLR_RENDERER_ALLOW_SOFTWARE=1
 LOG="$XDG_RUNTIME_DIR/smoke.log"
 SOCK="$XDG_RUNTIME_DIR/wtf.sock"
 
