@@ -191,6 +191,14 @@ let private spawnOnce (cmd: string) =
     if alive then
         eprintfn "WTF: SpawnOnce '%s' skipped — instance already running" cmd
     else
+        // Prune exited entries so agent-driven/templated commands can't grow the
+        // dictionary (and its retained Process handles) for the session lifetime.
+        let dead =
+            [ for KeyValue(k, p) in onceProcs do
+                if (try p.HasExited with _ -> true) then k, p ]
+        for k, p in dead do
+            onceProcs.Remove k |> ignore
+            try p.Dispose() with _ -> ()
         try
             let psi = System.Diagnostics.ProcessStartInfo("/bin/sh")
             psi.ArgumentList.Add "-c"
@@ -627,11 +635,21 @@ let applyConfigReload (newCfg: WtfConfig) : unit =
     eprintfn "WTF: config reloaded (mod=%s, %d keybinds)" cfg.ModKey cfg.Keys.Length
 
 // Wire the ReloadConfig hook now that loadConfig + applyConfigReload both exist:
-// re-read config.fsx from disk (FCS re-eval) and apply it live. Runs on the loop
-// thread (dispatch is only invoked from onKey / the socket drain, both on-loop).
-// A broken config makes loadConfig return the last-good/default, so reload never
-// throws the session away.
-reloadConfigFromDisk <- fun () -> applyConfigReload (loadConfig ())
+// re-read config.fsx from disk (FCS re-eval) and apply it live. `dispatch` runs
+// ON the loop thread (onKey / socket drain), but loadConfig is a FULL FCS
+// recompile — seconds normally, up to the 30s engine timeout for a pathological
+// config. Run it SYNCHRONOUSLY and the whole session freezes (no input, no
+// frames) for that long. So: compile on a worker, Post the finished config back
+// to the loop thread — the same shape as the save-watcher path. A broken config
+// makes loadConfig return the last-good/default, so reload never throws the
+// session away.
+reloadConfigFromDisk <- fun () ->
+    System.Threading.Tasks.Task.Run(fun () ->
+        try
+            let c = loadConfig ()
+            bridge.Post(Ffi.wtf_command_notify, fun () -> applyConfigReload c)
+        with ex -> eprintfn "WTF: ReloadConfig failed (config unchanged): %O" ex)
+    |> ignore
 
 /// Handle an {"eval":"<code>"} socket request. JIT: routes the code to the FSI
 /// worker via the config engine, marshalling any produced config/commands back
@@ -804,10 +822,16 @@ let main _argv =
     // bad rule/keybind degrades gracefully instead of killing the session. The
     // delegate TYPES stay concrete (AOT note above still holds — the lambdas are
     // statically known targets, ILC synthesizes the thunks at compile time).
+    // The catch handler itself must be throw-proof: if stderr's consumer died
+    // (session logger gone, pipe closed), eprintfn throws IOException INSIDE
+    // `with` — unwinding across the native frame, the exact failure the barrier
+    // exists to stop. Logging is best-effort; surviving is not.
+    let safeLog (msg: unit -> string) =
+        try eprintfn "%s" (msg ()) with _ -> ()
     let guard name (f: unit -> unit) =
-        try f () with ex -> eprintfn "WTF: %s callback threw (ignored): %O" name ex
+        try f () with ex -> safeLog (fun () -> sprintf "WTF: %s callback threw (ignored): %O" name ex)
     let guardKey (f: unit -> int) =
-        try f () with ex -> eprintfn "WTF: onKey callback threw (ignored): %O" ex; 0
+        try f () with ex -> safeLog (fun () -> sprintf "WTF: onKey callback threw (ignored): %O" ex); 0
     let dMap = Ffi.ViewMapDelegate(fun id app title -> guard "onViewMap" (fun () -> onViewMap id app title))
     let dUnmap = Ffi.ViewUnmapDelegate(fun id -> guard "onViewUnmap" (fun () -> onViewUnmap id))
     let dKey = Ffi.KeyDelegate(fun m s -> guardKey (fun () -> onKey m s))

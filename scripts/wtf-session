@@ -16,7 +16,16 @@ set -u
 
 HOST="${WTF_HOST:-/usr/local/bin/wtf}"
 
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/wtf"
+# Portals (screenshot/screencast) route by XDG_CURRENT_DESKTOP. GDM/SDDM set it
+# from the .desktop's DesktopNames; greetd/ly/TTY launches do NOT — export a
+# default here so wtf-portals.conf is selected on every launch path.
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-wtf}"
+export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+
+# ${HOME:-/tmp}: under set -u an unset HOME (greetd misconfig, bare systemd
+# unit) would kill the script HERE, before any trap — a black screen with no
+# log. /tmp always exists.
+STATE_DIR="${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/wtf"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 if command -v date >/dev/null 2>&1; then
 	STAMP="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo unknown)"
@@ -24,6 +33,12 @@ else
 	STAMP="unknown"
 fi
 LOG="$STATE_DIR/session-$STAMP.log"
+# Logging must never gate the COMPOSITOR: if the log file isn't writable
+# (read-only $HOME, full disk), `"$HOST" >>"$LOG"` would fail the redirection
+# and never exec the host — a healthy WM refused because logging failed.
+if ! : >>"$LOG" 2>/dev/null; then
+	LOG=/dev/null
+fi
 
 log() {
 	if command -v date >/dev/null 2>&1; then
@@ -77,13 +92,27 @@ trap 'exit 0' INT TERM
 run_fallback() {
 	restore_console
 	log "entering fallback (terminal or shell)"
-	for term in foot kitty alacritty xterm; do
-		if command -v "$term" >/dev/null 2>&1; then
-			exec "$term"
-		fi
-	done
-	printf 'WTF failed; see %s. Dropping to a shell.\n' "$LOG" >&2
-	exec "${SHELL:-/bin/sh}"
+	# A terminal emulator needs a LIVE display server — and the compositor just
+	# died. Under a display manager there is nothing to connect to: foot/kitty
+	# would exit instantly and the session ends silently at the greeter. Only
+	# try them if some display still exists (nested/dev runs).
+	if [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; then
+		for term in foot kitty alacritty xterm; do
+			if command -v "$term" >/dev/null 2>&1; then
+				exec "$term"
+			fi
+		done
+	fi
+	printf 'WTF failed; see %s.\n' "$LOG" >&2
+	# An interactive shell only makes sense on a real TTY (VT launch). Under a
+	# DM stdin is /dev/null: the shell would read EOF and exit instantly — and
+	# $SHELL may even be nologin. Exit 1 instead so the DM returns to the
+	# greeter cleanly.
+	if [ -t 0 ]; then
+		printf 'Dropping to a shell.\n' >&2
+		exec "${SHELL:-/bin/sh}"
+	fi
+	exit 1
 }
 
 prune_logs
@@ -91,6 +120,12 @@ log "wtf-session starting; host=$HOST"
 
 MAX_RESTARTS=3
 WINDOW=10
+# Lifetime cap: the sliding window alone never escalates a SLOW crasher (a host
+# that runs >10s then dies resets the window every lap => infinite restart loop
+# + an unbounded log). After this many total abnormal exits, escalate no matter
+# the spacing.
+MAX_TOTAL=20
+total=0
 attempts=0
 if command -v date >/dev/null 2>&1; then
 	window_start="$(date +%s 2>/dev/null || echo 0)"
@@ -127,9 +162,12 @@ while true; do
 		window_start="$now"
 	fi
 	attempts="$((attempts + 1))"
+	total="$((total + 1))"
 
-	if [ "$attempts" -le "$MAX_RESTARTS" ]; then
-		log "abnormal exit — restart $attempts/$MAX_RESTARTS"
+	if [ "$total" -gt "$MAX_TOTAL" ]; then
+		log "lifetime restart cap ($MAX_TOTAL) exceeded — escalating"
+	elif [ "$attempts" -le "$MAX_RESTARTS" ]; then
+		log "abnormal exit — restart $attempts/$MAX_RESTARTS (total $total/$MAX_TOTAL)"
 		continue
 	fi
 

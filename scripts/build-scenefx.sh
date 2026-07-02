@@ -9,7 +9,15 @@ PREFIX="$ROOT/compositor/.scenefx"
 SRC="$ROOT/build/scenefx-src"
 TAG=0.2.1   # wlroots >=0.18.1,<0.19
 
-if [ -f "$PREFIX/lib/x86_64-linux-gnu/libscenefx-0.2.so" ]; then
+# Meson's default libdir is multiarch (lib/x86_64-linux-gnu) ONLY on Debian;
+# Fedora/Arch use lib/, aarch64-Debian uses lib/aarch64-linux-gnu. Never
+# hardcode it: force --libdir=lib for NEW builds and FIND the .so for existing
+# ones (so a pre-existing multiarch build keeps working).
+find_scenefx_lib() {
+  find "$PREFIX/lib" "$PREFIX/lib64" -name 'libscenefx-0.2.so' -print -quit 2>/dev/null
+}
+
+if [ -n "$(find_scenefx_lib)" ]; then
   echo ">> scenefx already built at $PREFIX"; exit 0
 fi
 
@@ -18,7 +26,8 @@ rm -rf "$SRC"
 git clone --depth 1 --branch "$TAG" https://github.com/wlrfx/scenefx.git "$SRC"
 
 echo ">> building scenefx -> $PREFIX"
-meson setup "$SRC/build" "$SRC" --prefix="$PREFIX" -Dexamples=false >/dev/null
+meson setup "$SRC/build" "$SRC" --prefix="$PREFIX" --libdir=lib -Dexamples=false >/dev/null
 ninja -C "$SRC/build"
 ninja -C "$SRC/build" install >/dev/null
-echo ">> scenefx installed: $(PKG_CONFIG_PATH="$PREFIX/lib/x86_64-linux-gnu/pkgconfig" pkg-config --modversion scenefx-0.2)"
+PC_DIR="$(dirname "$(find "$PREFIX" -name 'scenefx-0.2.pc' -print -quit)")"
+echo ">> scenefx installed: $(PKG_CONFIG_PATH="$PC_DIR" pkg-config --modversion scenefx-0.2)"

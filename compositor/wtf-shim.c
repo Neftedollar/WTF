@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <signal.h>
@@ -610,11 +611,19 @@ static void arrange_layers(struct wtf_server *srv) {
 	struct wlr_box usable = full_area;
 	struct wtf_layer_surface *ls;
 	wl_list_for_each(ls, &srv->layer_surfaces, link) {
-		if (ls->output != srv->primary_output) {
+		if (ls->output != srv->primary_output || ls->scene == NULL) {
 			continue;
 		}
 		wlr_scene_layer_surface_v1_configure(ls->scene, &full_area, &usable);
 	}
+
+	/* CLAMP: a layer client may claim an exclusive_zone LARGER than the output
+	 * (buggy or hostile bar), driving usable width/height negative. Unclamped,
+	 * that negative flows brain-ward and comes back as negative tile sizes into
+	 * wlr_scene_rect_set_size => assert/SIGABRT. Floor at 0: the brain sees an
+	 * empty-but-valid area and simply has nowhere to tile until the bar dies. */
+	if (usable.width < 0) usable.width = 0;
+	if (usable.height < 0) usable.height = 0;
 
 	report_usable_area(srv, &usable);
 
@@ -1056,6 +1065,9 @@ static void reset_cursor_mode(struct wtf_server *srv) {
 
 static void process_cursor_move(struct wtf_server *srv) {
 	struct wtf_toplevel *toplevel = srv->grabbed_toplevel;
+	if (toplevel == NULL || toplevel->scene_tree == NULL) {
+		return;
+	}
 	wlr_scene_node_set_position(&toplevel->scene_tree->node,
 		srv->cursor->x - srv->grab_x,
 		srv->cursor->y - srv->grab_y);
@@ -1065,6 +1077,12 @@ static void process_cursor_move(struct wtf_server *srv) {
 
 static void process_cursor_resize(struct wtf_server *srv) {
 	struct wtf_toplevel *toplevel = srv->grabbed_toplevel;
+	/* Grabs can only start from the xdg request_move/resize listeners today —
+	 * assert that invariant instead of dereferencing xdg_toplevel on an
+	 * xwayland toplevel if a future wiring change breaks it. */
+	if (toplevel == NULL || toplevel->is_xwayland || toplevel->xdg_toplevel == NULL) {
+		return;
+	}
 	double border_x = srv->cursor->x - srv->grab_x;
 	double border_y = srv->cursor->y - srv->grab_y;
 	int new_left = srv->grab_geobox.x;
@@ -1187,6 +1205,10 @@ static void output_frame(struct wl_listener *listener, void *data) {
 	struct wlr_scene *scene = output->server->scene;
 	struct wlr_scene_output *scene_output = wlr_scene_get_scene_output(
 		scene, output->wlr_output);
+	if (scene_output == NULL) {
+		return; /* no scene output (should be unreachable now that outputs
+		           without one are skipped at creation) — never deref NULL */
+	}
 
 	/* Advance animations before compositing this frame. */
 	bool still_animating = animate_toplevels();
@@ -1223,6 +1245,23 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&output->destroy.link);
 	wl_list_remove(&output->link);
 
+	/* Close every layer surface living on the dying output BEFORE promoting a
+	 * new primary. The layer-shell contract makes output teardown the
+	 * compositor's job: left alone, ls->output and wlroots' own
+	 * layer_surface->output dangle at freed memory (UAF on the next commit or
+	 * on heap-address reuse when a monitor is re-plugged), the client never
+	 * learns its surface is gone, and an EXCLUSIVE surface would pin
+	 * focused_layer to an invisible surface. wlr_layer_surface_v1_destroy
+	 * sends `closed` and fires our layer_surface_destroy handler, which
+	 * unlinks, frees, and clears focused_layer. Iterate SAFELY: destroy
+	 * mutates the list. */
+	struct wtf_layer_surface *ls, *ls_tmp;
+	wl_list_for_each_safe(ls, ls_tmp, &srv->layer_surfaces, link) {
+		if (ls->output == output->wlr_output) {
+			wlr_layer_surface_v1_destroy(ls->layer_surface);
+		}
+	}
+
 	if (srv->primary_output == output->wlr_output) {
 		srv->primary_output = NULL;
 		srv->reported_x = srv->reported_y = 0;
@@ -1242,7 +1281,14 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	struct wtf_server *srv = wl_container_of(listener, srv, new_output);
 	struct wlr_output *wlr_output = data;
 
-	wlr_output_init_render(wlr_output, srv->allocator, srv->renderer);
+	/* A render-less output must be SKIPPED, not registered: committing frames
+	 * on it would fail (or crash) every vblank. Real on hybrid-GPU laptops
+	 * (outputs on the non-render GPU) and leftover simpledrm boot outputs. */
+	if (!wlr_output_init_render(wlr_output, srv->allocator, srv->renderer)) {
+		wlr_log(WLR_ERROR, "output %s: init_render failed; skipping output",
+			wlr_output->name);
+		return;
+	}
 
 	struct wlr_output_state state;
 	wlr_output_state_init(&state);
@@ -1253,7 +1299,16 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 		wlr_output_state_set_mode(&state, mode);
 	}
 
-	wlr_output_commit_state(wlr_output, &state);
+	/* A failed modeset (DP-MST bandwidth, dead connector) must also skip: a
+	 * registered-but-dead output could become primary => permanently black
+	 * session with a healthy second monitor ignored. Skipping lets the next
+	 * output become primary instead. */
+	if (!wlr_output_commit_state(wlr_output, &state)) {
+		wlr_log(WLR_ERROR, "output %s: modeset failed; skipping output",
+			wlr_output->name);
+		wlr_output_state_finish(&state);
+		return;
+	}
 	wlr_output_state_finish(&state);
 
 	struct wtf_output *output = calloc(1, sizeof(*output));
@@ -1263,6 +1318,15 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	}
 	output->wlr_output = wlr_output;
 	output->server = srv;
+
+	struct wlr_scene_output *scene_output =
+		wlr_scene_output_create(srv->scene, wlr_output);
+	if (scene_output == NULL) {
+		wlr_log(WLR_ERROR, "output %s: scene output creation failed; skipping",
+			wlr_output->name);
+		free(output);
+		return;
+	}
 
 	output->frame.notify = output_frame;
 	wl_signal_add(&wlr_output->events.frame, &output->frame);
@@ -1275,8 +1339,6 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 
 	struct wlr_output_layout_output *l_output =
 		wlr_output_layout_add_auto(srv->output_layout, wlr_output);
-	struct wlr_scene_output *scene_output =
-		wlr_scene_output_create(srv->scene, wlr_output);
 	wlr_scene_output_layout_add_output(srv->scene_layout, l_output, scene_output);
 
 	/* First output to appear becomes the one we report to the brain. */
@@ -1595,6 +1657,12 @@ static void xwl_dissociate(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct wtf_toplevel *toplevel = wl_container_of(listener, toplevel, dissociate);
 
+	/* If associate bailed before registering map/unmap (scene-tree creation
+	 * failed), the links are still calloc-zeroed — wl_list_remove on them is a
+	 * NULL deref. scene_tree is the exact gate for "listeners were added". */
+	if (toplevel->scene_tree == NULL) {
+		return;
+	}
 	wl_list_remove(&toplevel->map.link);
 	wl_list_remove(&toplevel->unmap.link);
 	xwl_destroy_scene(toplevel);
@@ -1696,6 +1764,10 @@ static void unmanaged_dissociate(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct wtf_xwayland_unmanaged *u = wl_container_of(listener, u, dissociate);
 
+	/* Same gate as xwl_dissociate: a failed associate never added map/unmap. */
+	if (u->scene_tree == NULL) {
+		return;
+	}
 	wl_list_remove(&u->map.link);
 	wl_list_remove(&u->unmap.link);
 	if (u->scene_tree != NULL) {
@@ -1992,6 +2064,12 @@ static void server_new_layer_surface(struct wl_listener *listener, void *data) {
 	if (li > 3) li = 3;
 	ls->scene = wlr_scene_layer_surface_v1_create(srv->layer_tree[li],
 		layer_surface);
+	if (ls->scene == NULL) {
+		wlr_log(WLR_ERROR, "layer-surface scene creation failed; dropping surface");
+		free(ls);
+		wlr_layer_surface_v1_destroy(layer_surface);
+		return;
+	}
 	/* CRITICAL: do NOT set node.data on a layer-surface tree. desktop_toplevel_at
 	 * walks up the scene graph to the first node whose data is non-NULL and returns
 	 * it AS A struct wtf_toplevel * — the invariant across this file is "node.data
@@ -2024,6 +2102,10 @@ void wtf_configure(int id, int x, int y, int width, int height) {
 	if (t == NULL) {
 		return;
 	}
+	/* Defense-in-depth: negative dims (e.g. from a usable-area underflow the
+	 * brain echoed back) would assert inside wlr_scene_rect_set_size. */
+	if (width < 0) width = 0;
+	if (height < 0) height = 0;
 	t->x = x;
 	t->y = y;
 	t->target_x = x;
@@ -2132,12 +2214,29 @@ void wtf_spawn(const char *cmd) {
 	if (cmd == NULL) {
 		return;
 	}
+	/* DOUBLE-FORK: the compositor never waitpid()s (no SIGCHLD reaper here —
+	 * one would steal the .NET runtime's managed children and break SpawnOnce
+	 * liveness), so a directly-forked child would stay a ZOMBIE forever after
+	 * it exits. A day of spawning terminals exhausts the pid limit and then
+	 * NOTHING can be launched. Instead: fork an intermediate that forks the
+	 * real child and _exits immediately; the grandchild is re-parented to init
+	 * (which reaps it), and we waitpid() only the short-lived intermediate. */
 	pid_t pid = fork();
 	if (pid == 0) {
-		/* Child: detach from the compositor and exec the command. */
+		/* Intermediate: detach, spawn the grandchild, and vanish. */
 		setsid();
-		execl("/bin/sh", "/bin/sh", "-c", cmd, (void *)NULL);
-		_exit(127);
+		pid_t grandchild = fork();
+		if (grandchild == 0) {
+			execl("/bin/sh", "/bin/sh", "-c", cmd, (void *)NULL);
+			_exit(127);
+		}
+		_exit(grandchild < 0 ? 126 : 0);
+	}
+	if (pid > 0) {
+		/* Reap the intermediate synchronously — it _exits at once. */
+		waitpid(pid, NULL, 0);
+	} else {
+		wlr_log(WLR_ERROR, "wtf_spawn: fork failed for '%s'", cmd);
 	}
 }
 
@@ -2510,6 +2609,20 @@ static void wtf_wlr_log_handler(enum wlr_log_importance importance,
 		buf);
 }
 
+/* Startup guard: any wlr_*_create below returning NULL is unrecoverable — log
+ * WHICH one and fail CLEANLY (backend destroy => DRM master dropped, VT
+ * restored) instead of dereferencing NULL a few lines later. The wtf-session
+ * wrapper then logs the rc and escalates; the machine is never left on a dead
+ * VT with no explanation. */
+#define WTF_REQUIRE(expr, what) \
+	do { \
+		if ((expr) == NULL) { \
+			wlr_log(WLR_ERROR, "startup: %s failed; aborting cleanly", what); \
+			wlr_backend_destroy(server.backend); \
+			return 1; \
+		} \
+	} while (0)
+
 int wtf_run(struct wtf_callbacks cbs) {
 	g_cb = cbs;
 
@@ -2551,6 +2664,7 @@ int wtf_run(struct wtf_callbacks cbs) {
 
 	struct wlr_compositor *compositor =
 		wlr_compositor_create(server.wl_display, 5, server.renderer);
+	WTF_REQUIRE(compositor, "wlr_compositor_create");
 	wlr_subcompositor_create(server.wl_display);
 	wlr_data_device_manager_create(server.wl_display);
 
@@ -2570,6 +2684,7 @@ int wtf_run(struct wtf_callbacks cbs) {
 	wlr_gamma_control_manager_v1_create(server.wl_display);
 
 	server.output_layout = wlr_output_layout_create(server.wl_display);
+	WTF_REQUIRE(server.output_layout, "wlr_output_layout_create");
 
 	/* xdg-output (zxdg_output_manager_v1): advertises each output's LOGICAL
 	 * position + size to clients. Screenshot/recording/layout tools (grim,
@@ -2590,6 +2705,7 @@ int wtf_run(struct wtf_callbacks cbs) {
 	}
 	server.scene_layout =
 		wlr_scene_attach_output_layout(server.scene, server.output_layout);
+	WTF_REQUIRE(server.scene_layout, "wlr_scene_attach_output_layout");
 
 	/* scenefx: seed default blur parameters (off until wtf_set_blur enables). */
 	g_blur = blur_data_get_default();
@@ -2606,10 +2722,16 @@ int wtf_run(struct wtf_callbacks cbs) {
 		wlr_scene_tree_create(&server.scene->tree);
 	server.layer_tree[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY] =
 		wlr_scene_tree_create(&server.scene->tree);
+	WTF_REQUIRE(server.layer_tree[0], "scene tree (background)");
+	WTF_REQUIRE(server.layer_tree[1], "scene tree (bottom)");
+	WTF_REQUIRE(server.toplevel_tree, "scene tree (toplevels)");
+	WTF_REQUIRE(server.layer_tree[2], "scene tree (top)");
+	WTF_REQUIRE(server.layer_tree[3], "scene tree (overlay)");
 
 	/* Layer-shell: bars, wallpaper, launchers, notification daemons. */
 	wl_list_init(&server.layer_surfaces);
 	server.layer_shell = wlr_layer_shell_v1_create(server.wl_display, 4);
+	WTF_REQUIRE(server.layer_shell, "wlr_layer_shell_v1_create");
 	server.new_layer_surface.notify = server_new_layer_surface;
 	wl_signal_add(&server.layer_shell->events.new_surface,
 		&server.new_layer_surface);
@@ -2617,6 +2739,7 @@ int wtf_run(struct wtf_callbacks cbs) {
 	/* xdg-shell version 3, matching the canonical 0.18 tinywl. */
 	wl_list_init(&server.toplevels);
 	server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
+	WTF_REQUIRE(server.xdg_shell, "wlr_xdg_shell_create");
 	server.new_xdg_toplevel.notify = server_new_xdg_toplevel;
 	wl_signal_add(&server.xdg_shell->events.new_toplevel, &server.new_xdg_toplevel);
 	server.new_xdg_popup.notify = server_new_xdg_popup;
@@ -2639,8 +2762,10 @@ int wtf_run(struct wtf_callbacks cbs) {
 	}
 
 	server.cursor = wlr_cursor_create();
+	WTF_REQUIRE(server.cursor, "wlr_cursor_create");
 	wlr_cursor_attach_output_layout(server.cursor, server.output_layout);
 	server.cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
+	WTF_REQUIRE(server.cursor_mgr, "wlr_xcursor_manager_create");
 
 	server.cursor_mode = WTF_CURSOR_PASSTHROUGH;
 	server.cursor_motion.notify = server_cursor_motion;
@@ -2660,6 +2785,7 @@ int wtf_run(struct wtf_callbacks cbs) {
 	server.new_input.notify = server_new_input;
 	wl_signal_add(&server.backend->events.new_input, &server.new_input);
 	server.seat = wlr_seat_create(server.wl_display, "seat0");
+	WTF_REQUIRE(server.seat, "wlr_seat_create");
 	server.request_cursor.notify = seat_request_cursor;
 	wl_signal_add(&server.seat->events.request_set_cursor, &server.request_cursor);
 	server.request_set_selection.notify = seat_request_set_selection;

@@ -25,18 +25,49 @@ let start (handle: string -> string) : string =
     listener.Bind(UnixDomainSocketEndPoint path)
     listener.Listen 16
 
+    // Cap concurrent clients: each gets a dedicated ~1 MB-stack thread, so an
+    // unbounded connect loop (a stuck agent retrying) piles up threads until
+    // memory runs out. Beyond the cap, close immediately — the client sees EOF.
+    let maxClients = 32
+    let mutable liveClients = 0
+
+    // Bounded line reader. StreamReader.ReadLine buffers until it sees '\n', so
+    // ONE client streaming gigabytes without a newline OOMs the whole
+    // compositor. Real requests are small JSON lines; past the cap the client
+    // is broken or hostile — drop it. None = connection done (EOF/overflow).
+    let maxLineBytes = 1 <<< 20
+    let readBoundedLine (stream: Stream) : string option =
+        // Bytes, not chars: requests are UTF-8 (agent JSON carries non-ASCII),
+        // so decode the whole line at once rather than casting byte->char.
+        let buf = ResizeArray<byte>()
+        let decode () = System.Text.Encoding.UTF8.GetString(buf.ToArray())
+        let mutable verdict = ValueNone
+        while verdict.IsNone do
+            match stream.ReadByte() with
+            | -1 -> verdict <- ValueSome(if buf.Count > 0 then Some(decode ()) else None)
+            | 10 (* '\n' *) -> verdict <- ValueSome(Some(decode ()))
+            | _ when buf.Count >= maxLineBytes ->
+                eprintfn "WTF: IPC line exceeded %d bytes; dropping client" maxLineBytes
+                verdict <- ValueSome None
+            | b -> buf.Add(byte b)
+        verdict.Value
+
     let serve (client: Socket) =
         try
-            use stream = new NetworkStream(client, true)
-            use reader = new StreamReader(stream)
-            use writer = new StreamWriter(stream)
-            writer.AutoFlush <- true
-            let mutable line = reader.ReadLine()
-            while not (isNull line) do
-                if line.Trim() <> "" then
-                    writer.WriteLine((handle line).Replace("\n", " "))
-                line <- reader.ReadLine()
-        with _ -> ()
+            try
+                use stream = new NetworkStream(client, true)
+                use writer = new StreamWriter(stream)
+                writer.AutoFlush <- true
+                let mutable go = true
+                while go do
+                    match readBoundedLine stream with
+                    | None -> go <- false
+                    | Some line ->
+                        if line.Trim() <> "" then
+                            writer.WriteLine((handle line).Replace("\n", " "))
+            with _ -> ()
+        finally
+            Interlocked.Decrement &liveClients |> ignore
 
     let accept () =
         // A throw from Accept (listener disposed, fd exhaustion / ENFILE) on this
@@ -46,9 +77,14 @@ let start (handle: string -> string) : string =
         while true do
             try
                 let client = listener.Accept()
-                let t = Thread(fun () -> serve client)
-                t.IsBackground <- true
-                t.Start()
+                if Interlocked.Increment &liveClients > maxClients then
+                    Interlocked.Decrement &liveClients |> ignore
+                    eprintfn "WTF: IPC client cap (%d) reached; rejecting connection" maxClients
+                    client.Dispose()
+                else
+                    let t = Thread(fun () -> serve client)
+                    t.IsBackground <- true
+                    t.Start()
             with ex -> eprintfn "WTF: IPC accept failed (ignored): %O" ex
 
     let server = Thread(ThreadStart accept)
