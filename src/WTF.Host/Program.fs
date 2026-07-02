@@ -461,17 +461,25 @@ let onOutputResize (x: int) (y: int) (width: int) (height: int) : unit =
 // ---- agent-first IPC, marshalled onto the loop thread by the bridge ----
 let private bridge = Bridge.LoopBridge()
 
+/// The full agent-socket snapshot: world + "desktop" (live D-Bus state) + "ui"
+/// (bar/omnibox styling from the LIVE cfg — this is how a config.fsx hot-reload
+/// restyles the bar: its next poll simply sees the new values).
+let private snapshotNow () : string =
+    let extras =
+        [ match desktopSnapshot () with
+          | Some d -> yield ("desktop", d :> System.Text.Json.Nodes.JsonNode)
+          | None -> ()
+          yield ("ui", ClientUi.json cfg.Bars cfg.Omnibox) ]
+    Protocol.snapshotLineWithNodes extras world
+
 /// Apply one control-socket request ON the loop thread (safe to mutate world and
 /// call wlroots), returning the resulting snapshot. A Query changes nothing.
 let private handleOnLoop (line: string) : string =
-    // Additive: splice the live D-Bus desktop-shell state under "desktop" so the
-    // agent/bar can read notifications + battery/network/players too.
-    let desktop = desktopSnapshot ()
     match Protocol.parseRequest line with
-    | Some Protocol.Query -> Protocol.snapshotLineWith desktop world
+    | Some Protocol.Query -> snapshotNow ()
     | Some (Protocol.Act cmd) ->
         dispatch cmd
-        Protocol.snapshotLineWith desktop world
+        snapshotNow ()
     // The agent tool manifest: plain data, returned verbatim so any external LLM
     // can discover + drive WTF with zero hardcoding.
     | Some Protocol.Tools -> AgentTools.manifestJson ()
@@ -480,7 +488,7 @@ let private handleOnLoop (line: string) : string =
     // under "desktop".
     | Some (Protocol.Notify (summary, body)) ->
         desktopNotify summary body
-        Protocol.snapshotLineWith (desktopSnapshot ()) world
+        snapshotNow ()
     // Opt-in in-process LLM brain. The real (async, off-loop) wiring lands in the
     // next step; until a Brain is constructed it is gracefully disabled.
     | Some (Protocol.Ask _) -> """{"error":"agent disabled (set ANTHROPIC_API_KEY)"}"""
@@ -708,7 +716,7 @@ let onReady () : unit =
         | AgentTools.ToCommand cmd ->
             bridge.Call(Ffi.wtf_command_notify, fun () ->
                 dispatch cmd
-                Protocol.snapshotLineWith (desktopSnapshot ()) world)
+                snapshotNow ())
         | AgentTools.ToNotify (summary, body) ->
             desktopNotify summary body
             """{"ok":"notified"}"""
@@ -733,7 +741,7 @@ let onReady () : unit =
                 try
                     let snapshot =
                         bridge.Call(Ffi.wtf_command_notify, fun () ->
-                            Protocol.snapshotLineWith (desktopSnapshot ()) world)
+                            snapshotNow ())
                     jsonReply "reply" ((b.Ask snapshot nl).Result)
                 with ex ->
                     jsonReply "error" (sprintf "agent failed: %s" ex.Message)

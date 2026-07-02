@@ -95,6 +95,13 @@ borderColor (fun ctx -> Color.toHex (ctx.Palette.Accents 0.3))
 `Palette` fields: `Base`, `Surface`, `Overlay`, `Text`, `Subtext`, and
 `Accents` — a ramp you sample with a number in 0–1 instead of a fixed list.
 
+## Bar & omnibox
+
+The status bar and launcher are themed from the same `config.fsx` — colors,
+segments, fonts, position (all four screen edges), multiple bars. A save
+restyles the running bar live. Full reference:
+[Configuration → Bar & omnibox styling](configuration.md#bar--omnibox-styling).
+
 ## Gaps
 
 ```fsharp

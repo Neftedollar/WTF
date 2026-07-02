@@ -109,6 +109,15 @@ module Protocol =
     let snapshotLineWith (extra: JsonObject option) (w: World) : string =
         (buildSnapshot extra w).ToJsonString(JsonSerializerOptions(WriteIndented = false))
 
+    /// Compact snapshot with arbitrary named nodes spliced at the top level
+    /// ("desktop" from WTF.Desktop, "ui" = bar/omnibox client config, ...).
+    /// Additive-only wire contract: consumers ignore keys they don't know.
+    let snapshotLineWithNodes (extras: (string * JsonNode) list) (w: World) : string =
+        let root = buildSnapshot None w
+        for name, node in extras do
+            root[name] <- node
+        root.ToJsonString(JsonSerializerOptions(WriteIndented = false))
+
     // --- command parsing ---
 
     let private str (o: JsonNode) (key: string) =

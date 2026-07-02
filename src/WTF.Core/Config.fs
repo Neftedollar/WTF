@@ -79,6 +79,87 @@ type Wallpaper =
     /// frame matching the time of day and switches on frame boundaries.
     | Dynamic of path: string * mode: WallpaperMode
 
+// --- bar & omnibox (client UI) configuration -------------------------------
+// PURE DATA, same philosophy as the rest of the config: the WM serializes
+// these into the agent-socket snapshot (under "ui"), and the bar/omnibox —
+// separate Wayland-client processes — read them from there. The bar polls the
+// snapshot, so a config.fsx hot-reload restyles it live; the omnibox reads
+// its config at launch (it is short-lived by design).
+
+/// One bar segment. Order inside Left/Right lists = display order.
+type BarSegment =
+    | Workspaces               // workspace pills (current/occupied aware)
+    | Clock of format: string  // .NET time format, e.g. "HH:mm" or "ddd HH:mm"
+    | Battery
+    | Network
+    | Player                   // MPRIS now-playing
+    | Label of string          // static text
+
+type BarPosition =
+    | Top
+    | Bottom
+    | Left     // vertical bar; Height acts as THICKNESS, segments stack top->bottom
+    | Right
+
+/// Colors are "#rrggbb" or "#rrggbbaa" hex strings (same convention as borders).
+/// Multiple bars are supported: give each a Name and launch one wtf-bar process
+/// per entry (`wtf-bar` takes the first/only bar; `wtf-bar --name status2`
+/// takes the entry named "status2").
+type BarConfig =
+    { Name: string
+      Position: BarPosition
+      Height: int              // thickness: bar height (Top/Bottom) or width (Left/Right)
+      FontSize: float
+      Background: string       // supports alpha (#rrggbbaa) for translucency
+      Foreground: string
+      Dim: string              // idle workspace / secondary text
+      Accent: string           // current-workspace pill / highlights
+      Left: BarSegment list
+      Right: BarSegment list }
+
+module BarConfig =
+    /// The built-in look (what shipped before bar config existed).
+    let defaults =
+        { Name = "main"
+          Position = Top
+          Height = 28
+          FontSize = 14.0
+          Background = "#1e1e2eeb"
+          Foreground = "#cdd6f4"
+          Dim = "#6c7086"
+          Accent = "#89b4fa"
+          Left = [ Workspaces ]
+          Right = [ Player; Network; Battery; Clock "HH:mm" ] }
+
+type OmniboxConfig =
+    { Width: int
+      Height: int
+      RowHeight: int
+      FontSize: float
+      Background: string
+      InputBackground: string
+      Foreground: string
+      Dim: string
+      Selection: string        // selected-row background
+      Prompt: string           // prompt glyph/text, e.g. ">" or "λ"
+      PromptColor: string
+      Placeholder: string }    // hint shown while the query is empty
+
+module OmniboxConfig =
+    let defaults =
+        { Width = 640
+          Height = 400
+          RowHeight = 30
+          FontSize = 16.0
+          Background = "#181825f4"
+          InputBackground = "#313244"
+          Foreground = "#cdd6f4"
+          Dim = "#7f849c"
+          Selection = "#89b4fa"
+          Prompt = ">"
+          PromptColor = "#a6e3a1"
+          Placeholder = "type to search apps…" }
+
 // --- dynamic appearance model (E1: appearance as functions of context) ---
 
 /// The per-window context an appearance knob is evaluated against. A static
@@ -129,6 +210,8 @@ type WtfConfig =
       HistoryLimit: int                 // undo depth: max retained past states
       Input: InputConfig                // keyboard/mouse/touchpad device settings
       Wallpaper: Wallpaper              // background: solid color or decoded image
+      Bars: BarConfig list              // status bar(s) styling (served to wtf-bar via the socket)
+      Omnibox: OmniboxConfig            // launcher styling (served to wtf-omnibox via the socket)
       // --- E1 dynamic appearance overrides (None => fall through to the static
       // ActiveBorder/InactiveBorder/InactiveOpacity fields, i.e. today's behavior) ---
       BorderColorOf: Dyn<string> option // per-window border color (returns a #hex)
@@ -169,6 +252,8 @@ module WtfConfig =
                   DisableWhileTyping = true; ScrollMethod = "two-finger"
                   ClickMethod = "button-areas"; AccelSpeed = 0.0; AccelProfile = "" } }
           Wallpaper = Color "#1e1e2e"
+          Bars = [ BarConfig.defaults ]
+          Omnibox = OmniboxConfig.defaults
           BorderColorOf = None
           OpacityOf = None }
 
@@ -302,6 +387,12 @@ type ConfigBuilder() =
     member _.Input(c, i: InputConfig) = { c with Input = i }
     [<CustomOperation "wallpaper">]
     member _.Wallpaper(c, v: Wallpaper) = { c with Wallpaper = v }
+    [<CustomOperation "bar">]
+    member _.Bar(c, v: BarConfig) = { c with Bars = [ v ] }
+    [<CustomOperation "bars">]
+    member _.Bars(c, v: BarConfig list) = { c with Bars = v }
+    [<CustomOperation "omnibox">]
+    member _.Omnibox(c, v: OmniboxConfig) = { c with Omnibox = v }
 
 // --- input sub-builders ---
 // Member params are type-annotated because some field names (e.g. Layout) collide
@@ -360,6 +451,62 @@ type InputBuilder() =
     member _.Delay(f: unit -> InputConfig -> InputConfig) = f ()
     member _.Run(f: InputConfig -> InputConfig) = f WtfConfig.defaults.Input
 
+/// `barConfig { position Bottom; accent "#f38ba8"; right [ Clock "ddd HH:mm" ] }`
+/// -> BarConfig. Omitted knobs keep BarConfig.defaults. NB: geometry knobs
+/// (position/height) apply when the bar STARTS; colors/segments/font restyle
+/// a running bar live on the next snapshot poll (~1s).
+type BarConfigBuilder() =
+    member _.Yield(_) = BarConfig.defaults
+    [<CustomOperation "name">]
+    member _.Name(c: BarConfig, v: string) = { c with Name = v }
+    [<CustomOperation "position">]
+    member _.Position(c: BarConfig, v) = { c with Position = v }
+    [<CustomOperation "height">]
+    member _.Height(c: BarConfig, v) = { c with Height = v }
+    [<CustomOperation "fontSize">]
+    member _.FontSize(c: BarConfig, v) = { c with FontSize = v }
+    [<CustomOperation "background">]
+    member _.Background(c: BarConfig, v: string) = { c with Background = v }
+    [<CustomOperation "foreground">]
+    member _.Foreground(c: BarConfig, v: string) = { c with Foreground = v }
+    [<CustomOperation "dim">]
+    member _.Dim(c: BarConfig, v: string) = { c with Dim = v }
+    [<CustomOperation "accent">]
+    member _.Accent(c: BarConfig, v: string) = { c with Accent = v }
+    [<CustomOperation "left">]
+    member _.Left(c: BarConfig, v: BarSegment list) = { c with Left = v }
+    [<CustomOperation "right">]
+    member _.Right(c: BarConfig, v: BarSegment list) = { c with Right = v }
+
+/// `omniboxConfig { width 720; selection "#f38ba8"; prompt "λ" }` -> OmniboxConfig.
+/// Applied when the omnibox LAUNCHES (it is a short-lived process by design).
+type OmniboxConfigBuilder() =
+    member _.Yield(_) = OmniboxConfig.defaults
+    [<CustomOperation "width">]
+    member _.Width(c: OmniboxConfig, v) = { c with Width = v }
+    [<CustomOperation "height">]
+    member _.Height(c: OmniboxConfig, v) = { c with Height = v }
+    [<CustomOperation "rowHeight">]
+    member _.RowHeight(c: OmniboxConfig, v) = { c with RowHeight = v }
+    [<CustomOperation "fontSize">]
+    member _.FontSize(c: OmniboxConfig, v) = { c with FontSize = v }
+    [<CustomOperation "background">]
+    member _.Background(c: OmniboxConfig, v: string) = { c with Background = v }
+    [<CustomOperation "inputBackground">]
+    member _.InputBackground(c: OmniboxConfig, v: string) = { c with InputBackground = v }
+    [<CustomOperation "foreground">]
+    member _.Foreground(c: OmniboxConfig, v: string) = { c with Foreground = v }
+    [<CustomOperation "dim">]
+    member _.Dim(c: OmniboxConfig, v: string) = { c with Dim = v }
+    [<CustomOperation "selection">]
+    member _.Selection(c: OmniboxConfig, v: string) = { c with Selection = v }
+    [<CustomOperation "prompt">]
+    member _.Prompt(c: OmniboxConfig, v: string) = { c with Prompt = v }
+    [<CustomOperation "promptColor">]
+    member _.PromptColor(c: OmniboxConfig, v: string) = { c with PromptColor = v }
+    [<CustomOperation "placeholder">]
+    member _.Placeholder(c: OmniboxConfig, v: string) = { c with Placeholder = v }
+
 /// `agent { focusApp "firefox"; layout "bsp"; moveTo "2" }` -> Command list.
 /// Agent-first: an LLM (or a script) expresses a *program of intents* declaratively,
 /// then it runs through `Reducer.applyMany`.
@@ -400,6 +547,10 @@ module Builders =
     // Named `inputDevices` (not `input`) because the ConfigBuilder `input` custom
     // operation would otherwise shadow it inside a `config { ... }` block.
     let inputDevices = InputBuilder()
+    // Same reasoning: the ConfigBuilder ops are `bar`/`omnibox`, so the builders
+    // get the -Config suffix: `bar (barConfig { ... })`.
+    let barConfig = BarConfigBuilder()
+    let omniboxConfig = OmniboxConfigBuilder()
 
 // =====================  applying the config  =====================
 
@@ -431,3 +582,62 @@ module Manage =
             let w2, e2 = Reducer.apply ToggleFloat w1
             w2, e1 @ e2
         | NoAction -> w1, e1
+
+// =====================  client UI serialization  =====================
+// The WM serves BarConfig/OmniboxConfig to the bar/omnibox processes by
+// splicing this JSON into the agent-socket snapshot under "ui". The clients
+// parse it DEFENSIVELY (they deliberately do not reference WTF.Core), so this
+// shape is a wire contract: keep it stable, additive-only.
+module ClientUi =
+    open System.Text.Json.Nodes
+
+    let private segmentJson (s: BarSegment) : JsonNode =
+        match s with
+        | Workspaces -> JsonValue.Create "workspaces" :> JsonNode
+        | Battery -> JsonValue.Create "battery" :> JsonNode
+        | Network -> JsonValue.Create "network" :> JsonNode
+        | Player -> JsonValue.Create "player" :> JsonNode
+        | Clock fmt ->
+            let o = JsonObject()
+            o["clock"] <- JsonValue.Create fmt
+            o :> JsonNode
+        | Label text ->
+            let o = JsonObject()
+            o["label"] <- JsonValue.Create text
+            o :> JsonNode
+
+    let private barJson (bar: BarConfig) : JsonNode =
+        let b = JsonObject()
+        b["name"] <- JsonValue.Create bar.Name
+        b["position"] <- JsonValue.Create(
+            match bar.Position with
+            | Top -> "top" | Bottom -> "bottom" | Left -> "left" | Right -> "right")
+        b["height"] <- JsonValue.Create bar.Height
+        b["fontSize"] <- JsonValue.Create bar.FontSize
+        b["background"] <- JsonValue.Create bar.Background
+        b["foreground"] <- JsonValue.Create bar.Foreground
+        b["dim"] <- JsonValue.Create bar.Dim
+        b["accent"] <- JsonValue.Create bar.Accent
+        b["left"] <- JsonArray(bar.Left |> List.map segmentJson |> Array.ofList)
+        b["right"] <- JsonArray(bar.Right |> List.map segmentJson |> Array.ofList)
+        b :> JsonNode
+
+    /// The "ui" object for the snapshot: { bars = [...]; omnibox = {...} }.
+    let json (bars: BarConfig list) (omnibox: OmniboxConfig) : JsonNode =
+        let o = JsonObject()
+        o["width"] <- JsonValue.Create omnibox.Width
+        o["height"] <- JsonValue.Create omnibox.Height
+        o["rowHeight"] <- JsonValue.Create omnibox.RowHeight
+        o["fontSize"] <- JsonValue.Create omnibox.FontSize
+        o["background"] <- JsonValue.Create omnibox.Background
+        o["inputBackground"] <- JsonValue.Create omnibox.InputBackground
+        o["foreground"] <- JsonValue.Create omnibox.Foreground
+        o["dim"] <- JsonValue.Create omnibox.Dim
+        o["selection"] <- JsonValue.Create omnibox.Selection
+        o["prompt"] <- JsonValue.Create omnibox.Prompt
+        o["promptColor"] <- JsonValue.Create omnibox.PromptColor
+        o["placeholder"] <- JsonValue.Create omnibox.Placeholder
+        let ui = JsonObject()
+        ui["bars"] <- JsonArray(bars |> List.map barJson |> Array.ofList)
+        ui["omnibox"] <- o
+        ui :> JsonNode

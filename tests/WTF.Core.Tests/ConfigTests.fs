@@ -285,3 +285,47 @@ let ``agent CE maps the remaining ops and preserves order`` () =
     Assert.Equal<Command list>(
         [ Focus NextWindow; Focus PrevWindow; Spawn "foot"; SwitchWorkspace "2"; SetMaster 3; CloseFocused ],
         program)
+
+// ============================================================================
+//  Bar / omnibox client-UI config (CE builders + the "ui" wire contract).
+// ============================================================================
+
+[<Fact>]
+let ``barConfig CE overrides only what is set`` () =
+    let b = barConfig { name "bottom"; position Bottom; accent "#f38ba8"; right [ Clock "ddd HH:mm" ] }
+    Assert.Equal("bottom", b.Name)
+    Assert.Equal(Bottom, b.Position)
+    Assert.Equal("#f38ba8", b.Accent)
+    Assert.Equal<BarSegment list>([ Clock "ddd HH:mm" ], b.Right)
+    // untouched knobs keep the defaults
+    Assert.Equal(BarConfig.defaults.Height, b.Height)
+    Assert.Equal<BarSegment list>(BarConfig.defaults.Left, b.Left)
+
+[<Fact>]
+let ``omniboxConfig CE overrides only what is set`` () =
+    let o = omniboxConfig { width 720; prompt "λ"; selection "#f38ba8" }
+    Assert.Equal(720, o.Width)
+    Assert.Equal("λ", o.Prompt)
+    Assert.Equal("#f38ba8", o.Selection)
+    Assert.Equal(OmniboxConfig.defaults.Height, o.Height)
+
+[<Fact>]
+let ``config CE: bar sets a single entry, bars a list`` () =
+    let one = config { bar (barConfig { position Bottom }) }
+    Assert.Equal(1, one.Bars.Length)
+    Assert.Equal(Bottom, one.Bars.Head.Position)
+    let two = config { bars [ barConfig { name "top" }; barConfig { name "side"; position Left } ] }
+    Assert.Equal<string list>([ "top"; "side" ], two.Bars |> List.map (fun b -> b.Name))
+
+[<Fact>]
+let ``ClientUi.json emits the wire contract shape`` () =
+    let bars = [ { BarConfig.defaults with Name = "main"; Position = Right; Left = [ Workspaces; Label "λ" ] } ]
+    let node = ClientUi.json bars OmniboxConfig.defaults
+    let s = node.ToJsonString()
+    Assert.Contains("\"bars\":[{", s)
+    Assert.Contains("\"name\":\"main\"", s)
+    Assert.Contains("\"position\":\"right\"", s)
+    Assert.Contains("\"workspaces\"", s)
+    Assert.Contains("{\"label\":\"\\u03BB\"", s.Replace("λ", "\\u03BB")) // Label survives (raw or escaped)
+    Assert.Contains("\"omnibox\":{", s)
+    Assert.Contains("\"prompt\":\"\\u003E\"", s.Replace("\">\"", "\"\\u003E\"")) // '>' raw or escaped

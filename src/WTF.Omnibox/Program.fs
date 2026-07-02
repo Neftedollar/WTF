@@ -16,27 +16,16 @@ open System
 open System.Diagnostics
 open SixLabors.ImageSharp
 open WTF.Client
+open WTF.Client.ClientConfig
 open WTF.Client.DesktopEntry
 
-[<Literal>]
-let Width = 640
-[<Literal>]
-let Height = 400
-[<Literal>]
-let RowHeight = 30
-[<Literal>]
-let InputHeight = 40
-[<Literal>]
-let MaxRows = 11   // (Height - InputHeight) / RowHeight, with a little slack
-
-// ---- palette -----------------------------------------------------------------
-let private cBg = Color.FromRgba(24uy, 24uy, 37uy, 244uy)        // mantle
-let private cInputBg = Color.FromRgba(49uy, 50uy, 68uy, 255uy)   // surface0
-let private cText = Color.FromRgba(205uy, 214uy, 244uy, 255uy)
-let private cDim = Color.FromRgba(127uy, 132uy, 156uy, 255uy)    // overlay1
-let private cSelBg = Color.FromRgba(137uy, 180uy, 250uy, 255uy)  // blue
-let private cOnSel = Color.FromRgba(24uy, 24uy, 37uy, 255uy)
-let private cPrompt = Color.FromRgba(166uy, 227uy, 161uy, 255uy) // green
+// ---- styling: served by the WM from config.fsx (ui.omnibox in the snapshot),
+// fetched ONCE at launch (the omnibox is short-lived by design). No WM / no
+// "ui" => the built-in defaults, pixel-identical to the pre-config look.
+let private ui : OmniboxUi = omniboxOfSnapshot (defaultArg (Socket.trySend "state") "")
+let private InputHeight = 40
+let private maxRows = max 1 ((ui.Height - InputHeight) / ui.RowHeight)
+let private cOnSel = ui.Bg.WithAlpha 1.0f   // dark text on the selection color
 
 // ---- xkb keysyms we care about -----------------------------------------------
 [<Literal>]
@@ -91,31 +80,31 @@ let private launch (e: Entry) =
 
 // ---- rendering ---------------------------------------------------------------
 let private render (buf: nativeint) (w: int) (h: int) (stride: int) =
-    let fontOpt = Render.font 16.0f
-    let smallOpt = Render.font 12.0f
+    let fontOpt = Render.font ui.FontSize
+    let smallOpt = Render.font (max 8.0f (ui.FontSize * 0.75f))
     surface.Draw(
         w, h,
         fun ctx ->
-            Render.fillRect ctx cBg 0.0f 0.0f (float32 w) (float32 h)
+            Render.fillRect ctx ui.Bg 0.0f 0.0f (float32 w) (float32 h)
             match fontOpt with
             | None -> ()
             | Some font ->
                 let padX = 14.0f
                 // --- input row -------------------------------------------------
-                Render.fillRect ctx cInputBg 0.0f 0.0f (float32 w) (float32 InputHeight)
-                let inY = (float32 InputHeight - 16.0f) / 2.0f - 1.0f
-                Render.drawText ctx font cPrompt padX inY ">"
-                let promptW = Render.measureWidth font "> "
+                Render.fillRect ctx ui.InputBg 0.0f 0.0f (float32 w) (float32 InputHeight)
+                let inY = (float32 InputHeight - ui.FontSize) / 2.0f - 1.0f
+                Render.drawText ctx font ui.PromptColor padX inY ui.Prompt
+                let promptW = Render.measureWidth font (ui.Prompt + " ")
                 let shown = if query = "" then "" else query
-                Render.drawText ctx font cText (padX + promptW) inY shown
+                Render.drawText ctx font ui.Fg (padX + promptW) inY shown
                 // a simple caret after the query text
                 let qW = Render.measureWidth font shown
-                Render.fillRect ctx cText (padX + promptW + qW + 1.0f) (inY + 1.0f) 2.0f 18.0f
+                Render.fillRect ctx ui.Fg (padX + promptW + qW + 1.0f) (inY + 1.0f) 2.0f 18.0f
                 if query = "" then
-                    Render.drawText ctx font cDim (padX + promptW + 12.0f) inY "type to search apps…"
+                    Render.drawText ctx font ui.Dim (padX + promptW + 12.0f) inY ui.Placeholder
 
                 // --- results list ---------------------------------------------
-                let rows = min MaxRows ranked.Length
+                let rows = min maxRows ranked.Length
                 // keep the selected row visible by scrolling the window
                 let first =
                     if selected < rows then 0
@@ -124,12 +113,12 @@ let private render (buf: nativeint) (w: int) (h: int) (stride: int) =
                     let idx = first + i
                     if idx < ranked.Length then
                         let e = ranked.[idx]
-                        let top = float32 (InputHeight + i * RowHeight)
+                        let top = float32 (InputHeight + i * ui.RowHeight)
                         let isSel = (idx = selected)
                         if isSel then
-                            Render.fillRect ctx cSelBg 0.0f top (float32 w) (float32 RowHeight)
-                        let fg = if isSel then cOnSel else cText
-                        let ty = top + (float32 RowHeight - 16.0f) / 2.0f - 1.0f
+                            Render.fillRect ctx ui.Selection 0.0f top (float32 w) (float32 ui.RowHeight)
+                        let fg = if isSel then cOnSel else ui.Fg
+                        let ty = top + (float32 ui.RowHeight - ui.FontSize) / 2.0f - 1.0f
                         Render.drawText ctx font fg padX ty e.Name
                         // right-aligned dim command hint
                         match smallOpt with
@@ -138,8 +127,8 @@ let private render (buf: nativeint) (w: int) (h: int) (stride: int) =
                             let hint =
                                 if hint.Length > 40 then hint.Substring(0, 39) + "…" else hint
                             let hw = Render.measureWidth small hint
-                            let hintFg = if isSel then cOnSel else cDim
-                            Render.drawText ctx small hintFg (float32 w - padX - hw) (top + (float32 RowHeight - 12.0f) / 2.0f - 1.0f) hint
+                            let hintFg = if isSel then cOnSel else ui.Dim
+                            Render.drawText ctx small hintFg (float32 w - padX - hw) (top + (float32 ui.RowHeight - 12.0f) / 2.0f - 1.0f) hint
                         | None -> ()
     )
     surface.Blit(buf, w, h, stride)
@@ -192,8 +181,8 @@ let main _argv =
     cfg.Ns <- "wtf-omnibox"
     cfg.Layer <- Panel.LayerOverlay
     cfg.Anchor <- 0                       // centered (no anchor)
-    cfg.Width <- Width
-    cfg.Height <- Height
+    cfg.Width <- ui.Width
+    cfg.Height <- ui.Height
     cfg.ExclusiveZone <- 0
     cfg.Keyboard <- Panel.KeyboardExclusive
     cfg.MarginTop <- 0

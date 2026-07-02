@@ -65,6 +65,8 @@ With `open WTF.TypeProviders`, three providers turn *your machine* into types:
 | `scale` | float | `1.0` | HiDPI output scale |
 | `historyLimit` | int | `64` | undo depth |
 | `input` | InputConfig | defaults | keyboard/mouse/touchpad (below) |
+| `bar` / `bars` | BarConfig | built-in look | status bar styling — [below](#bar--omnibox-styling) |
+| `omnibox` | OmniboxConfig | built-in look | launcher styling — [below](#bar--omnibox-styling) |
 
 ## Keybindings
 
@@ -126,6 +128,52 @@ keyboard. Mouse/touchpad knobs are libinput: `accelSpeed` (-1..1),
 `accelProfile` (`"flat"`/`"adaptive"`), `scrollMethod`
 (`"none"`/`"two-finger"`/`"edge"`), `clickMethod`
 (`"none"`/`"button-areas"`/`"clickfinger"`), `tapDrag`.
+
+## Bar & omnibox styling
+
+The status bar and the launcher are styled from the same config — the WM
+serves their config over the agent socket, so **a save restyles a running bar
+live** (colors/segments/font apply on its next poll, ~1 s; position/thickness
+apply when the bar starts). The omnibox reads its styling each time it opens.
+
+```fsharp
+bar (barConfig {
+    position Bottom               // Top | Bottom | Left | Right
+    height 32                     // thickness (bar width for Left/Right)
+    accent "#f38ba8"
+    background "#11111bcc"        // #rrggbbaa — translucent
+    left  [ Workspaces; Label "λ" ]
+    right [ Player; Battery; Clock "ddd HH:mm" ]
+})
+
+omnibox (omniboxConfig {
+    width 720
+    selection "#f38ba8"
+    prompt "λ"
+    placeholder "run…"
+})
+```
+
+**Multiple bars** — give each a name and launch one `wtf-bar` process per
+entry (the `--name` flag picks the entry; no flag = the first):
+
+```fsharp
+bars [
+    barConfig { name "top" }
+    barConfig { name "side"; position Left; height 34 }
+]
+// startup [ "wtf-bar"; "wtf-bar --name side"; ... ]
+```
+
+`Left`/`Right` bars render vertically: workspace pills stack top-to-bottom,
+the `right` list stacks from the bottom, and the clock splits `HH:mm` into
+two lines. Long segments (`Player`, `Network`) render compact glyphs there.
+
+Bar segments: `Workspaces`, `Clock "<.NET time format>"`, `Battery`,
+`Network`, `Player` (MPRIS now-playing), `Label "<text>"`. Omnibox knobs:
+`width`, `height`, `rowHeight`, `fontSize`, `background`, `inputBackground`,
+`foreground`, `dim`, `selection`, `prompt`, `promptColor`, `placeholder`.
+All colors are `#rrggbb` / `#rrggbbaa`.
 
 ## Dynamic appearance — knobs as functions
 

@@ -128,6 +128,18 @@ let wtfConfig =
         // wallpaper (Image ("~/pics/bg.png", Fill)) // Fill|Fit|Stretch|Center|Tile
         // wallpaper (Dynamic ("~/pics/catalina.heic", Fill))
 
+        // ---- bar & omnibox styling (optional; defaults look like this seed) ----
+        // Colors/segments/font restyle a RUNNING bar live on save; position and
+        // height apply when the bar starts. Multiple bars: `bars [ ... ]` with
+        // names + one `wtf-bar --name <n>` process per entry. Left/Right =
+        // vertical bars. See docs/configuration.md#bar--omnibox-styling.
+        // bar (barConfig {
+        //     position Bottom
+        //     accent "#f38ba8"
+        //     right [ Player; Battery; Clock "ddd HH:mm" ]
+        // })
+        // omnibox (omniboxConfig { width 720; prompt "λ" })
+
         // ---- input devices: applied per device type as each attaches ----
         // `input` plugs an InputConfig; build it with the `inputDevices { ... }`
         // CE composing keyboard/mouse/touchpad sub-blocks (any may be omitted).

@@ -693,3 +693,73 @@ let ``Panel.Callbacks ABI is four function pointers, sequential`` () =
     Assert.Equal(4, fields.Length)
     Assert.True(fields |> Array.forall (fun f -> f.FieldType = typeof<nativeint>))
     Assert.True(t.IsLayoutSequential)
+
+// ============================================================================
+//  ClientConfig — the "ui" wire-contract parser (defensive, total).
+// ============================================================================
+
+open WTF.Client.ClientConfig
+
+let private uiSnapshot = """
+{"current":"1","workspaces":[],
+ "ui":{"bars":[
+   {"name":"main","position":"bottom","height":32,"fontSize":15.0,
+    "background":"#11111bcc","foreground":"#cdd6f4","dim":"#6c7086","accent":"#f38ba8",
+    "left":["workspaces",{"label":"WTF"}],
+    "right":[{"clock":"ddd HH:mm"},"battery"]},
+   {"name":"side","position":"left","height":30}],
+  "omnibox":{"width":720,"height":420,"rowHeight":34,"fontSize":18.0,
+   "background":"#181825f4","selection":"#a6e3a1","prompt":"λ","placeholder":"go"}}}
+"""
+
+[<Fact>]
+let ``barOfSnapshot picks the named bar and parses every field`` () =
+    let b = barOfSnapshot (Some "main") uiSnapshot
+    Assert.Equal(SideBottom, b.Side)
+    Assert.Equal(32, b.Height)
+    Assert.Equal(15.0f, b.FontSize)
+    Assert.Equal<SegmentSpec list>([ SWorkspaces; SLabel "WTF" ], b.Left)
+    Assert.Equal<SegmentSpec list>([ SClock "ddd HH:mm"; SBattery ], b.Right)
+
+[<Fact>]
+let ``barOfSnapshot None takes the first bar; named picks by name`` () =
+    Assert.Equal(SideBottom, (barOfSnapshot None uiSnapshot).Side)
+    Assert.Equal(SideLeft, (barOfSnapshot (Some "side") uiSnapshot).Side)
+    // unknown name -> defaults, not a crash
+    Assert.Equal(barDefaults, barOfSnapshot (Some "nope") uiSnapshot)
+
+[<Fact>]
+let ``barOfSnapshot is total on garbage and on snapshots without ui`` () =
+    Assert.Equal(barDefaults, barOfSnapshot None "")
+    Assert.Equal(barDefaults, barOfSnapshot None "{not json")
+    Assert.Equal(barDefaults, barOfSnapshot None """{"current":"1"}""")
+    Assert.Equal(barDefaults, barOfSnapshot None """{"ui":{"bars":[]}}""")
+    Assert.Equal(barDefaults, barOfSnapshot None """{"ui":{"bars":42}}""")
+
+[<Fact>]
+let ``omniboxOfSnapshot parses set fields and defaults the rest`` () =
+    let o = omniboxOfSnapshot uiSnapshot
+    Assert.Equal(720, o.Width)
+    Assert.Equal(34, o.RowHeight)
+    Assert.Equal("λ", o.Prompt)
+    Assert.Equal("go", o.Placeholder)
+    Assert.Equal(omniboxDefaults.InputBg, o.InputBg)   // untouched -> default
+    Assert.Equal(omniboxDefaults, omniboxOfSnapshot "")
+
+[<Fact>]
+let ``parseHex handles rgb, rgba, missing hash and rejects garbage`` () =
+    Assert.True((parseHex "#89b4fa").IsSome)
+    Assert.True((parseHex "11111bcc").IsSome)
+    Assert.Equal(None, parseHex "#123")
+    Assert.Equal(None, parseHex "not-a-color")
+    Assert.Equal(None, parseHex null)
+
+[<Fact>]
+let ``buildWith honors configured segments and clock format`` () =
+    let now = DateTime(2026, 7, 2, 23, 45, 0)
+    let m = WTF.Client.BarModel.buildWith [ SLabel "hi" ] [ SClock "HH.mm" ] now ""
+    Assert.Equal<WTF.Client.BarModel.Segment list>([ WTF.Client.BarModel.Text "hi" ], m.Left)
+    Assert.Equal<WTF.Client.BarModel.Segment list>([ WTF.Client.BarModel.Clock "23.45" ], m.Right)
+    // a garbage clock format degrades to HH:mm instead of throwing
+    let g = WTF.Client.BarModel.buildWith [] [ SClock "\\invalid\\" ] now ""
+    Assert.Equal<WTF.Client.BarModel.Segment list>([ WTF.Client.BarModel.Clock "23:45" ], g.Right)

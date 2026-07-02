@@ -14,6 +14,7 @@
     <Compile Include="Socket.fs" />
     <Compile Include="DesktopEntry.fs" />
     <Compile Include="Fuzzy.fs" />
+    <Compile Include="ClientConfig.fs" />
     <Compile Include="BarModel.fs" />
     <Compile Include="Panel.fs" />
     <Compile Include="Render.fs" />
