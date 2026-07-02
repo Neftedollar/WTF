@@ -38,8 +38,9 @@ done
 echo ">> building scenefx -> $PREFIX"
 # -Dwerror=false + visible setup log: same reasoning as build-wlroots.sh.
 SETUP_LOG="$SRC/meson-setup.log"
+# -Dc_std=c11: same meson-1.3 floor as build-wlroots.sh (Ubuntu 24.04).
 if ! meson setup "$SRC/build" "$SRC" --prefix="$PREFIX" --libdir=lib \
-    -Dwerror=false -Dexamples=false >"$SETUP_LOG" 2>&1; then
+    -Dc_std=c11 -Dwerror=false -Dexamples=false >"$SETUP_LOG" 2>&1; then
   echo "build-scenefx.sh: meson setup FAILED — full log:" >&2
   cat "$SETUP_LOG" >&2
   exit 1
