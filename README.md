@@ -37,6 +37,13 @@ project proved works:
 Rejected: full P/Invoke of wlroots from F# (hand-mirrored structs, pinned
 listeners, breaks every release). See the research report in git history.
 
+## Documentation
+
+User documentation lives in [`docs/`](docs/index.md): [install](docs/installation.md) ·
+[quickstart](docs/quickstart.md) · [configuration](docs/configuration.md) ·
+[keybindings](docs/keybindings.md) · [appearance & ricing](docs/appearance.md) ·
+[wtfctl & agent socket](docs/wtfctl.md) · [troubleshooting](docs/troubleshooting.md)
+
 ## The three pillars
 
 | Pillar | Where it lives | How |
