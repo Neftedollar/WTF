@@ -9,6 +9,8 @@
 Used by .github/workflows/pages.yml on every push to master.
 Requires: python3 + the `markdown` package (pip install markdown).
 """
+import html as html_mod
+import json
 import re
 import shutil
 import sys
@@ -21,7 +23,9 @@ DOCS = ROOT / "docs"
 SITE = ROOT / "site"
 OUT = ROOT / "_site"
 REPO = "https://github.com/Neftedollar/WTF"
-BASE_URL = "https://neftedollar.github.io/WTF"
+# The EFFECTIVE serving domain (neftedollar.github.io/WTF 301s here).
+# Canonicals, og:url, sitemap and JSON-LD must all use this base.
+BASE_URL = "https://neftedollar.com/WTF"
 
 # Sidebar order + human titles. Every docs/*.md must be listed here so the
 # build fails loudly when a new page is added but not wired into the nav.
@@ -40,6 +44,87 @@ NAV = [
     ("AOT", "NativeAOT build"),
 ]
 
+# Per-page SEO head data. `title` is the full <title> (keep ≤ ~62 chars,
+# front-load the distinguishing keywords); `desc` is the meta description
+# (~140-165 chars, honest, hand-written from the page content).
+# NOTE: the landing page owns the head terms ("wayland tiling window
+# manager", "tiling compositor F#") — docs titles deliberately target
+# long-tail modifiers (install, quickstart, keybindings, …) to avoid
+# cannibalizing it. Every NAV slug must have an entry (checked at build).
+META = {
+    "index": (
+        "WTF Documentation — guides for the F# Wayland compositor",
+        "WTF documentation: a tiling Wayland compositor configured in real "
+        "F#. Design (F# brain, C body), feature overview, and where to "
+        "start reading.",
+    ),
+    "installation": (
+        "Installing WTF on Debian, Ubuntu, Fedora & Arch · WTF docs",
+        "Install WTF with one command on Debian, Ubuntu 24.04, Fedora, Arch, "
+        "or openSUSE — prebuilt x86_64/aarch64 packages, no .NET SDK, meson, "
+        "or compiler needed.",
+    ),
+    "quickstart": (
+        "Quickstart — first session & day-one keys · WTF docs",
+        "Your first WTF session: the ten keybindings you need on day one, "
+        "what the seeded config gives you, and how to try WTF nested in a "
+        "window with zero risk.",
+    ),
+    "configuration": (
+        "Configuring WTF in F# — config.fsx & hot-reload · WTF docs",
+        "Configure WTF in ~/.config/wtf/config.fsx — real F# with "
+        "autocomplete and type-checking, hot-reloaded on every save with a "
+        "last-good fallback.",
+    ),
+    "keybindings": (
+        "Keybindings — chord syntax & default keymap · WTF docs",
+        "WTF keybinding reference: chord syntax like M-S-j, modifier order, "
+        "the full default keymap, and how to define your own binds in F#.",
+    ),
+    "appearance": (
+        "Appearance & ricing — blur, shadows, wallpapers · WTF docs",
+        "Ricing WTF: borders, gaps, rounded corners, blur, macOS-style "
+        "shadows, animations, and dynamic .heic wallpapers — hot-reloadable "
+        "and live-tunable via wtfctl.",
+    ),
+    "wtfctl": (
+        "wtfctl — JSON socket for scripts & LLM agents · WTF docs",
+        "wtfctl and the WTF control socket: the whole WM state as one JSON "
+        "document, semantic NDJSON commands, and a tool manifest for LLM "
+        "agents.",
+    ),
+    "troubleshooting": (
+        "Troubleshooting — session logs, crashes, safe mode · WTF docs",
+        "Troubleshooting WTF: where session logs live "
+        "(~/.local/state/wtf/), reading crash backtraces, safe mode, and how "
+        "the session wrapper recovers.",
+    ),
+    "faq": (
+        "FAQ — stability, NVIDIA, multi-monitor, LLM agents · WTF docs",
+        "WTF FAQ: how stable the 0.1 beta is, why F#, NVIDIA status, "
+        "multi-monitor plans, LLM agent control, and how WTF compares to "
+        "xMonad, sway, and Hyprland.",
+    ),
+    "architecture": (
+        "Architecture — F# brain, C body (wlroots + scenefx) · WTF docs",
+        "How WTF works: an 'F# brain, C body' split — pure, fully-tested F# "
+        "window-management logic driving a thin C shim over wlroots 0.18 + "
+        "scenefx.",
+    ),
+    "CONFIG-EDITING": (
+        "Editing config.fsx with autocomplete · WTF docs",
+        "Edit your WTF config with machine-aware autocomplete: Type "
+        "Providers turn your installed apps, layouts, and keyboard layouts "
+        "into types the F# LSP completes.",
+    ),
+    "AOT": (
+        "NativeAOT build — feature matrix & trade-offs · WTF docs",
+        "WTF's NativeAOT build: a small, fast-starting native binary — the "
+        "feature matrix of what the AOT flavor keeps and what it trades "
+        "away vs the default JIT build.",
+    ),
+}
+
 FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
            "viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' "
            "fill='%231e1e2e'/%3E%3Ctext x='16' y='22' font-family='monospace' "
@@ -51,11 +136,25 @@ TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title} · WTF docs</title>
-<meta name="description" content="WTF documentation — {title}. WTF is a tiling Wayland compositor configured in real F#.">
-<link rel="canonical" href="{base}/docs/{slug}.html">
+<title>{page_title}</title>
+<meta name="description" content="{description}">
+<link rel="canonical" href="{canonical}">
+<link rel="sitemap" type="application/xml" title="Sitemap" href="../sitemap.xml">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="WTF — Wayland Tiling, F#">
+<meta property="og:title" content="{page_title}">
+<meta property="og:description" content="{description}">
+<meta property="og:url" content="{canonical}">
+<meta property="og:image" content="{base}/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{page_title}">
+<meta name="twitter:description" content="{description}">
+<meta name="twitter:image" content="{base}/og.png">
 <meta name="theme-color" content="#1e1e2e">
 <link rel="icon" href="{favicon}">
+{jsonld}
 <style>
 :root{{
   --crust:#11111b; --mantle:#181825; --base:#1e1e2e;
@@ -187,6 +286,71 @@ def convert(md_path, doc_stems):
     return body
 
 
+def strip_tags(html):
+    """Rendered HTML -> plain text (for JSON-LD answer bodies)."""
+    text = re.sub(r"<[^>]+>", " ", html)
+    return re.sub(r"\s+", " ", html_mod.unescape(text)).strip()
+
+
+def jsonld_script(data):
+    return ('<script type="application/ld+json">\n'
+            + json.dumps(data, ensure_ascii=False, indent=1)
+            + "\n</script>")
+
+
+def breadcrumb_jsonld(stem, title, canonical):
+    """BreadcrumbList: Home -> Docs (-> page)."""
+    items = [
+        {"@type": "ListItem", "position": 1, "name": "WTF",
+         "item": f"{BASE_URL}/"},
+        {"@type": "ListItem", "position": 2, "name": "Documentation",
+         "item": f"{BASE_URL}/docs/"},
+    ]
+    if stem != "index":
+        items.append({"@type": "ListItem", "position": 3, "name": title,
+                      "item": canonical})
+    return {"@context": "https://schema.org", "@type": "BreadcrumbList",
+            "itemListElement": items}
+
+
+def faq_jsonld(body, canonical):
+    """FAQPage JSON-LD from the rendered faq page: each <h2> is a question,
+    everything until the next <h2> is its answer (as plain text)."""
+    entities = []
+    for m in re.finditer(r"<h2[^>]*>(.*?)</h2>(.*?)(?=<h2|\Z)", body, re.S):
+        question = strip_tags(m.group(1))
+        answer = strip_tags(m.group(2))
+        if question and answer:
+            entities.append({
+                "@type": "Question",
+                "name": question,
+                "acceptedAnswer": {"@type": "Answer", "text": answer},
+            })
+    if not entities:
+        sys.exit("build-site.py: faq.md produced no Q/A pairs for FAQPage "
+                 "JSON-LD — check its <h2> structure.")
+    return {"@context": "https://schema.org", "@type": "FAQPage",
+            "url": canonical, "mainEntity": entities}
+
+
+def write_sitemap(canonicals):
+    """sitemap.xml at the site root, listing landing + every docs page.
+    NOTE: /WTF/robots.txt is never read by crawlers (robots.txt is
+    host-root-only, and the host root isn't ours), so this sitemap must be
+    submitted directly in Google Search Console / Bing Webmaster Tools."""
+    urls = "\n".join(
+        f"  <url><loc>{html_mod.escape(u)}</loc></url>"
+        for u in [f"{BASE_URL}/"] + canonicals
+    )
+    (OUT / "sitemap.xml").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{urls}\n</urlset>\n",
+        encoding="utf-8",
+    )
+    print(f"  sitemap.xml  ({1 + len(canonicals)} URLs)")
+
+
 def main():
     md_files = sorted(DOCS.glob("*.md"))
     doc_stems = {p.stem for p in md_files}
@@ -197,12 +361,19 @@ def main():
             f"  missing from NAV: {sorted(doc_stems - nav_stems)}\n"
             f"  missing from docs/: {sorted(nav_stems - doc_stems)}"
         )
+    if set(META) != nav_stems:
+        sys.exit(
+            f"build-site.py: META and NAV are out of sync.\n"
+            f"  missing from META: {sorted(nav_stems - set(META))}\n"
+            f"  stale in META: {sorted(set(META) - nav_stems)}"
+        )
 
     if OUT.exists():
         shutil.rmtree(OUT)
     shutil.copytree(SITE, OUT)
     (OUT / "docs").mkdir()
 
+    canonicals = []
     for stem, title in NAV:
         nav_html = "\n".join(
             '    <li><a href="{s}.html"{cur}>{t}</a></li>'.format(
@@ -211,13 +382,25 @@ def main():
             for s, t in NAV
         )
         body = convert(DOCS / f"{stem}.md", doc_stems)
+        # GitHub Pages serves docs/index.html at /docs/ — canonicalize there.
+        canonical = (f"{BASE_URL}/docs/" if stem == "index"
+                     else f"{BASE_URL}/docs/{stem}.html")
+        canonicals.append(canonical)
+        page_title, description = META[stem]
+        jsonld = jsonld_script(breadcrumb_jsonld(stem, title, canonical))
+        if stem == "faq":
+            jsonld += "\n" + jsonld_script(faq_jsonld(body, canonical))
         page = TEMPLATE.format(
-            title=title, slug=stem, md_name=f"{stem}.md", nav=nav_html,
+            page_title=html_mod.escape(page_title, quote=True),
+            description=html_mod.escape(description, quote=True),
+            canonical=canonical, jsonld=jsonld,
+            md_name=f"{stem}.md", nav=nav_html,
             body=body, repo=REPO, base=BASE_URL, favicon=FAVICON,
         )
         (OUT / "docs" / f"{stem}.html").write_text(page, encoding="utf-8")
         print(f"  docs/{stem}.html  <- docs/{stem}.md")
 
+    write_sitemap(canonicals)
     print(f"built {len(NAV)} doc pages + landing into {OUT.relative_to(ROOT)}/")
 
 

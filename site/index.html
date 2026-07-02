@@ -3,21 +3,47 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WTF — Wayland Tiling, F# · a compositor you configure in real F#</title>
-<meta name="description" content="WTF is a tiling Wayland compositor whose configuration is real F# code — typo-proof Type-Provider config, hot-reload with a last-good fallback, scenefx eye-candy, and an agent-first control socket. Install in one line.">
-<link rel="canonical" href="https://neftedollar.github.io/WTF/">
+<title>WTF — Wayland Tiling Window Manager Configured in F#</title>
+<meta name="description" content="WTF is a Wayland tiling window manager (wlroots compositor) whose config is real F# code — typo-proof, hot-reloading with a last-good fallback, and drivable by scripts and LLM agents.">
+<link rel="canonical" href="https://neftedollar.com/WTF/">
+<link rel="sitemap" type="application/xml" title="Sitemap" href="sitemap.xml">
 <meta property="og:type" content="website">
-<meta property="og:title" content="WTF — Wayland Tiling, F#">
+<meta property="og:site_name" content="WTF — Wayland Tiling, F#">
+<meta property="og:title" content="WTF — Wayland Tiling Window Manager in F#">
 <meta property="og:description" content="A tiling Wayland compositor whose configuration is real F# code — typo-proof, hot-reloading, and drivable by scripts and LLM agents.">
-<meta property="og:url" content="https://neftedollar.github.io/WTF/">
-<meta property="og:image" content="https://neftedollar.github.io/WTF/og.png">
+<meta property="og:url" content="https://neftedollar.com/WTF/">
+<meta property="og:image" content="https://neftedollar.com/WTF/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="WTF — Wayland Tiling, F#: 0.1 beta, MIT, one-line install command">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="WTF — Wayland Tiling, F#">
+<meta name="twitter:title" content="WTF — Wayland Tiling Window Manager in F#">
 <meta name="twitter:description" content="A tiling Wayland compositor whose configuration is real F# code — typo-proof, hot-reloading, and drivable by scripts and LLM agents.">
-<meta name="twitter:image" content="https://neftedollar.github.io/WTF/og.png">
+<meta name="twitter:image" content="https://neftedollar.com/WTF/og.png">
 <meta name="theme-color" content="#1e1e2e">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "WTF (Wayland Tiling, F#)",
+  "alternateName": "WTF window manager",
+  "description": "A tiling Wayland compositor whose configuration is real F# code — typo-proof Type Provider config, hot-reload with a last-good fallback, scenefx effects, and an agent-first NDJSON control socket for scripts and LLM agents.",
+  "url": "https://neftedollar.com/WTF/",
+  "image": "https://neftedollar.com/WTF/og.png",
+  "applicationCategory": "DesktopEnhancementApplication",
+  "operatingSystem": "Linux",
+  "softwareVersion": "0.1-beta",
+  "softwareRequirements": "Wayland, wlroots 0.18, scenefx",
+  "license": "https://github.com/Neftedollar/WTF/blob/master/LICENSE",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "downloadUrl": "https://github.com/Neftedollar/WTF/releases",
+  "installUrl": "https://neftedollar.com/WTF/docs/installation.html",
+  "softwareHelp": { "@type": "CreativeWork", "url": "https://neftedollar.com/WTF/docs/" },
+  "sameAs": ["https://github.com/Neftedollar/WTF"],
+  "keywords": "wayland tiling window manager, wlroots compositor, F#, xmonad wayland, LLM agent control"
+}
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231e1e2e'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='14' font-weight='bold' fill='%2389b4fa' text-anchor='middle'%3E%7C%26gt%3B%3C/text%3E%3C/svg%3E">
 <style>
 :root{
@@ -364,6 +390,7 @@ footer a:hover{color:var(--blue)}
         <h4>Going deeper</h4>
         <ul>
           <li><a href="docs/wtfctl.html">wtfctl &amp; the agent socket</a></li>
+          <li><a href="docs/CONFIG-EDITING.html">Config editing with autocomplete</a></li>
           <li><a href="docs/troubleshooting.html">Troubleshooting</a></li>
           <li><a href="docs/faq.html">FAQ</a></li>
           <li><a href="docs/architecture.html">Architecture ("F# brain, C body")</a></li>

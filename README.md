@@ -4,7 +4,7 @@
 [![release](https://img.shields.io/github/v/release/Neftedollar/WTF)](https://github.com/Neftedollar/WTF/releases)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Website & docs: [neftedollar.github.io/WTF](https://neftedollar.github.io/WTF/)**
+**Website & docs: [neftedollar.com/WTF](https://neftedollar.com/WTF/)**
 
 **A tiling Wayland compositor whose configuration is real F# code — typo-proof,
 hot-reloading, and drivable by scripts and LLM agents.**
