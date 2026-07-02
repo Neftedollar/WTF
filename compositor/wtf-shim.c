@@ -2645,7 +2645,13 @@ int wtf_run(struct wtf_callbacks cbs) {
 	}
 
 	/* scenefx needs its own GLES renderer (fx_renderer) for blur / rounded
-	 * corners / shadows to render. */
+	 * corners / shadows to render — and its SCENE asserts the fx renderer on
+	 * every frame, so a generic-renderer fallback is impossible (verified: a
+	 * pixman fallback boots, then aborts at the first frame inside
+	 * fx_renderer_begin_buffer_pass). GPU-less machines are covered one level
+	 * down instead: our vendored scenefx is patched to fall back to a PRIMARY
+	 * DRM node (software GL via Mesa kms_swrast) when no render node exists —
+	 * see packaging/patches/scenefx-primary-node-fallback.patch. */
 	server.renderer = fx_renderer_create(server.backend);
 	if (server.renderer == NULL) {
 		wlr_log(WLR_ERROR, "failed to create fx_renderer");

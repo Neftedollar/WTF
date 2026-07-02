@@ -1,0 +1,29 @@
+diff --git a/render/fx_renderer/util.c b/render/fx_renderer/util.c
+index d4fcec3..783d8bf 100644
+--- a/render/fx_renderer/util.c
++++ b/render/fx_renderer/util.c
+@@ -47,6 +47,24 @@ static int open_drm_render_node(void) {
+ 			break;
+ 		}
+ 	}
++	if (fd < 0) {
++		/* WTF patch: no render node available (VM without GPU passthrough, CI
++		 * with a vgem/vkms card only). Fall back to a PRIMARY node — Mesa's
++		 * kms_swrast driver then provides software GL over it, which beats
++		 * refusing to start at all. */
++		for (int i = 0; i < devices_len; i++) {
++			drmDevice *dev = devices[i];
++			if (dev->available_nodes & (1 << DRM_NODE_PRIMARY)) {
++				const char *name = dev->nodes[DRM_NODE_PRIMARY];
++				wlr_log(WLR_ERROR, "No DRM render node; falling back to "
++					"primary node '%s' (software GL via kms_swrast)", name);
++				fd = open(name, O_RDWR | O_CLOEXEC);
++				if (fd >= 0) {
++					break;
++				}
++			}
++		}
++	}
+ 	if (fd < 0) {
+ 		wlr_log(WLR_ERROR, "Failed to find any DRM render node");
+ 	}

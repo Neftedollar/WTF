@@ -8,6 +8,11 @@ cd "$(dirname "$0")/.."
 
 git config --global --add safe.directory "$PWD" 2>/dev/null || true
 
+# The smoke log is written by root inside the container into the mounted
+# workspace; make it readable for the runner's artifact upload even when a
+# step fails mid-way.
+trap 'chmod -R a+rX "$PWD/smoke-run" 2>/dev/null || true' EXIT
+
 echo "=== deps ==="
 bash scripts/install-deps.sh
 

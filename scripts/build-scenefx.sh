@@ -25,6 +25,16 @@ echo ">> fetching scenefx $TAG"
 rm -rf "$SRC"
 git clone --depth 1 --branch "$TAG" https://github.com/wlrfx/scenefx.git "$SRC"
 
+# WTF patches on the pinned tag (see packaging/patches/*.patch for rationale):
+#   - primary-node fallback: machines without a DRM RENDER node (VMs without
+#     GPU passthrough, CI) get software GL via kms_swrast on the card node
+#     instead of a refused startup.
+for p in "$ROOT"/packaging/patches/scenefx-*.patch; do
+  [ -f "$p" ] || continue
+  echo ">> applying $(basename "$p")"
+  git -C "$SRC" apply "$p"
+done
+
 echo ">> building scenefx -> $PREFIX"
 # -Dwerror=false + visible setup log: same reasoning as build-wlroots.sh.
 SETUP_LOG="$SRC/meson-setup.log"
