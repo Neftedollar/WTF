@@ -129,11 +129,39 @@ install -Dm644 packaging/wtf.desktop "$SESS/wtf.desktop"
 # selected when XDG_CURRENT_DESKTOP=wtf. Needs the portal packages installed.
 install -Dm644 packaging/wtf-portals.conf "$STAGE/usr/share/xdg-desktop-portal/wtf-portals.conf"
 
-echo ">> 4/5  copying into / (needs root)"
-if [ "$(id -u)" -eq 0 ]; then
-  cp -a "$STAGE"/. /
-else
-  sudo cp -a "$STAGE"/. /
+echo ">> 4/5  copying into / (needs root; atomic per-file — safe over a LIVE session)"
+# NEVER `cp -a stage/. /` here. cp overwrites destination files IN PLACE, which
+# corrupts the text pages of the running compositor's mmap'd libwtf_shim.so and
+# WTF.Host — the live session dies with SIGSEGV the moment the copy touches
+# them, and the wtf-session restart loop then execs HALF-WRITTEN binaries and
+# dies with SIGBUS (including safe-mode). Seen live 2026-07-01 00:23: running
+# install.sh from inside a WTF session killed it 3+1 times in one second.
+# Atomic install instead: write each file next to its destination, then
+# rename(2) it into place. A running process keeps the OLD inode alive, and no
+# reader/exec can ever observe a partially-written file.
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+  SUDO="sudo"
+  # Honor an askpass helper when configured (e.g. driven by an agent with no tty).
+  [ -n "${SUDO_ASKPASS:-}" ] && SUDO="sudo -A"
+fi
+$SUDO bash -euo pipefail -s "$STAGE" <<'ATOMIC_INSTALL'
+STAGE="$1"
+cd "$STAGE"
+find . -mindepth 1 -type d -print0 | while IFS= read -r -d '' d; do
+  mkdir -p "/${d#./}"
+done
+find . \( -type f -o -type l \) -print0 | while IFS= read -r -d '' f; do
+  dst="/${f#./}"
+  tmp="$dst.wtf-new.$$"
+  cp -a "$f" "$tmp"        # -a preserves mode/symlink; tmp is invisible to users
+  mv -f "$tmp" "$dst"      # rename(2): atomic swap, old inode stays valid
+done
+ATOMIC_INSTALL
+if pgrep -f 'lib/wtf/WTF\.Host' >/dev/null 2>&1; then
+  echo "   NOTE: a live WTF session is running. It safely keeps the OLD binaries"
+  echo "   (old inodes) until restart: M-S-r reloads only config.fsx; log out and"
+  echo "   back in (Super+Shift+q) to pick up the new build."
 fi
 
 echo ">> 5/5  seeding a default user config (~/.config/wtf/config.fsx)"
