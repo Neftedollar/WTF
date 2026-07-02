@@ -16,7 +16,9 @@ HOST="${1:-/usr/local/bin/wtf}"
 # would (a) race a live WTF's wtf.sock on dev machines and (b) let a STALE
 # socket file from a previous run pass the socket-exists check while nothing
 # is listening ("Connection refused").
-export XDG_RUNTIME_DIR="/tmp/wtf-smoke-$$"
+# WTF_SMOKE_DIR override: CI runs this inside a --rm container and mounts the
+# workspace — pointing the dir there keeps the log after the container dies.
+export XDG_RUNTIME_DIR="${WTF_SMOKE_DIR:-/tmp/wtf-smoke-$$}"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
 # wlroots reads WLR_BACKENDS (PLURAL). Also drop any inherited display so
 # autocreate can't silently pick a nested x11/wayland backend on a dev machine

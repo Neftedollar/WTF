@@ -120,6 +120,11 @@ SCENEFX_SO="$(find "$ROOT/compositor/.scenefx" -name 'libscenefx-0.2.so' -print 
 install -Dm644 "$SCENEFX_SO" "$LIBWTF/libscenefx-0.2.so"
 WLROOTS_SO="$(find "$ROOT/compositor/.wlroots" -name 'libwlroots-0.18.so' -print -quit)"
 install -Dm644 "$WLROOTS_SO" "$LIBWTF/libwlroots-0.18.so"
+# If wayland was vendored too (system one predates 1.23 — Ubuntu 24.04),
+# stage its runtime libs alongside; -P keeps the soname symlinks.
+if compgen -G "$ROOT/compositor/.wlroots/lib/libwayland-*.so*" >/dev/null; then
+  cp -P "$ROOT/compositor/.wlroots/lib/"libwayland-*.so* "$LIBWTF/"
+fi
 # libwtf_panel.so next to BOTH client binaries so their DllImport("wtf_panel") resolves.
 install -Dm644 compositor/build/libwtf_panel.so "$LIBWTF/bar/libwtf_panel.so"
 install -Dm644 compositor/build/libwtf_panel.so "$LIBWTF/omnibox/libwtf_panel.so"

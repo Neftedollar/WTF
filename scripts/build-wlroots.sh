@@ -24,6 +24,32 @@ if [ -n "$(find_wlroots_lib)" ]; then
   echo ">> wlroots already built at $PREFIX"; exit 0
 fi
 
+# wlroots 0.18 needs libwayland >= 1.23; Ubuntu 24.04 LTS ships 1.22. When the
+# system one is too old, vendor wayland into the same prefix first — it's a
+# ~1-minute build, and the launcher's LD_LIBRARY_PATH already covers the
+# staged copy. The vendored pkgconfig dir then FRONTS the search path so
+# wlroots (and its wayland-scanner lookup) resolve the new one.
+if ! pkg-config --atleast-version=1.23 wayland-server 2>/dev/null; then
+  WAYLAND_TAG=1.23.1
+  echo ">> system libwayland too old — vendoring wayland $WAYLAND_TAG"
+  WSRC="$ROOT/build/wayland-src"
+  rm -rf "$WSRC"
+  git clone --depth 1 --branch "$WAYLAND_TAG" \
+    https://gitlab.freedesktop.org/wayland/wayland.git "$WSRC"
+  WSETUP_LOG="$WSRC/meson-setup.log"
+  if ! meson setup "$WSRC/build" "$WSRC" \
+      --prefix="$PREFIX" --libdir=lib \
+      -Ddocumentation=false -Dtests=false \
+      >"$WSETUP_LOG" 2>&1; then
+    echo "build-wlroots.sh: wayland meson setup FAILED — full log:" >&2
+    cat "$WSETUP_LOG" >&2
+    exit 1
+  fi
+  ninja -C "$WSRC/build"
+  ninja -C "$WSRC/build" install >/dev/null
+fi
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
 echo ">> fetching wlroots $TAG"
 rm -rf "$SRC"
 git clone --depth 1 --branch "$TAG" \

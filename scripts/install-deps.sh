@@ -13,6 +13,8 @@ set -euo pipefail
 APT_PKGS=(
   build-essential meson ninja-build pkg-config scdoc git curl
   wayland-protocols libwayland-dev libwayland-bin libxkbcommon-dev
+  # libwayland build deps (vendored when the system one is < 1.23):
+  libffi-dev libexpat1-dev libxml2-dev
   # wlroots 0.18 build deps (vendored build):
   libdrm-dev libgbm-dev libpixman-1-dev
   libinput-dev libseat-dev libudev-dev
@@ -81,7 +83,7 @@ ZYPPER_CAPS=(
   "pkgconfig(libudev)" "pkgconfig(egl)" "pkgconfig(glesv2)"
   "pkgconfig(libdisplay-info)" "pkgconfig(libliftoff)"
   "pkgconfig(xcb)" "pkgconfig(xcb-renderutil)" "pkgconfig(xcb-icccm)"
-  "pkgconfig(icu-uc)"
+  "pkgconfig(icu-uc)" "pkgconfig(xwayland)"
 )
 
 # ---------------- install via the detected package manager ----------------
