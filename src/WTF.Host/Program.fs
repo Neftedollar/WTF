@@ -762,13 +762,25 @@ let main _argv =
     // would shave one thunk per event but is fragile in F# (no clean &Method /
     // delegate*<> managed-function-pointer syntax), so the delegates are kept by
     // design. Finally confirmed only by the ILC pass during PublishAot.
-    let dMap = Ffi.ViewMapDelegate(onViewMap)
-    let dUnmap = Ffi.ViewUnmapDelegate(onViewUnmap)
-    let dKey = Ffi.KeyDelegate(onKey)
-    let dResize = Ffi.OutputResizeDelegate(onOutputResize)
-    let dReady = Ffi.ReadyDelegate(onReady)
-    let dDrain = Ffi.DrainDelegate(onDrain)
-    let dFocus = Ffi.ViewFocusDelegate(onViewFocus)
+    // EXCEPTION BARRIER for every C->F# reverse-P/Invoke callback. A managed throw
+    // must NEVER unwind across the native frame — that rude-aborts the whole
+    // compositor (SIGABRT -> safe-mode). Each callback runs arbitrary downstream
+    // code (the reducer, user config manage-rules / appearance functions, plugin
+    // layouts), so any of them can throw; we log (observability) + swallow so one
+    // bad rule/keybind degrades gracefully instead of killing the session. The
+    // delegate TYPES stay concrete (AOT note above still holds — the lambdas are
+    // statically known targets, ILC synthesizes the thunks at compile time).
+    let guard name (f: unit -> unit) =
+        try f () with ex -> eprintfn "WTF: %s callback threw (ignored): %O" name ex
+    let guardKey (f: unit -> int) =
+        try f () with ex -> eprintfn "WTF: onKey callback threw (ignored): %O" ex; 0
+    let dMap = Ffi.ViewMapDelegate(fun id app title -> guard "onViewMap" (fun () -> onViewMap id app title))
+    let dUnmap = Ffi.ViewUnmapDelegate(fun id -> guard "onViewUnmap" (fun () -> onViewUnmap id))
+    let dKey = Ffi.KeyDelegate(fun m s -> guardKey (fun () -> onKey m s))
+    let dResize = Ffi.OutputResizeDelegate(fun x y w h -> guard "onOutputResize" (fun () -> onOutputResize x y w h))
+    let dReady = Ffi.ReadyDelegate(fun () -> guard "onReady" onReady)
+    let dDrain = Ffi.DrainDelegate(fun () -> guard "onDrain" onDrain)
+    let dFocus = Ffi.ViewFocusDelegate(fun id -> guard "onViewFocus" (fun () -> onViewFocus id))
 
     let mutable cbs = Ffi.Callbacks()
     cbs.ViewMap <- Marshal.GetFunctionPointerForDelegate dMap

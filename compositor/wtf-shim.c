@@ -712,6 +712,13 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 	 * active-group translation, so typing Cyrillic into apps is unaffected.
 	 * Falls back to the active-group syms if the keymap can't be queried. */
 	struct xkb_state *xkb_state = keyboard->wlr_keyboard->xkb_state;
+	if (xkb_state == NULL) {
+		/* No compiled keymap (apply_keymap_to now prevents this, but be defensive):
+		 * skip binding resolution and just forward the raw key to the focused client. */
+		wlr_seat_set_keyboard(seat, keyboard->wlr_keyboard);
+		wlr_seat_keyboard_notify_key(seat, event->time_msec, event->keycode, event->state);
+		return;
+	}
 	struct xkb_keymap *keymap = xkb_state_get_keymap(xkb_state);
 	const xkb_keysym_t *syms;
 	int nsyms;
@@ -771,15 +778,22 @@ static void apply_keymap_to(struct wlr_keyboard *wlr_keyboard) {
 	};
 	struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, &names,
 		XKB_KEYMAP_COMPILE_NO_FLAGS);
-	if (keymap != NULL) {
-		wlr_keyboard_set_keymap(wlr_keyboard, keymap);
-		xkb_keymap_unref(keymap);
-	} else {
-		wlr_log(WLR_ERROR, "xkb keymap compile failed for layout '%s' "
-			"variant '%s' options '%s'; keeping previous keymap",
+	if (keymap == NULL) {
+		/* A bad user layout/variant/options must NOT leave xkb_state NULL — the
+		 * key handler dereferences it on the next press (SIGSEGV). Fall back to the
+		 * xkb DEFAULT keymap (empty rule-names) so the keyboard always has a valid
+		 * map; the user just gets the default layout until they fix the config. */
+		wlr_log(WLR_ERROR, "xkb keymap compile failed for layout '%s' variant '%s' "
+			"options '%s'; falling back to the default keymap",
 			g_kb_layout ? g_kb_layout : "(default)",
 			g_kb_variant ? g_kb_variant : "",
 			g_kb_options ? g_kb_options : "");
+		struct xkb_rule_names empty = {0};
+		keymap = xkb_keymap_new_from_names(context, &empty, XKB_KEYMAP_COMPILE_NO_FLAGS);
+	}
+	if (keymap != NULL) {
+		wlr_keyboard_set_keymap(wlr_keyboard, keymap);
+		xkb_keymap_unref(keymap);
 	}
 	xkb_context_unref(context);
 	wlr_keyboard_set_repeat_info(wlr_keyboard, g_repeat_rate, g_repeat_delay);
@@ -790,6 +804,10 @@ static void server_new_keyboard(struct wtf_server *srv,
 	struct wlr_keyboard *wlr_keyboard = wlr_keyboard_from_input_device(device);
 
 	struct wtf_keyboard *keyboard = calloc(1, sizeof(*keyboard));
+	if (keyboard == NULL) {
+		wlr_log(WLR_ERROR, "OOM allocating wtf_keyboard; dropping device");
+		return;
+	}
 	keyboard->server = srv;
 	keyboard->wlr_keyboard = wlr_keyboard;
 
@@ -905,6 +923,10 @@ static void server_new_pointer(struct wtf_server *srv,
 	/* Track it so a later wtf_set_libinput_config can re-apply, then apply the
 	 * config we have right now. */
 	struct wtf_pointer *pointer = calloc(1, sizeof(*pointer));
+	if (pointer == NULL) {
+		wlr_log(WLR_ERROR, "OOM allocating wtf_pointer; dropping device");
+		return;
+	}
 	pointer->device = device;
 	pointer->destroy.notify = pointer_handle_destroy;
 	wl_signal_add(&device->events.destroy, &pointer->destroy);
@@ -1185,6 +1207,10 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	wlr_output_state_finish(&state);
 
 	struct wtf_output *output = calloc(1, sizeof(*output));
+	if (output == NULL) {
+		wlr_log(WLR_ERROR, "OOM allocating wtf_output; dropping output");
+		return;
+	}
 	output->wlr_output = wlr_output;
 	output->server = srv;
 
@@ -1371,17 +1397,27 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
 	struct wlr_xdg_toplevel *xdg_toplevel = data;
 
 	struct wtf_toplevel *toplevel = calloc(1, sizeof(*toplevel));
+	if (toplevel == NULL) {
+		wlr_log(WLR_ERROR, "OOM allocating wtf_toplevel; dropping window");
+		return;
+	}
 	toplevel->server = srv;
 	toplevel->xdg_toplevel = xdg_toplevel;
 	/* Create the view at 0,0; the brain places it later via wtf_configure. */
 	toplevel->scene_tree =
 		wlr_scene_xdg_surface_create(srv->toplevel_tree, xdg_toplevel->base);
+	if (toplevel->scene_tree == NULL) {
+		wlr_log(WLR_ERROR, "scene tree creation failed; dropping window");
+		free(toplevel);
+		return;
+	}
 	toplevel->scene_tree->node.data = toplevel;
 	xdg_toplevel->base->data = toplevel->scene_tree;
 
 	/* Colored focus border: a rect sibling kept just behind the window. */
 	toplevel->border = wlr_scene_rect_create(srv->toplevel_tree, 0, 0, g_inactive_border);
-	wlr_scene_node_place_below(&toplevel->border->node, &toplevel->scene_tree->node);
+	if (toplevel->border != NULL)
+		wlr_scene_node_place_below(&toplevel->border->node, &toplevel->scene_tree->node);
 
 	toplevel->map.notify = xdg_toplevel_map;
 	wl_signal_add(&xdg_toplevel->base->surface->events.map, &toplevel->map);
@@ -1478,13 +1514,18 @@ static void xwl_associate(struct wl_listener *listener, void *data) {
 	 * scene node now. The subsurface tree does NOT auto-destroy on dissociate. */
 	toplevel->scene_tree =
 		wlr_scene_subsurface_tree_create(srv->toplevel_tree, xsurface->surface);
+	if (toplevel->scene_tree == NULL) {
+		wlr_log(WLR_ERROR, "xwl scene tree creation failed; skipping associate");
+		return;
+	}
 	/* Back-pointer so desktop_toplevel_at() resolves clicks to this toplevel,
 	 * exactly like the xdg path. */
 	toplevel->scene_tree->node.data = toplevel;
 
 	toplevel->border =
 		wlr_scene_rect_create(srv->toplevel_tree, 0, 0, g_inactive_border);
-	wlr_scene_node_place_below(&toplevel->border->node, &toplevel->scene_tree->node);
+	if (toplevel->border != NULL)
+		wlr_scene_node_place_below(&toplevel->border->node, &toplevel->scene_tree->node);
 
 	/* map/unmap listeners live ONLY while associated (the #1 UAF guard). */
 	toplevel->map.notify = xwl_map;
@@ -1580,6 +1621,10 @@ static void unmanaged_associate(struct wl_listener *listener, void *data) {
 	/* Place unmanaged surfaces in the OVERLAY layer at their requested geometry. */
 	u->scene_tree = wlr_scene_subsurface_tree_create(
 		srv->layer_tree[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], xsurface->surface);
+	if (u->scene_tree == NULL) {
+		wlr_log(WLR_ERROR, "unmanaged scene tree creation failed; skipping");
+		return;
+	}
 	/* No wtf_toplevel back-pointer: hit-tests resolve to the surface, not a
 	 * managed toplevel (node.data stays NULL so desktop_toplevel_at skips it). */
 	wlr_scene_node_set_position(&u->scene_tree->node, xsurface->x, xsurface->y);
@@ -1626,6 +1671,10 @@ static void server_new_xwayland_surface(struct wl_listener *listener, void *data
 	if (xsurface->override_redirect) {
 		/* Unmanaged: never given an id, never reported to the brain. */
 		struct wtf_xwayland_unmanaged *u = calloc(1, sizeof(*u));
+		if (u == NULL) {
+			wlr_log(WLR_ERROR, "OOM allocating unmanaged xwl surface; dropping");
+			return;
+		}
 		u->server = srv;
 		u->xsurface = xsurface;
 		/* Self-referential link: not tracked on any server list (the brain never
@@ -1646,6 +1695,10 @@ static void server_new_xwayland_surface(struct wl_listener *listener, void *data
 	/* Managed: a real tiled toplevel sharing the xdg brain id-space. The scene
 	 * node + map/unmap listeners are deferred to the associate event. */
 	struct wtf_toplevel *toplevel = calloc(1, sizeof(*toplevel));
+	if (toplevel == NULL) {
+		wlr_log(WLR_ERROR, "OOM allocating xwl toplevel; dropping window");
+		return;
+	}
 	toplevel->server = srv;
 	toplevel->is_xwayland = true;
 	toplevel->xwl_surface = xsurface;
@@ -1685,12 +1738,26 @@ static void xdg_popup_destroy(struct wl_listener *listener, void *data) {
 static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
 	struct wlr_xdg_popup *xdg_popup = data;
 
+	/* CRASH GUARD: this fires on the GLOBAL xdg_shell new_popup for EVERY popup.
+	 * The parent need NOT be an xdg-surface: a layer-shell popup's parent is a
+	 * layer surface (waybar/wofi/mako menus), and the protocol even permits a
+	 * deferred/NULL parent. The old code asserted parent!=NULL (abort -> SIGABRT)
+	 * and, with asserts compiled out in release (NDEBUG), dereferenced a NULL
+	 * `parent->data` -> SIGSEGV — a client-triggerable whole-session crash (this
+	 * is the most likely cause of the silent SIGSEGV seen with Electron/1Password
+	 * popups). Skip any popup we can't parent into an xdg scene tree; its own
+	 * shell still tears it down. (Proper layer-shell popup parenting is deferred.) */
+	struct wlr_xdg_surface *parent =
+		xdg_popup->parent ? wlr_xdg_surface_try_from_wlr_surface(xdg_popup->parent) : NULL;
+	if (parent == NULL || parent->data == NULL) {
+		return;
+	}
 	struct wtf_popup *popup = calloc(1, sizeof(*popup));
+	if (popup == NULL) {
+		return;
+	}
 	popup->xdg_popup = xdg_popup;
 
-	struct wlr_xdg_surface *parent =
-		wlr_xdg_surface_try_from_wlr_surface(xdg_popup->parent);
-	assert(parent != NULL);
 	struct wlr_scene_tree *parent_tree = parent->data;
 	xdg_popup->base->data = wlr_scene_xdg_surface_create(parent_tree, xdg_popup->base);
 
@@ -1797,6 +1864,11 @@ static void server_new_layer_surface(struct wl_listener *listener, void *data) {
 	}
 
 	struct wtf_layer_surface *ls = calloc(1, sizeof(*ls));
+	if (ls == NULL) {
+		wlr_log(WLR_ERROR, "OOM allocating wtf_layer_surface; dropping surface");
+		wlr_layer_surface_v1_destroy(layer_surface);
+		return;
+	}
 	ls->server = srv;
 	ls->layer_surface = layer_surface;
 	ls->output = layer_surface->output;
@@ -2214,9 +2286,13 @@ static void handle_fatal_signal(int signo) {
 	(void)n;        /* stderr is redirected to the rotating log by the wrapper,
 	                   so this single write covers both stderr and the log. */
 	/* Dump the call stack so a silent SIGSEGV is diagnosable from the log.
-	 * backtrace()/backtrace_symbols_fd() write straight to the fd without malloc
-	 * (async-signal-safe enough for a crash path); addresses resolve against
-	 * libwtf_shim.so via addr2line even when static symbols aren't exported. */
+	 * NB: backtrace()/backtrace_symbols_fd() are NOT formally async-signal-safe —
+	 * backtrace_symbols_fd may touch the dynamic loader, and on the very first call
+	 * libgcc's unwinder is dlopen'd (which mallocs). We pre-warm the unwinder once
+	 * in install_signal_handlers() so this crash-path call never triggers that
+	 * dlopen; it remains best-effort and could still misbehave on heap corruption,
+	 * but it costs nothing on the common SIGSEGV/SIGABRT path and the addresses
+	 * resolve against libwtf_shim.so via addr2line even without exported symbols. */
 	static const char bt_hdr[] = "WTF: backtrace (addr2line against libwtf_shim.so):\n";
 	n = write(STDERR_FILENO, bt_hdr, sizeof(bt_hdr) - 1);
 	(void)n;
@@ -2230,6 +2306,13 @@ static void handle_fatal_signal(int signo) {
 /* Install the graceful + fatal handlers via sigaction (not signal()). Called
  * once from wtf_run after g_display is set and before wl_display_run. */
 static void install_signal_handlers(void) {
+	/* Pre-warm the libgcc unwinder so the FIRST backtrace() call (in the fatal
+	 * handler) doesn't have to dlopen libgcc_s.so / malloc on the crash path —
+	 * that lazy init is the one genuinely unsafe thing about calling backtrace()
+	 * from a signal handler. Doing one throwaway backtrace here forces it now. */
+	void *warm[1];
+	(void)backtrace(warm, 1);
+
 	struct sigaction sa_term = {0};
 	sa_term.sa_handler = handle_graceful_signal;
 	sigemptyset(&sa_term.sa_mask);
@@ -2252,15 +2335,61 @@ static void install_signal_handlers(void) {
 	sigaction(SIGBUS, &sa_fatal, NULL);
 }
 
+/* Deduplicating wlr_log sink (observability). A per-FRAME error — e.g.
+ * scenefx's "Failed to use optimized blur" at 60 Hz — floods the session log
+ * (41 MB observed live) and drowns every real signal, which violates the
+ * "logs are the product" rule. Consecutive identical messages are counted and
+ * surfaced as one "repeated N times" line at exponentially spaced checkpoints
+ * (1, 2, 4, 8, ...), so a flood costs O(log N) lines while every DISTINCT
+ * message still lands immediately and in order. */
+static void wtf_wlr_log_handler(enum wlr_log_importance importance,
+		const char *fmt, va_list args) {
+	static char last[1024];
+	static unsigned long repeats = 0;
+	static const char *levels[] = { "SILENT", "ERROR", "INFO", "DEBUG" };
+
+	char buf[1024];
+	vsnprintf(buf, sizeof(buf), fmt, args);
+
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	struct tm tm;
+	localtime_r(&ts.tv_sec, &tm);
+
+	if (strcmp(buf, last) == 0) {
+		repeats++;
+		if ((repeats & (repeats - 1)) == 0) {
+			fprintf(stderr, "%02d:%02d:%02d.%03ld [wlr] ... last message repeated %lu times\n",
+				tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec / 1000000, repeats);
+		}
+		return;
+	}
+	if (repeats > 1) {
+		fprintf(stderr, "%02d:%02d:%02d.%03ld [wlr] ... last message repeated %lu times total\n",
+			tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec / 1000000, repeats);
+	}
+	repeats = 0;
+	snprintf(last, sizeof(last), "%s", buf);
+	fprintf(stderr, "%02d:%02d:%02d.%03ld [%s] %s\n",
+		tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec / 1000000,
+		(importance >= WLR_SILENT && importance <= WLR_DEBUG)
+			? levels[importance] : "?",
+		buf);
+}
+
 int wtf_run(struct wtf_callbacks cbs) {
 	g_cb = cbs;
 
-	wlr_log_init(WLR_INFO, NULL);
+	wlr_log_init(WLR_INFO, wtf_wlr_log_handler);
 
 	server = (struct wtf_server){0};
 	server.next_id = 0;
 
 	server.wl_display = wl_display_create();
+	if (server.wl_display == NULL) {
+		wlr_log(WLR_ERROR, "failed to create wl_display");
+		return 1;
+	}
 	g_display = server.wl_display;
 	server.backend = wlr_backend_autocreate(
 		wl_display_get_event_loop(server.wl_display), NULL);
@@ -2321,6 +2450,11 @@ int wtf_run(struct wtf_callbacks cbs) {
 	wl_signal_add(&server.backend->events.new_output, &server.new_output);
 
 	server.scene = wlr_scene_create();
+	if (server.scene == NULL) {
+		wlr_log(WLR_ERROR, "failed to create wlr_scene");
+		wlr_backend_destroy(server.backend); /* drop the DRM master / restore the VT */
+		return 1;
+	}
 	server.scene_layout =
 		wlr_scene_attach_output_layout(server.scene, server.output_layout);
 

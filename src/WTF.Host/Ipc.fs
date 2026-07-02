@@ -39,11 +39,17 @@ let start (handle: string -> string) : string =
         with _ -> ()
 
     let accept () =
+        // A throw from Accept (listener disposed, fd exhaustion / ENFILE) on this
+        // background thread would be an UNHANDLED exception => the whole .NET
+        // process aborts. Guard each iteration so the agent socket can never take
+        // down the WM; log so a persistent failure is visible.
         while true do
-            let client = listener.Accept()
-            let t = Thread(fun () -> serve client)
-            t.IsBackground <- true
-            t.Start()
+            try
+                let client = listener.Accept()
+                let t = Thread(fun () -> serve client)
+                t.IsBackground <- true
+                t.Start()
+            with ex -> eprintfn "WTF: IPC accept failed (ignored): %O" ex
 
     let server = Thread(ThreadStart accept)
     server.IsBackground <- true

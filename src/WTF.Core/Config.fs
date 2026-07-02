@@ -169,17 +169,22 @@ module Appearance =
     /// The border color #hex for a window: the configured function if any, else the
     /// existing focused?active:inactive behavior (reading the live cfg fields).
     let resolveBorderHex (cfg: WtfConfig) (ctx: RenderContext) : string =
+        let fallback = if ctx.Focused then cfg.ActiveBorder else cfg.InactiveBorder
         match cfg.BorderColorOf with
-        | Some f -> f ctx
-        | None   -> if ctx.Focused then cfg.ActiveBorder else cfg.InactiveBorder
+        // TOTAL: a throwing user function falls back to the focused/inactive color
+        // rather than unwinding (this runs inside the per-window restyle path).
+        | Some f -> (try f ctx with _ -> fallback)
+        | None   -> fallback
 
     /// The opacity for a window: the configured function if any, else focused?1.0:
     /// InactiveOpacity. Clamped to [0,1] — matches the reducer's SetInactiveOpacity.
     let resolveOpacity (cfg: WtfConfig) (ctx: RenderContext) : float =
+        let fallback = if ctx.Focused then 1.0 else cfg.InactiveOpacity
         let o =
             match cfg.OpacityOf with
-            | Some f -> f ctx
-            | None   -> if ctx.Focused then 1.0 else cfg.InactiveOpacity
+            // TOTAL: a throwing user function falls back rather than unwinding.
+            | Some f -> (try f ctx with _ -> fallback)
+            | None   -> fallback
         // Total clamp: NaN (a pathological user function) maps to fully opaque
         // rather than escaping the [0,1] range. -inf -> 0, +inf -> 1 fall out of
         // min/max naturally. For real values this is the reducer's SetInactiveOpacity clamp.
@@ -386,7 +391,10 @@ module Manage =
         let w1, e1 = Reducer.apply (AddWindow info) w
         let action =
             cfg.ManageHook
-            |> List.map (fun rule -> rule info)
+            // TOTAL: a user rule predicate/action may throw; degrade that rule to
+            // NoAction (window still maps) instead of unwinding into the C map
+            // callback and aborting the session.
+            |> List.map (fun rule -> try rule info with _ -> NoAction)
             |> List.tryFind (fun a -> a <> NoAction)
             |> Option.defaultValue NoAction
         match action with

@@ -173,7 +173,12 @@ module World =
                     match layoutOpt with
                     | Some layout ->
                         let layout = if w.Gaps > 0 then Layout.withGaps (w.Gaps * 1<lpx>) layout else layout
-                        layout w.Screen sub
+                        // TOTAL: a registered layout may be a reflectively-loaded PLUGIN
+                        // (arbitrary user assembly). A throw here runs inside the C->F#
+                        // callbacks (map/unmap/key/resize), so swallow to []-tiling rather
+                        // than unwind into native code and abort the session.
+                        (try layout w.Screen sub
+                         with ex -> eprintfn "WTF: layout '%s' threw (skipped): %O" ws.Layout ex; [])
                     | None -> []
             // LAYER 2 — FLOATING: stack order = z; skip the fs id; clamp on-screen.
             let floatRects =
