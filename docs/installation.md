@@ -3,24 +3,29 @@
 ## Requirements
 
 - Linux with a GPU that does GLES2 (any Mesa driver; llvmpipe works for VMs)
-- **wlroots 0.18** and its runtime libraries (libinput, libxkbcommon, …)
+- Stable system libraries only: libinput, libdrm, libseat, libxkbcommon,
+  Mesa, pixman — **wlroots and scenefx are bundled** (pinned versions built
+  by the installer), so no specific distro wlroots package is required
 - The .NET 10 SDK (build machine only — the installed WM is self-contained
-  and needs **no** .NET on the target)
-- `meson` + `ninja` + a C compiler (for the small compositor shim)
+  and needs **no** .NET on the target; `install-deps.sh` installs the SDK
+  automatically if missing)
+- `meson` + `ninja` + a C compiler (for the compositor shim + bundled libs)
 - Optional: `libheif` for dynamic `.heic` wallpapers (degrades gracefully
   without it), `Xwayland` for X11 apps, `xdg-desktop-portal-wlr` +
   `xdg-desktop-portal-gtk` for screenshots/screencast/file pickers
 
-On Debian/Ubuntu, one script installs the build dependencies:
+One script installs everything on **Debian/Ubuntu (apt), Fedora (dnf),
+Arch (pacman), and openSUSE (zypper)** — including the .NET SDK when absent:
 
 ```sh
 sudo bash scripts/install-deps.sh
 ```
 
-On Fedora/Arch install the equivalents manually (`wlroots`, `libinput`,
-`meson`, `ninja`, .NET SDK). The installer verifies at install time that every
-bundled library resolves on your machine and fails loudly with hints if
-something is missing — you will not discover a missing wlroots at first login.
+The installer additionally verifies at install time that every bundled
+library resolves on your machine and fails loudly with hints if something is
+missing — you will not discover a missing library at first login. Every
+supported distro is exercised in CI: full build → install → headless boot of
+the real compositor → IPC smoke test.
 
 ## Build & install
 

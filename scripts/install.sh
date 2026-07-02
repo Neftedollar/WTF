@@ -13,8 +13,10 @@ ROOT="$PWD"
 # Run UNPRIVILEGED: as root, DOTNET_ROOT points at /root/.dotnet, build/ gets
 # root-owned, and step 5 would seed /root/.config instead of the user's. sudo
 # is invoked internally for exactly one step (the copy into /).
-if [ "$(id -u)" -eq 0 ]; then
+# WTF_ALLOW_ROOT=1 overrides for containers/CI, where root IS the only user.
+if [ "$(id -u)" -eq 0 ] && [ -z "${WTF_ALLOW_ROOT:-}" ]; then
   echo "install.sh: run as a regular user (sudo is used internally for step 4 only)" >&2
+  echo "            containers/CI: set WTF_ALLOW_ROOT=1" >&2
   exit 1
 fi
 
@@ -40,7 +42,17 @@ LIBWTF="$STAGE$PREFIX/lib/wtf"
 BINWTF="$STAGE$PREFIX/bin"
 SESS="$STAGE/usr/share/wayland-sessions"
 
-echo ">> 1/5  building scenefx + the C shim"
+echo ">> 1/5  building wlroots (vendored) + scenefx + the C shim"
+# wlroots is VENDORED (pinned 0.18.x, bundled into /usr/local/lib/wtf) so the
+# install never depends on which wlroots the distro packages. scenefx and the
+# shim both build against the vendored copy.
+bash scripts/build-wlroots.sh
+WLROOTS_PC="$(find "$ROOT/compositor/.wlroots" -name 'wlroots-0.18.pc' -print -quit)"
+if [ -z "$WLROOTS_PC" ]; then
+  echo "install.sh: wlroots build missing (no wlroots-0.18.pc under compositor/.wlroots)" >&2
+  exit 1
+fi
+export PKG_CONFIG_PATH="$(dirname "$WLROOTS_PC"):${PKG_CONFIG_PATH:-}"
 bash scripts/build-scenefx.sh
 # scenefx's libdir varies by distro (lib/ vs lib/<multiarch>): locate the .pc.
 SCENEFX_PC="$(find "$ROOT/compositor/.scenefx" -name 'scenefx-0.2.pc' -print -quit)"
@@ -48,7 +60,7 @@ if [ -z "$SCENEFX_PC" ]; then
   echo "install.sh: scenefx build missing (no scenefx-0.2.pc under compositor/.scenefx)" >&2
   exit 1
 fi
-export PKG_CONFIG_PATH="$(dirname "$SCENEFX_PC"):${PKG_CONFIG_PATH:-}"
+export PKG_CONFIG_PATH="$(dirname "$SCENEFX_PC"):$PKG_CONFIG_PATH"
 ( cd compositor && { [ -d build ] || meson setup build; } && ninja -C build >/dev/null )
 
 echo ">> 2/5  publishing self-contained host + wtfctl + bar + omnibox ($RID)"
@@ -99,10 +111,12 @@ rm -rf "$REFTMP"
 
 echo ">> 3/5  assembling the install tree under $STAGE"
 install -Dm644 compositor/build/libwtf_shim.so "$LIBWTF/libwtf_shim.so"
-# scenefx runtime lib next to the shim so the launcher's LD_LIBRARY_PATH finds
-# it (libdir varies by distro — resolve, don't hardcode).
+# scenefx + vendored wlroots runtime libs next to the shim so the launcher's
+# LD_LIBRARY_PATH finds them (libdir varies by distro — resolve, don't hardcode).
 SCENEFX_SO="$(find "$ROOT/compositor/.scenefx" -name 'libscenefx-0.2.so' -print -quit)"
 install -Dm644 "$SCENEFX_SO" "$LIBWTF/libscenefx-0.2.so"
+WLROOTS_SO="$(find "$ROOT/compositor/.wlroots" -name 'libwlroots-0.18.so' -print -quit)"
+install -Dm644 "$WLROOTS_SO" "$LIBWTF/libwlroots-0.18.so"
 # libwtf_panel.so next to BOTH client binaries so their DllImport("wtf_panel") resolves.
 install -Dm644 compositor/build/libwtf_panel.so "$LIBWTF/bar/libwtf_panel.so"
 install -Dm644 compositor/build/libwtf_panel.so "$LIBWTF/omnibox/libwtf_panel.so"

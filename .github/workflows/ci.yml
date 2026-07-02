@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  # Pure F# brain: fast, no graphics stack needed.
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet test WTF.slnx -c Release
+
+  # Full pipeline per distro: deps -> vendored wlroots/scenefx -> shim ->
+  # self-contained publish -> atomic install -> HEADLESS boot of the real
+  # compositor (llvmpipe GL) -> IPC smoke -> graceful shutdown.
+  install-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: debian
+            image: debian:trixie
+          - distro: ubuntu
+            image: ubuntu:24.04
+          - distro: fedora
+            image: fedora:latest
+          - distro: arch
+            image: archlinux:latest
+          - distro: opensuse
+            image: opensuse/tumbleweed
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: git (missing in some base images)
+        run: |
+          command -v git >/dev/null 2>&1 && exit 0
+          command -v apt-get >/dev/null && { apt-get update && apt-get install -y git; exit 0; }
+          command -v dnf >/dev/null && { dnf install -y git; exit 0; }
+          command -v pacman >/dev/null && { pacman -Sy --noconfirm git; exit 0; }
+          command -v zypper >/dev/null && { zypper --non-interactive install git; exit 0; }
+      - uses: actions/checkout@v4
+      - name: dependencies (+ .NET SDK into ~/.dotnet)
+        run: bash scripts/install-deps.sh
+      - name: software GL for the headless renderer (llvmpipe)
+        run: |
+          command -v apt-get >/dev/null && { apt-get install -y libgl1-mesa-dri libegl1; exit 0; }
+          command -v dnf >/dev/null && { dnf install -y mesa-dri-drivers mesa-libEGL; exit 0; }
+          command -v pacman >/dev/null && exit 0   # mesa already pulled
+          command -v zypper >/dev/null && { zypper --non-interactive install Mesa-dri Mesa-libEGL1; exit 0; }
+      - name: build + install (atomic)
+        run: WTF_ALLOW_ROOT=1 bash scripts/install.sh
+      - name: headless smoke
+        run: bash scripts/smoke-headless.sh
+      - name: upload smoke log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-log-${{ matrix.distro }}
+          path: /tmp/wtf-smoke-*/smoke.log
+          if-no-files-found: ignore

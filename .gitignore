@@ -11,3 +11,5 @@ build/
 # misc
 *.swp
 bin/aot/
+compositor/.wlroots/
+build/wlroots-src/
