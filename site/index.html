@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WTF — Wayland Tiling, F# · a compositor you configure in real F#</title>
+<meta name="description" content="WTF is a tiling Wayland compositor whose configuration is real F# code — typo-proof Type-Provider config, hot-reload with a last-good fallback, scenefx eye-candy, and an agent-first control socket. Install in one line.">
+<link rel="canonical" href="https://neftedollar.github.io/WTF/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="WTF — Wayland Tiling, F#">
+<meta property="og:description" content="A tiling Wayland compositor whose configuration is real F# code — typo-proof, hot-reloading, and drivable by scripts and LLM agents.">
+<meta property="og:url" content="https://neftedollar.github.io/WTF/">
+<meta property="og:image" content="https://neftedollar.github.io/WTF/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="WTF — Wayland Tiling, F#">
+<meta name="twitter:description" content="A tiling Wayland compositor whose configuration is real F# code — typo-proof, hot-reloading, and drivable by scripts and LLM agents.">
+<meta name="twitter:image" content="https://neftedollar.github.io/WTF/og.png">
+<meta name="theme-color" content="#1e1e2e">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231e1e2e'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='14' font-weight='bold' fill='%2389b4fa' text-anchor='middle'%3E%7C%26gt%3B%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  --crust:#11111b; --mantle:#181825; --base:#1e1e2e;
+  --surface0:#313244; --surface1:#45475a; --overlay:#6c7086;
+  --text:#cdd6f4; --subtext:#a6adc8;
+  --blue:#89b4fa; --lavender:#b4befe; --mauve:#cba6f7; --green:#a6e3a1;
+  --peach:#fab387; --yellow:#f9e2af; --red:#f38ba8; --teal:#94e2d5;
+  --mono:ui-monospace,'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important;animation:none!important}}
+body{
+  background:var(--base);color:var(--text);font-family:var(--sans);
+  line-height:1.6;font-size:16px;-webkit-font-smoothing:antialiased;
+}
+a{color:var(--blue);text-decoration:none}
+a:hover{text-decoration:underline}
+a:focus-visible,button:focus-visible{outline:2px solid var(--blue);outline-offset:2px;border-radius:4px}
+code,pre,kbd{font-family:var(--mono)}
+.wrap{max-width:980px;margin:0 auto;padding:0 20px}
+.glow{
+  position:absolute;inset:0 0 auto 0;height:520px;pointer-events:none;z-index:0;
+  background:radial-gradient(600px 320px at 50% -60px,rgba(137,180,250,.14),transparent 70%);
+}
+/* ---------- header ---------- */
+header{position:relative;z-index:1}
+nav{display:flex;align-items:center;gap:18px;padding:18px 0;flex-wrap:wrap}
+.brand{font-family:var(--mono);font-weight:700;font-size:18px;color:var(--text)}
+.brand b{color:var(--blue)}
+nav .links{margin-left:auto;display:flex;gap:18px;align-items:center;font-size:14px}
+nav .links a{color:var(--subtext)}
+nav .links a:hover{color:var(--text);text-decoration:none}
+.gh-btn{
+  display:inline-flex;align-items:center;gap:7px;border:1px solid var(--surface1);
+  border-radius:8px;padding:6px 12px;color:var(--text)!important;background:var(--mantle);
+}
+.gh-btn:hover{border-color:var(--blue);text-decoration:none}
+.gh-btn svg{flex:none}
+/* ---------- hero ---------- */
+.hero{position:relative;z-index:1;padding:56px 0 30px;text-align:center}
+.hero .tag{
+  display:inline-block;font-family:var(--mono);font-size:12.5px;color:var(--peach);
+  border:1px solid var(--surface0);border-radius:99px;padding:3px 12px;background:var(--mantle);
+  margin-bottom:22px;
+}
+h1{font-size:clamp(34px,6vw,54px);line-height:1.12;font-weight:800;letter-spacing:-.02em}
+h1 .fs{color:var(--blue)}
+.pitch{max-width:660px;margin:18px auto 0;font-size:clamp(16px,2.4vw,19px);color:var(--subtext)}
+.pitch strong{color:var(--text)}
+/* ---------- terminal blocks ---------- */
+.term{
+  background:var(--crust);border:1px solid var(--surface0);border-radius:12px;
+  text-align:left;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.35);
+}
+.term-bar{
+  display:flex;align-items:center;gap:8px;padding:9px 14px;
+  background:var(--mantle);border-bottom:1px solid var(--surface0);
+}
+.dot{width:11px;height:11px;border-radius:50%;background:var(--surface1)}
+.dot.r{background:#f38ba8}.dot.y{background:#f9e2af}.dot.g{background:#a6e3a1}
+.term-title{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--overlay)}
+.term pre{padding:16px 18px;overflow-x:auto;font-size:13.5px;line-height:1.65;scrollbar-width:thin;scrollbar-color:var(--surface1) transparent}
+.term pre::-webkit-scrollbar{height:8px}
+.term pre::-webkit-scrollbar-thumb{background:var(--surface1);border-radius:4px}
+.term pre::-webkit-scrollbar-track{background:transparent}
+.install{max-width:760px;margin:34px auto 0;position:relative}
+.install pre{font-size:clamp(12px,1.55vw,14px);white-space:pre-wrap;word-break:break-all}
+.install .prompt{color:var(--green)}
+.copy{
+  position:absolute;right:10px;top:6px;cursor:pointer;
+  font-family:var(--mono);font-size:12px;color:var(--blue);
+  background:var(--mantle);border:1px solid var(--surface1);border-radius:7px;padding:6px 12px;
+  transition:border-color .15s,color .15s;
+}
+.copy:hover{border-color:var(--blue)}
+.copy.done{color:var(--green);border-color:var(--green)}
+.install .term-bar{padding-right:86px}
+.install .term-title{margin-right:0}
+.install-note{margin-top:12px;font-size:13.5px;color:var(--overlay);text-align:center}
+.install-note a{color:var(--subtext)}
+.ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:26px}
+.cta2{
+  display:inline-block;border:1px solid var(--surface1);border-radius:10px;
+  padding:10px 18px;color:var(--text)!important;font-size:14.5px;background:var(--mantle);
+}
+.cta2:hover{border-color:var(--teal);text-decoration:none}
+.cta2 code{color:var(--teal)}
+.star-hint{font-size:13px;color:var(--overlay);margin-top:14px}
+.star-hint a{color:var(--subtext)}
+/* ---------- sections ---------- */
+section{position:relative;z-index:1;padding:54px 0 0}
+h2{font-size:clamp(23px,3.6vw,30px);letter-spacing:-.01em;margin-bottom:6px}
+.sub{color:var(--subtext);max-width:680px;margin-bottom:26px}
+/* config snippet highlighting */
+.code .k{color:var(--mauve)} .code .s{color:var(--green)} .code .c{color:var(--overlay);font-style:italic}
+.code .f{color:var(--blue)} .code .t{color:var(--yellow)} .code .n{color:var(--peach)}
+.caption{font-size:14px;color:var(--subtext);margin-top:14px;max-width:760px}
+.caption b{color:var(--green)}
+/* screenshot slot */
+.shot{
+  margin-top:22px;border:2px dashed var(--surface1);border-radius:12px;background:var(--mantle);
+  padding:44px 24px;text-align:center;color:var(--overlay);font-size:14.5px;
+}
+.shot .mono{font-family:var(--mono);font-size:12.5px;color:var(--surface1);letter-spacing:.08em;text-transform:uppercase;display:block;margin-bottom:10px}
+.shot a{color:var(--subtext)}
+/* why cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:16px;margin-top:8px}
+.card{
+  background:var(--mantle);border:1px solid var(--surface0);border-radius:12px;padding:20px;
+  transition:border-color .15s;
+}
+.card:hover{border-color:var(--surface1)}
+.card h3{font-size:16px;margin-bottom:8px;display:flex;align-items:center;gap:9px}
+.card h3 .ico{font-family:var(--mono);color:var(--blue);font-size:14px;background:var(--crust);border:1px solid var(--surface0);border-radius:6px;padding:2px 7px}
+.card p{font-size:14px;color:var(--subtext)}
+.card p code{color:var(--teal);font-size:12.5px;background:var(--crust);border-radius:4px;padding:1px 5px}
+.card pre{
+  margin-top:12px;background:var(--crust);border:1px solid var(--surface0);border-radius:8px;
+  padding:10px 12px;font-size:12px;line-height:1.6;overflow-x:auto;color:var(--subtext);
+  scrollbar-width:thin;scrollbar-color:var(--surface1) transparent;
+}
+.card pre::-webkit-scrollbar{height:8px}
+.card pre::-webkit-scrollbar-thumb{background:var(--surface1);border-radius:4px}
+.card pre .p{color:var(--green)} .card pre .cm{color:var(--overlay)}
+/* status band */
+.band{
+  margin-top:54px;background:var(--mantle);border-block:1px solid var(--surface0);padding:34px 0;
+}
+.band .inner{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start}
+.band .badge{
+  font-family:var(--mono);font-size:13px;color:var(--peach);border:1px solid var(--peach);
+  border-radius:99px;padding:4px 14px;white-space:nowrap;
+}
+.band p{font-size:14.5px;color:var(--subtext);max-width:560px;flex:1;min-width:260px}
+.band p b{color:var(--text)}
+.distros{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.chip{
+  font-family:var(--mono);font-size:12px;color:var(--subtext);
+  background:var(--crust);border:1px solid var(--surface0);border-radius:6px;padding:3px 10px;
+}
+.chip::before{content:"✓ ";color:var(--green)}
+.band .meta{font-family:var(--mono);font-size:12.5px;color:var(--overlay);margin-top:14px}
+.band .meta a{color:var(--subtext)}
+/* compare table */
+.tblwrap{overflow-x:auto;margin-top:8px;border:1px solid var(--surface0);border-radius:12px}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:13.5px;background:var(--mantle)}
+th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--surface0);vertical-align:top}
+tr:last-child td{border-bottom:none}
+th{font-family:var(--mono);font-size:12.5px;color:var(--subtext);background:var(--crust)}
+td:first-child{color:var(--overlay);font-size:12.5px;white-space:nowrap}
+td.wtf{color:var(--text)}
+th.wtf{color:var(--blue)}
+td{color:var(--subtext)}
+.honest{font-size:13.5px;color:var(--overlay);margin-top:14px;font-style:italic}
+/* final cta */
+.final{text-align:center;padding-bottom:10px}
+.final .install{margin-top:26px}
+.final .after{margin-top:18px;font-size:14.5px;color:var(--subtext)}
+.final .after code{color:var(--teal)}
+/* footer */
+footer{margin-top:64px;border-top:1px solid var(--surface0);background:var(--mantle);padding:36px 0 44px}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:24px}
+footer h4{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--overlay);margin-bottom:10px}
+footer ul{list-style:none}
+footer li{margin:5px 0;font-size:14px}
+footer a{color:var(--subtext)}
+footer a:hover{color:var(--blue)}
+.fin{margin-top:28px;font-size:12.5px;color:var(--overlay);font-family:var(--mono)}
+</style>
+</head>
+<body>
+<div class="glow" aria-hidden="true"></div>
+
+<header class="wrap">
+  <nav aria-label="Main">
+    <span class="brand"><b>WTF</b> — Wayland Tiling, F#</span>
+    <span class="links">
+      <a href="docs/">Docs</a>
+      <a href="https://github.com/Neftedollar/WTF/releases">Releases</a>
+      <a class="gh-btn" href="https://github.com/Neftedollar/WTF">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </span>
+  </nav>
+
+  <div class="hero">
+    <span class="tag">0.1 beta · MIT · dogfooded daily</span>
+    <h1>Your window manager<br>is an <span class="fs">F# program</span>.</h1>
+    <p class="pitch">A tiling Wayland compositor whose configuration is <strong>real F# code</strong> — typo-proof, hot-reloading, and drivable by scripts and LLM agents. xMonad's big idea, on Wayland, with a compiler catching your mistakes.</p>
+
+    <div class="install term">
+      <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">install — any supported distro</span></div>
+      <pre id="install-cmd"><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/Neftedollar/WTF/master/scripts/get-wtf.sh | bash</pre>
+      <button class="copy" data-copy="curl -fsSL https://raw.githubusercontent.com/Neftedollar/WTF/master/scripts/get-wtf.sh | bash" aria-label="Copy install command">copy</button>
+    </div>
+    <p class="install-note">Debian · Ubuntu · Fedora · Arch · openSUSE — x86_64/aarch64. Fetches the latest prebuilt release: no .NET SDK, no meson, no compile. Prefer to see what you run? <a href="https://github.com/Neftedollar/WTF/blob/master/scripts/get-wtf.sh">Read the script.</a></p>
+
+    <div class="ctas">
+      <a class="cta2" href="#nested">or try it nested — zero risk: run <code>wtf</code> in a window &darr;</a>
+    </div>
+    <p class="star-hint">Like the idea? <a href="https://github.com/Neftedollar/WTF">A star on GitHub</a> genuinely helps a 0.1 project get found.</p>
+  </div>
+</header>
+
+<main>
+<section class="wrap" id="config">
+  <h2>The config <em>is</em> the screenshot.</h2>
+  <p class="sub">This is the actual config format — a real F# program in <code>~/.config/wtf/config.fsx</code>, checked by a real compiler.</p>
+  <div class="term code">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">~/.config/wtf/config.fsx</span></div>
+<pre><span class="c">// ~/.config/wtf/config.fsx — this is the actual config format</span>
+<span class="k">let</span> wtfConfig =
+    <span class="f">config</span> {
+        <span class="f">modKey</span> <span class="s">"Super"</span>
+        <span class="f">terminal</span> <span class="s">"foot"</span>
+        <span class="f">defaultLayout</span> <span class="t">Layouts.Tall</span>        <span class="c">// Type Provider: a typo won't compile</span>
+        <span class="f">keys</span> (<span class="f">keymap</span> {
+            <span class="f">bind</span> <span class="s">"M-Return"</span> (<span class="t">Spawn</span> <span class="s">"foot"</span>)
+            <span class="f">bind</span> <span class="s">"M-j"</span>      (<span class="t">Focus NextWindow</span>)
+            <span class="f">bind</span> <span class="s">"M-space"</span>  (<span class="t">SetLayout Layouts.Bsp</span>)
+        })
+        <span class="f">manageHook</span> (<span class="f">manage</span> {
+            <span class="f">rule</span> (<span class="f">appIs</span> <span class="s">"firefox"</span>) (<span class="t">ShiftToWorkspace</span> <span class="s">"2"</span>)
+            <span class="f">rule</span> (<span class="f">titleContains</span> <span class="s">"Picture-in-Picture"</span>) <span class="t">FloatWindow</span>
+        })
+        <span class="f">gaps</span> <span class="n">8</span>
+        <span class="f">cornerRadius</span> <span class="n">10</span>
+        <span class="f">blur</span> <span class="k">true</span>
+        <span class="f">shadow</span> <span class="k">true</span>                       <span class="c">// macOS-style drop shadows (scenefx)</span>
+        <span class="f">wallpaper</span> (<span class="t">Dynamic</span> (<span class="s">"~/pics/catalina.heic"</span>, <span class="t">Fill</span>))  <span class="c">// time-of-day .heic</span>
+    }</pre>
+  </div>
+  <p class="caption"><b>Save the file and the running WM applies it instantly.</b> A typo? The config is rejected, the error goes to the log, and the last good config stays active — your session never dies from a missing parenthesis. In an editor with the F# LSP (<code>wtf-edit</code> sets it up), <code>Apps.</code> autocompletes to <em>your installed applications</em> and <code>Layouts.</code> to the valid layouts — a rule for an app you don't have is a compile error, not a broken session.</p>
+
+  <!-- SCREENSHOT SLOT: replace this .shot div with <img> / <video> of a real session
+       (tiled windows + gaps + shadows + blur — the money shot). Keep alt text. -->
+  <div class="shot" id="screenshot-slot">
+    <span class="mono">[ screenshot slot ]</span>
+    Real session captures are coming — WTF is launching straight from the author's daily-driver machine.
+    Until then, the <a href="#nested">60-second nested run</a> below is the fastest way to see it with your own eyes.
+  </div>
+</section>
+
+<section class="wrap" id="why">
+  <h2>Why WTF</h2>
+  <p class="sub">Five properties no other compositor combines.</p>
+  <div class="cards">
+    <div class="card">
+      <h3><span class="ico">λ</span>A compiler behind your config</h3>
+      <p>Machine-aware Type Providers turn <em>your machine</em> into types: <code>Apps.Firefox.AppId</code>, <code>Layouts.Bsp</code>. <code>SetLayout "tll"</code> or a rule for an app you don't have is a <strong>compile error</strong> in your editor — not a black screen at login. And because config is code, appearance can be a function: per-app borders, generated keymaps, themes.</p>
+    </div>
+    <div class="card">
+      <h3><span class="ico">↻</span>Hot-reload with a safety net</h3>
+      <p>Every save recompiles and applies the config live, off the main thread. A config that doesn't compile is rejected — the <strong>last good one stays active</strong> and the error lands in the log. The session never stutters or dies from an edit.</p>
+    </div>
+    <div class="card">
+      <h3><span class="ico">⌁</span>Agent-first control socket</h3>
+      <p>The whole WM state is one JSON document; every action is a semantic command on an NDJSON unix socket. Scripts, <code>socat</code>, or an LLM — same door.</p>
+      <pre><span class="p">$</span> wtfctl tools   <span class="cm"># tool manifest for LLM agents</span>
+<span class="p">$</span> wtfctl ask "put the browser on workspace 2 and focus it"
+<span class="p">$</span> wtfctl '{"cmd":"focus","app":"firefox"}'</pre>
+    </div>
+    <div class="card">
+      <h3><span class="ico">✦</span>Eye-candy, live-tunable</h3>
+      <p>Backdrop blur, rounded corners, macOS-style drop shadows (scenefx), slide/fade animations, per-window opacity — and <strong>dynamic time-of-day <code>.heic</code> wallpapers</strong>, the macOS format, decoded with libheif. Every knob works over the socket, so you rice live and bake the result into config.</p>
+      <pre><span class="p">$</span> wtfctl corners 12
+<span class="p">$</span> wtfctl blur on</pre>
+    </div>
+    <div class="card">
+      <h3><span class="ico">☂</span>Crashes handled honestly</h3>
+      <p>The login manager runs a session wrapper, not the raw compositor: on an abnormal exit it restarts WTF (bounded), falls back to <strong>safe mode</strong> (default config, no eye-candy), then returns you to the greeter. Every session writes a complete log with backtraces to <code>~/.local/state/wtf/</code>.</p>
+    </div>
+    <div class="card">
+      <h3><span class="ico">✓</span>Tested like a library</h3>
+      <p>The window-management brain is pure F# — <strong>786 xUnit/FsCheck tests green</strong>. On every commit, CI builds, installs, and boots the real compositor headless on five distros and drives it over IPC. Also in the box: workspaces 1–9, five layouts plus custom F# ones, XWayland, portals, undo/redo.</p>
+    </div>
+  </div>
+</section>
+
+<div class="band" id="status">
+  <div class="wrap inner">
+    <span class="badge">status: 0.1 beta</span>
+    <p><b>Honest status.</b> Dogfooded daily as the author's main session. <b>Single monitor</b> is the well-trodden path today — multi-monitor tiling is the top roadmap item. Expect rough edges; the crash story above is how they're handled.
+      <span class="distros">
+        <span class="chip">debian</span><span class="chip">ubuntu 24.04</span><span class="chip">fedora</span><span class="chip">arch</span><span class="chip">opensuse</span>
+      </span>
+      <span class="meta">every commit: build → install → headless boot → IPC smoke, on all five · <a href="https://github.com/Neftedollar/WTF/actions/workflows/ci.yml">CI</a> · <a href="https://github.com/Neftedollar/WTF/blob/master/LICENSE">MIT license</a></span>
+    </p>
+  </div>
+</div>
+
+<section class="wrap" id="compare">
+  <h2>How it compares</h2>
+  <p class="sub">These are all good projects; WTF exists because no one of them combines these particular properties.</p>
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th></th><th class="wtf">WTF</th><th>xMonad</th><th>sway</th><th>Hyprland</th></tr></thead>
+      <tbody>
+        <tr><td>config</td><td class="wtf"><b>F# code</b> — compile-checked, autocompleted, hot-reload with last-good fallback</td><td>Haskell code, recompile to apply</td><td>text file (i3 syntax)</td><td>text file (+ plugins)</td></tr>
+        <tr><td>eye-candy</td><td class="wtf">blur, corners, shadows, animations (scenefx)</td><td>none built in</td><td>none by design</td><td>the reference point</td></tr>
+        <tr><td>scripting</td><td class="wtf">NDJSON socket, semantic commands, LLM tool manifest</td><td>X11 tools / custom</td><td><code>swaymsg</code> IPC</td><td><code>hyprctl</code> IPC</td></tr>
+        <tr><td>multi-monitor</td><td class="wtf">not yet (top roadmap item)</td><td>yes</td><td>yes, mature</td><td>yes, mature</td></tr>
+        <tr><td>maturity</td><td class="wtf"><b>0.1 beta</b></td><td>decades</td><td>very mature</td><td>mature, huge community</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="honest">If you need multi-monitor today, or maximum stability, sway and Hyprland are the safer choices — genuinely. If you want your WM to be a typed program with an agent-grade API, that's the niche WTF is built for.</p>
+</section>
+
+<section class="wrap final" id="nested">
+  <h2>Try it in 60 seconds — without logging out.</h2>
+  <p class="sub" style="margin:10px auto 0">You don't have to trust WTF with your session. Run <code>wtf</code> from a terminal <em>inside your current desktop</em> and it opens as a regular window with a full compositor running in it. Close the window when you're done — nothing outside it is touched.</p>
+
+  <div class="install term">
+    <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">zero-risk nested session</span></div>
+    <pre><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/Neftedollar/WTF/master/scripts/get-wtf.sh | bash
+<span class="prompt">$</span> wtf            <span style="color:var(--overlay)"># nested session in a window — play with Super+Return, Super+j/k</span>
+<span class="prompt">$</span> wtfctl state   <span style="color:var(--overlay)"># in another terminal: the whole WM state as JSON</span></pre>
+    <button class="copy" data-copy="curl -fsSL https://raw.githubusercontent.com/Neftedollar/WTF/master/scripts/get-wtf.sh | bash" aria-label="Copy install command">copy</button>
+  </div>
+  <p class="after">Convinced? Log out and pick <b>WTF</b> in your display manager (GDM/SDDM). First steps: <a href="docs/quickstart.html">Quickstart</a>.</p>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="fgrid">
+      <div>
+        <h4>Docs</h4>
+        <ul>
+          <li><a href="docs/">Documentation home</a></li>
+          <li><a href="docs/installation.html">Installation</a></li>
+          <li><a href="docs/quickstart.html">Quickstart</a></li>
+          <li><a href="docs/configuration.html">Configuration</a></li>
+          <li><a href="docs/keybindings.html">Keybindings</a></li>
+          <li><a href="docs/appearance.html">Appearance &amp; ricing</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Going deeper</h4>
+        <ul>
+          <li><a href="docs/wtfctl.html">wtfctl &amp; the agent socket</a></li>
+          <li><a href="docs/troubleshooting.html">Troubleshooting</a></li>
+          <li><a href="docs/faq.html">FAQ</a></li>
+          <li><a href="docs/architecture.html">Architecture ("F# brain, C body")</a></li>
+          <li><a href="docs/AOT.html">NativeAOT build</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="https://github.com/Neftedollar/WTF">GitHub repository</a></li>
+          <li><a href="https://github.com/Neftedollar/WTF/releases">Releases</a></li>
+          <li><a href="https://github.com/Neftedollar/WTF/discussions">Discussions</a></li>
+          <li><a href="https://github.com/Neftedollar/WTF/blob/master/CONTRIBUTING.md">Contributing</a></li>
+          <li><a href="https://github.com/Neftedollar/WTF/blob/master/LICENSE">MIT License</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="fin">WTF — Wayland Tiling, F# · MIT · F# brain, C body (wlroots 0.18 + scenefx)</p>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll('.copy').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var t = btn.getAttribute('data-copy');
+    function done(){ btn.textContent='copied!'; btn.classList.add('done');
+      setTimeout(function(){ btn.textContent='copy'; btn.classList.remove('done'); },1600); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(done);
+    } else {
+      var ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta);
+      ta.select(); try{document.execCommand('copy');done();}finally{document.body.removeChild(ta);}
+    }
+  });
+});
+</script>
+</body>
+</html>
