@@ -77,9 +77,12 @@ module Color =
     let toHex (c: Color) : string =
         let byte01 (x: float) =
             int (Math.Round(clamp01 x * 255.0, MidpointRounding.AwayFromZero))
-        let r, g, b = byte01 c.R, byte01 c.G, byte01 c.B
-        if clamp01 c.A >= 1.0 - 1e-9 then sprintf "#%02x%02x%02x" r g b
-        else sprintf "#%02x%02x%02x%02x" r g b (byte01 c.A)
+        let r, g, b, a = byte01 c.R, byte01 c.G, byte01 c.B, byte01 c.A
+        // Decide "opaque?" on the QUANTIZED alpha byte, not the float: an A like
+        // 0.999 rounds to byte 255, so it must emit the 6-digit form too — else
+        // toHex>>ofHex>>toHex isn't idempotent (0.999 -> #..ff -> 1.0 -> #.. ).
+        if a >= 255 then sprintf "#%02x%02x%02x" r g b
+        else sprintf "#%02x%02x%02x%02x" r g b a
 
     // =====================================================================
     // COLOR SPACES — Bjorn Ottosson OKLab, standard constants.
