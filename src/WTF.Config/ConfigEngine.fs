@@ -53,6 +53,9 @@ type IConfigEngine =
     /// (which already has `open WTF.Core`). Best-effort + sandboxed-by-convention
     /// (the user's own socket). NEVER throws.
     abstract member Eval : string -> EvalOutcome
+    /// Bless the current config.fsx as the last-good fallback (only if it
+    /// compiles). Returns true if saved. No-op (false) for the Null engine.
+    abstract member SaveDefault : unit -> bool
 
 /// Resolve the user config path: $XDG_CONFIG_HOME/wtf/config.fsx, falling back
 /// to ~/.config/wtf/config.fsx.
@@ -74,6 +77,7 @@ type NullConfigEngine(defaultConfig: WtfConfig) =
         member _.Load() = defaultConfig
         member _.StartWatching(_) = ()
         member _.Eval(_) = EvalText "config eval unavailable (safe-mode / no-FCS build)"
+        member _.SaveDefault() = false
         member _.Dispose() = ()
 
 #if !WTF_NO_FCS
@@ -103,6 +107,26 @@ type FsiConfigEngine(defaultConfig: WtfConfig, configPath: string) =
     let mutable onReloadCb : (WtfConfig -> unit) option = None
 
     let log (msg: string) = eprintfn "WTF.Config: %s" msg
+
+    // The last KNOWN-GOOD config source, saved beside config.fsx every time the
+    // real config compiles. When a later edit (or a host/config API mismatch)
+    // fails to evaluate, Load falls back to THIS instead of the built-in default —
+    // so a broken edit degrades to "your last working setup", not vanilla.
+    let lastGoodPath =
+        let dir = Path.GetDirectoryName configPath
+        if String.IsNullOrEmpty dir then "config.last-good.fsx"
+        else Path.Combine(dir, "config.last-good.fsx")
+
+    // Persist atomically (temp + rename) so a crash mid-write can't leave a
+    // truncated last-good. Best-effort: a write failure is logged, never fatal —
+    // saving the fallback must not break loading the real config.
+    let blessLastGood (content: string) : unit =
+        try
+            let tmp = lastGoodPath + ".tmp"
+            File.WriteAllText(tmp, content)
+            File.Move(tmp, lastGoodPath, true)
+        with ex ->
+            log (sprintf "could not save last-good config: %s" ex.Message)
 
     let clearWriters () =
         outWriter.GetStringBuilder().Clear() |> ignore
@@ -203,14 +227,17 @@ type FsiConfigEngine(defaultConfig: WtfConfig, configPath: string) =
     // The actual load/re-eval — runs ON the worker thread. Returns Ok config on
     // success, or Error message (so the caller distinguishes a real config from a
     // fallback: Load returns the default on Error; Reload KEEPS the current).
-    let tryLoadResult () : Result<WtfConfig, string> =
+    // Evaluate the config at `path`. On success, if `bless` is set, snapshot the
+    // source as the last-good fallback. Used for the real config (bless=true) and
+    // for the last-good file itself (bless=false — no point re-blessing it).
+    let tryLoadFrom (path: string) (bless: bool) : Result<WtfConfig, string> =
         let corePath = typeof<WtfConfig>.Assembly.Location
         if String.IsNullOrEmpty corePath then
             // Single-file publish: Assembly.Location is "" so we cannot #r a real
             // path. Degrade gracefully (the dev build is unaffected).
             Error "single-file build (assembly Location is empty) — hot-reload/load unavailable"
-        elif not (File.Exists configPath) then
-            Error (sprintf "no config at %s" configPath)
+        elif not (File.Exists path) then
+            Error (sprintf "no config at %s" path)
         else
             try
                 let s = ensureSession ()
@@ -232,29 +259,36 @@ type FsiConfigEngine(defaultConfig: WtfConfig, configPath: string) =
                 // top-level binding the expression eval below can read. FSI still
                 // honours the file's `#if`/`#r` directives (WTF_RUNTIME is defined
                 // so the seed's dev `#r` is skipped).
-                let content = File.ReadAllText configPath
+                let content = File.ReadAllText path
                 let scriptResult, scriptDiags = s.EvalInteractionNonThrowing content
                 match scriptResult with
                 | Choice2Of2 ex ->
                     Error (sprintf "config %s failed to evaluate: %s\n%s\n%s"
-                            configPath ex.Message (foldDiagnostics scriptDiags) (errWriter.ToString()))
+                            path ex.Message (foldDiagnostics scriptDiags) (errWriter.ToString()))
                 | Choice1Of2 _ ->
                     let exprResult, exprDiags = s.EvalExpressionNonThrowing "wtfConfig"
                     match exprResult with
                     | Choice1Of2 (Some fsiVal) ->
                         match fsiVal.ReflectionValue with
-                        | :? WtfConfig as c -> Ok c
+                        | :? WtfConfig as c ->
+                            // It compiled to a real config — remember it as the fallback.
+                            if bless then blessLastGood content
+                            Ok c
                         | other ->
                             Error (sprintf "config %s: `wtfConfig` is not a WtfConfig (got %s)"
-                                    configPath (if isNull (box other) then "null" else other.GetType().FullName))
+                                    path (if isNull (box other) then "null" else other.GetType().FullName))
                     | Choice1Of2 None ->
                         Error (sprintf "config %s: no `wtfConfig` value found — bind your config to `let wtfConfig = config { ... }`\n%s"
-                                configPath (foldDiagnostics exprDiags))
+                                path (foldDiagnostics exprDiags))
                     | Choice2Of2 ex ->
                         Error (sprintf "config %s: could not read `wtfConfig`: %s\n%s"
-                                configPath ex.Message (foldDiagnostics exprDiags))
+                                path ex.Message (foldDiagnostics exprDiags))
             with ex ->
                 Error (sprintf "config load threw: %s" ex.Message)
+
+    // The real config (blesses last-good on success) and the last-good fallback.
+    let tryLoadResult () : Result<WtfConfig, string> = tryLoadFrom configPath true
+    let tryLoadLastGood () : Result<WtfConfig, string> = tryLoadFrom lastGoodPath false
 
     // Live REPL eval — runs ON the worker thread. Try the code as an EXPRESSION
     // first (so a `config { ... }`/Command value comes back classified); if it is
@@ -302,18 +336,44 @@ type FsiConfigEngine(defaultConfig: WtfConfig, configPath: string) =
 
     let bump () = try debounce.Change(200, Timeout.Infinite) |> ignore with _ -> ()
 
+    // Fall back to the last-good config when the real one won't load; only if
+    // THAT also fails do we drop to the built-in default. Keeps a broken edit (or
+    // a stale host that can't compile the newest config) on your last working
+    // setup instead of vanilla.
+    let loadWithFallback () : WtfConfig =
+        if File.Exists lastGoodPath then
+            match runSyncOpt (loadTimeoutMs ()) tryLoadLastGood with
+            | Some(Ok c) -> log "reverted to last-good config"; c
+            | Some(Error msg) -> log (sprintf "last-good config unusable (%s) — using built-in default config" msg); defaultConfig
+            | None -> log "last-good load timed out — using built-in default config"; defaultConfig
+        else
+            log "no last-good config saved — using built-in default config"
+            defaultConfig
+
     interface IConfigEngine with
         member _.Load() =
             try
                 match runSyncOpt (loadTimeoutMs ()) tryLoadResult with
                 | Some(Ok c) -> log (sprintf "loaded config from %s" configPath); c
-                | Some(Error msg) -> log (sprintf "%s — using built-in default config" msg); defaultConfig
+                | Some(Error msg) -> log (sprintf "%s — trying last-good config" msg); loadWithFallback ()
                 | None ->
-                    log "config load timed out or worker unavailable — using built-in default config"
-                    defaultConfig
+                    log "config load timed out or worker unavailable — trying last-good config"
+                    loadWithFallback ()
             with ex ->
                 log (sprintf "worker load failed: %s — using built-in default config" ex.Message)
                 defaultConfig
+
+        member _.SaveDefault() =
+            // Bless the CURRENT config.fsx only if it compiles (tryLoadResult
+            // blesses as a side effect on success). Never overwrites a good
+            // last-good with a broken config.
+            try
+                match runSyncOpt (loadTimeoutMs ()) tryLoadResult with
+                | Some(Ok _) -> log (sprintf "saved %s as last-good default" configPath); true
+                | Some(Error msg) -> log (sprintf "save-default refused — config has errors: %s" msg); false
+                | None -> log "save-default timed out"; false
+            with ex ->
+                log (sprintf "save-default failed: %s" ex.Message); false
 
         member _.StartWatching(cb) =
             onReloadCb <- Some cb

@@ -16,10 +16,20 @@ open WTF.Config
 let private defaultCfg =
     { WtfConfig.defaults with Gaps = 99; ModKey = "DEFAULT_MARKER" }
 
+// Each config lives in its OWN temp directory so the `config.last-good.fsx`
+// sidecar the engine writes on a successful load stays isolated per test (a
+// shared dir would let one test's blessed fallback mask another's default case).
 let private writeTemp (content: string) : string =
-    let p = Path.Combine(Path.GetTempPath(), sprintf "wtf-cfg-%s.fsx" (Guid.NewGuid().ToString("N")))
+    let dir =
+        Directory.CreateDirectory(
+            Path.Combine(Path.GetTempPath(), sprintf "wtf-cfg-%s" (Guid.NewGuid().ToString("N")))).FullName
+    let p = Path.Combine(dir, "config.fsx")
     File.WriteAllText(p, content)
     p
+
+/// The last-good sidecar path the engine keeps beside a config file.
+let private lastGoodOf (configPath: string) : string =
+    Path.Combine(Path.GetDirectoryName configPath, "config.last-good.fsx")
 
 let private load (path: string) : WtfConfig =
     use engine = ConfigEngine.createForPath defaultCfg path
@@ -54,7 +64,8 @@ let ``a broken config falls back to the default`` () =
 
 [<Fact>]
 let ``a missing config falls back to the default`` () =
-    let cfg = load (Path.Combine(Path.GetTempPath(), sprintf "wtf-missing-%s.fsx" (Guid.NewGuid().ToString("N"))))
+    let dir = Path.Combine(Path.GetTempPath(), sprintf "wtf-missing-%s" (Guid.NewGuid().ToString("N")))
+    let cfg = load (Path.Combine(dir, "config.fsx"))   // isolated dir: no last-good present
     Assert.Equal("DEFAULT_MARKER", cfg.ModKey)
     Assert.Equal(99, cfg.Gaps)
 
@@ -127,10 +138,43 @@ let ``a reload that removes the wtfConfig binding does NOT keep the stale value`
     let first = engine.Load()
     Assert.Equal(5, first.Gaps)                       // genuinely loaded the first time
     File.WriteAllText(path, "let myConfig = config { gaps 9 }")   // renamed binding
+    // Remove the blessed last-good so the fallback is the built-in default: if the
+    // stale FSI binding leaked, Load would return gaps=5 even with no last-good.
+    File.Delete(lastGoodOf path)
     let second = engine.Load()
     File.Delete path
     Assert.Equal("DEFAULT_MARKER", second.ModKey)     // fell back, did NOT return stale gaps=5
     Assert.Equal(99, second.Gaps)
+
+// --- last-good fallback (save correct settings as default) -------------------
+
+[<Fact>]
+let ``a broken edit falls back to the last-good config, not the built-in default`` () =
+    // A successful load blesses the source as last-good; a later broken edit then
+    // degrades to THAT (your last working setup), not vanilla.
+    let path = writeTemp "let wtfConfig = config { modKey \"Hyper\"; gaps 7 }"
+    use engine = ConfigEngine.createForPath defaultCfg path
+    let first = engine.Load()
+    Assert.Equal("Hyper", first.ModKey)               // real load + bless
+    Assert.True(File.Exists(lastGoodOf path), "a successful load must save a last-good")
+    File.WriteAllText(path, "let wtfConfig = broken !! not F#")
+    let second = engine.Load()
+    File.Delete path
+    Assert.Equal("Hyper", second.ModKey)              // reverted to last-good, NOT DEFAULT_MARKER
+    Assert.Equal(7, second.Gaps)
+
+[<Fact>]
+let ``SaveDefault blesses a compiling config and refuses a broken one`` () =
+    let path = writeTemp "let wtfConfig = config { modKey \"Meta\"; gaps 3 }"
+    use engine = ConfigEngine.createForPath defaultCfg path
+    Assert.True(engine.SaveDefault(), "a compiling config should be saved")
+    Assert.True(File.Exists(lastGoodOf path))
+    File.WriteAllText(path, "let wtfConfig = nonsense %% not F#")
+    Assert.False(engine.SaveDefault(), "a broken config must NOT be blessed")
+    // The good last-good is still intact and still loads.
+    let reverted = engine.Load()
+    File.Delete path
+    Assert.Equal("Meta", reverted.ModKey)
 
 [<Fact>]
 let ``a broken hot-reload edit never invokes the callback (keeps current config)`` () =

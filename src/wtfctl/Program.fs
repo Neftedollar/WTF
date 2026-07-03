@@ -74,6 +74,10 @@ let toJson (args: string list) : string option =
     // Re-read ~/.config/wtf/config.fsx from disk and apply it live (xMonad Mod+q
     // for the config — the save-watcher does this automatically; this is on demand).
     | [ "reload" ] -> Some """{"cmd":"reload"}"""
+    // Bless the current config.fsx as the last-good default: if a later edit fails
+    // to compile, WTF falls back to this instead of the built-in vanilla config.
+    // Only saves if the current config actually compiles (won't bless a broken one).
+    | [ "save-default" ] -> Some """{"cmd":"save-default"}"""
     // Restart the whole compositor: quit with the session-reload code so the
     // wtf-session wrapper re-execs a freshly built/installed host (no reboot).
     // Clients close (Wayland has no handover); layout restores from the session.

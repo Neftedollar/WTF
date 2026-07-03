@@ -231,6 +231,7 @@ module Protocol =
                 elif flag "restore" then Some LoadSession
                 else None
             | Some "reload" -> Some ReloadConfig
+            | Some "save-default" -> Some SaveDefault
             | _ -> None
         with _ -> None
 

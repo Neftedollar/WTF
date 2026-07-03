@@ -26,8 +26,13 @@ wtfctl spawn kitty
 wtfctl master 2 | master inc | master dec
 wtfctl ratio 0.6
 wtfctl reload                   # re-read config.fsx and apply live (no restart)
+wtfctl save-default             # bless the current config as the last-good fallback
 wtfctl restart                  # restart the whole compositor into a fresh build
 ```
+
+`save-default` snapshots the current `config.fsx` as `config.last-good.fsx` (only
+if it compiles) — the fallback WTF loads if a later edit won't compile, instead of
+the built-in vanilla defaults. See [Configuration](configuration.md).
 
 `reload` re-reads `config.fsx` in place — instant, keeps every window. `restart`
 tears the compositor down and the `wtf-session` wrapper re-execs it, so a newly

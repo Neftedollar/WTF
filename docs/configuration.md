@@ -30,6 +30,14 @@ Three ways to work on it:
 
 You can also type-check without the WM: `dotnet fsi ~/.config/wtf/config.fsx`.
 
+**Last-good fallback.** Every time your config compiles, WTF snapshots it to
+`~/.config/wtf/config.last-good.fsx`. If a *later* start or `reload` hits a
+config that won't compile, it falls back to that last-good snapshot — your last
+working setup — instead of the built-in vanilla defaults, and only drops to
+vanilla if the snapshot is unusable too. Run **`wtfctl save-default`** to bless
+the current config as the fallback on demand (it refuses to save a config that
+doesn't compile, so the fallback is always known-good).
+
 ## Machine-aware autocomplete (Type Providers)
 
 With `open WTF.TypeProviders`, three providers turn *your machine* into types:

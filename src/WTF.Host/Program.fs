@@ -108,6 +108,15 @@ let private loadConfig () : WtfConfig =
     configEngine.Load()
 #endif
 
+/// Bless the current config.fsx as the last-good default (JIT) / no-op (AOT).
+/// Returns true iff it compiled and was saved.
+let private saveDefaultConfig () : bool =
+#if WTF_NO_FCS
+    false
+#else
+    configEngine.SaveDefault()
+#endif
+
 /// Start the config.fsx hot-reload watcher (JIT) / no-op (AOT — no FCS).
 let private startWatching (cb: WtfConfig -> unit) : unit =
 #if !WTF_NO_FCS
@@ -346,6 +355,12 @@ let private restoreSettings (saved: World) (live: World) : World =
 /// then it is a safe no-op, so an early dispatch can't NRE.
 let mutable private reloadConfigFromDisk : unit -> unit = ignore
 
+/// Forward hook for SaveDefault (`wtfctl save-default`): validate + snapshot the
+/// current config.fsx as the last-good fallback. Runs the FCS eval OFF the loop
+/// thread (like reloadConfigFromDisk) so blessing never freezes the session, and
+/// reports the outcome as a desktop notification. Wired at module init below.
+let mutable private saveDefaultToDisk : unit -> unit = ignore
+
 /// The single choke point for every command. History is recorded here and
 /// nowhere else, so it can never desync. Undo/Redo/Save/LoadSession/ReloadConfig
 /// are intercepted (the pure reducer can't see history/config); everything else
@@ -355,6 +370,7 @@ let private dispatch (cmd: Command) : unit =
     | Undo -> History.undo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
     | Redo -> History.redo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
     | ReloadConfig -> reloadConfigFromDisk ()
+    | SaveDefault -> saveDefaultToDisk ()
     | SaveSession -> SessionIO.save world
     | LoadSession ->
         match SessionIO.load () with
@@ -697,6 +713,21 @@ reloadConfigFromDisk <- fun () ->
             let c = loadConfig ()
             bridge.Post(Ffi.wtf_command_notify, fun () -> applyConfigReload c)
         with ex -> eprintfn "WTF: ReloadConfig failed (config unchanged): %O" ex)
+    |> ignore
+
+// Wire SaveDefault: bless the current config.fsx off the loop thread and surface
+// the result. Does NOT re-apply the config (no re-arrange) — it only persists the
+// last-good fallback, so it's safe to invoke any time.
+saveDefaultToDisk <- fun () ->
+    System.Threading.Tasks.Task.Run(fun () ->
+        try
+            let ok = saveDefaultConfig ()
+            let msg =
+                if ok then "current config saved as default (last-good)"
+                else "config has errors — default left unchanged"
+            eprintfn "WTF: save-default: %s" msg
+            desktopNotify "WTF" msg
+        with ex -> eprintfn "WTF: SaveDefault failed: %O" ex)
     |> ignore
 
 /// Handle an {"eval":"<code>"} socket request. JIT: routes the code to the FSI
