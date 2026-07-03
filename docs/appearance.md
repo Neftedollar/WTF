@@ -31,6 +31,62 @@ blur true        // backdrop blur behind translucent windows
 Both are rendered by scenefx. Blur only shows through translucent surfaces
 (e.g. a terminal with opacity < 1, or `inactiveOpacity` below 1.0).
 
+## Glass frames (watercolor)
+
+```fsharp
+glass true          // turn each window border into tinted glass
+glassTint 0.35      // how strongly the frame colour reads over the glass (0..1)
+glassFrost true     // true = frosted (blurred) backdrop; false = sharp backdrop
+glassRefraction 0.0 // px of edge lensing (subtle; see the honesty note below)
+cornerRadius 10     // pair with rounding for the full glass look
+borderWidth 5       // thin frames read best — the glass is a wash, not a slab
+```
+
+`glass` turns each window's border into a translucent **watercolor** strip: the
+backdrop (wallpaper, neighbours) shows through the frame, washed with the
+border's own colour. The focused window keeps its `activeBorder` hue, unfocused
+frames go `inactiveBorder` — so focus stays readable *through* the glass.
+Colours come straight from your config; nothing is hardcoded.
+
+`glassTint` is the wash strength (0..1): `0` = pure see-through backdrop (the
+frame all but disappears), `~0.3–0.5` = watercolor (recommended), high values
+approach a solid painted frame. `glassFrost true` blurs what's behind the frame
+(milky, soft — the classic frost); `false` keeps it sharp.
+
+**Honesty note on `glassRefraction`:** the rim can *lens* the backdrop (a WTF
+displacement shader inside scenefx bends the edge like a convex bead, and a
+thinner frame bends harder). It works, but at ordinary desktop DPI with thin
+frames the bend is subtle — do not expect the dramatic macOS "liquid glass"
+retina look. `0` (off) is the default; `~8–14` adds a faint wobble at the rim
+where there is high-contrast content behind the frame. It costs an extra
+backdrop copy per frame, so leave it off unless you like what it does on your
+screen.
+
+Cost note: the glass backdrop is recomputed around every window each frame via
+scenefx's per-rect path. WTF logs `Optimized blur buffer not populated; using
+the per-rect blur path` once (INFO) — that is expected and harmless: the frame
+uses the per-rect path rather than the whole-screen optimized-blur buffer
+(which WTF does not set up), and it appears on every GPU, not just Intel. Keep
+`borderWidth` modest on weaker GPUs to bound the per-frame cost. Off in safe
+mode with the rest of the eye-candy.
+
+## Focus glow
+
+```fsharp
+glow true           // the FOCUSED frame emits a halo in its own colour
+glowSigma 20.0      // halo spread in px (bigger = softer, wider)
+glowIntensity 0.6   // halo strength 0..1
+```
+
+The focused window's frame radiates a soft colored halo — "the frame emits
+light". The hue is the frame's own colour, so `activeBorder` drives it (change
+the theme and the glow follows; a per-window border override glows in that
+override's colour). Only the focused window glows; the halo is centered (no
+offset — a shadow *falls*, a glow *radiates*) and hugs the frame's rounded
+corners. Hidden and fullscreen windows never glow. Rendered as a scenefx
+shadow node, so it moves with the window's animations. Forced off in safe mode
+with the rest of the eye-candy.
+
 ## Drop shadows (macOS-style)
 
 ```fsharp
@@ -94,6 +150,28 @@ borderColor (fun ctx -> Color.toHex (ctx.Palette.Accents 0.3))
 
 `Palette` fields: `Base`, `Surface`, `Overlay`, `Text`, `Subtext`, and
 `Accents` — a ramp you sample with a number in 0–1 instead of a fixed list.
+
+#### Contrast frames from the wallpaper
+
+`Palette.contrastAccent` picks the palette color that stands out most against
+the wallpaper's ground (`Base`) — perceptual distance in OKLab, gated so the
+pick reads as *color*, not gray. On a **monochrome** wallpaper nothing clears
+the bar, it returns `None`, and *you* choose the out-of-palette color — that's
+`contrastAccentOr`:
+
+```fsharp
+borderColor (fun ctx ->
+    // From the wallpaper's own palette when it has color to offer;
+    // YOUR color when the wallpaper is monochrome (grays, solid dark).
+    let accent = ctx.Palette |> Palette.contrastAccentOr (Color.ofHexOr Color.white "#f38ba8")
+    // Focused = full contrast; unfocused = the same hue sunk toward Overlay.
+    let c = if ctx.Focused then accent else Color.mix 0.7 accent ctx.Palette.Overlay
+    Color.toHex c)
+```
+
+Change the wallpaper and the frames re-derive themselves; the glass tint and
+the focus glow follow the same color automatically. Deterministic: the same
+wallpaper always produces the same frame color.
 
 ## Bar & omnibox
 

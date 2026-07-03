@@ -111,6 +111,27 @@ If a freeze ever outlasts recovery, the escape hatch is unchanged: switch to a
 TTY (`Ctrl+Alt+F3`), check the newest log, and `kill <wtf pid>` — the wrapper
 restarts or falls back cleanly.
 
+## WTF won't start after a rebuild
+
+If you dogfood WTF and a `wtf-reload` / `wtf-update` leaves it not starting:
+
+- `wtf-update` **self-tests** the freshly installed build and **rolls back** to
+  the previous one when the self-test fails, so a bad build normally never
+  reaches your session at all — the command exits non-zero and nothing is
+  applied. Read its output.
+- If a broken build *does* run (e.g. it starts then crashes), the `wtf-session`
+  wrapper retries a few times, then escalates to `WTF_SAFE_MODE=1` (all eye-candy
+  and the user `config.fsx` bypassed), then drops to a fallback shell. The newest
+  `~/.local/state/wtf/session-*.log` has the reason.
+- The session log distinguishes an intentional restart from a crash: a line
+  `host exited rc=42` is a `wtfctl restart` / `wtf-reload` re-exec, **not** a
+  crash. Repeated *instant* rc=42 exits trigger the loop guard
+  (`rc=42 loop guard: … treating as a crash`) — usually a stray `exit 42` or
+  `wtfctl restart` reachable at startup from `config.fsx` or a startup app.
+- To recover from anywhere: switch to a TTY (`Ctrl+Alt+F3`), log in, and run
+  `~/Dev/WTF/scripts/wtf-update` to build + install a fix. Your display manager
+  also still lists GNOME (or your previous session) as a fallback login.
+
 ## Environment variables
 
 | Variable | Effect |
@@ -118,6 +139,7 @@ restarts or falls back cleanly.
 | `WTF_SAFE_MODE=1` | safe mode: default config, minimal visuals, no startup apps |
 | `WTF_DEBUG_KEYS=1` | log unbound key presses (off by default — it's a keylogger) |
 | `WTF_HOST=/path` | which binary `wtf-session` launches |
+| `WTF_SELFTEST=1` | JIT the managed assemblies and exit 0 without starting the compositor (used by `wtf-update` to validate a build before applying it) |
 
 ## Reporting a bug
 

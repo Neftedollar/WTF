@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Rebuild WTF from THIS checkout and copy it over the live install prefix — a
+# fast dogfooding update that skips the full self-contained republish. The
+# native shim/scenefx .so and the managed WTF.*.dll (portable IL) are dropped in
+# place; the runtime already staged in the prefix runs them. Pair with
+# `wtf-reload` (this + `wtfctl restart`), which the wtf-session wrapper turns
+# into an in-place re-exec (rc=42) — no logout, no reboot.
+#
+#   ~/Dev/WTF/scripts/wtf-update       # rebuild + install over the live prefix
+#
+# Run from a WTF terminal or a TTY. A broken build can't lock you out: the
+# wrapper's crash loop falls back to safe-mode then a shell, and GNOME stays
+# selectable at the greeter.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+ROOT="$PWD"
+PREFIX="${WTF_PREFIX:-/usr/local}"
+LIBWTF="$PREFIX/lib/wtf"
+
+[ -d "$HOME/.dotnet" ] && { export DOTNET_ROOT="$HOME/.dotnet"; export PATH="$HOME/.dotnet:$PATH"; }
+export DOTNET_CLI_TELEMETRY_OPTOUT=1 LC_ALL=C
+
+if [ ! -d "$LIBWTF" ]; then
+  echo "wtf-update: $LIBWTF not found — run scripts/install.sh once first." >&2
+  exit 1
+fi
+if [ ! -w "$LIBWTF" ]; then
+  echo "wtf-update: $LIBWTF is not writable by $USER." >&2
+  echo "            fix once with:  sudo chown -R $USER:$USER $LIBWTF" >&2
+  exit 1
+fi
+
+export PKG_CONFIG_PATH="$ROOT/compositor/.wlroots/lib/pkgconfig:$ROOT/compositor/.scenefx/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
+# 1. Vendored scenefx: rebuild from the (possibly locally-edited) source tree so
+#    shader/glass iterations land. Fall back to the full script on a fresh clone.
+if [ -d "$ROOT/build/scenefx-src/build" ]; then
+  echo ">> scenefx (rebuild from source)"
+  ninja -C "$ROOT/build/scenefx-src/build"
+  ninja -C "$ROOT/build/scenefx-src/build" install >/dev/null
+else
+  echo ">> scenefx (full build)"
+  bash scripts/build-scenefx.sh
+fi
+
+# 2. C shim.
+echo ">> shim"
+if [ -d "$ROOT/compositor/build" ]; then
+  ninja -C "$ROOT/compositor/build"
+else
+  bash scripts/build.sh
+fi
+
+# 3. Managed host + wtfctl.
+echo ">> managed (Release)"
+dotnet build WTF.slnx -c Release --nologo -v q
+
+# --- atomic install with rollback ------------------------------------------
+# NEVER `cp` in place over a file the running compositor has mmap'd (shim,
+# scenefx, wlroots, the managed dlls, even this wrapper's bash source): O_TRUNC
+# rewrites the SAME inode and a later page fault on a cold page SIGBUSes the live
+# session. Instead copy to a temp beside the target and `mv` (rename) over it —
+# the old inode stays valid for every process that already opened it, and the
+# swap is atomic. Back up first so a failed self-test can roll the whole set
+# back to the previous working build.
+INSTALLED=()          # dst paths we replaced (for rollback)
+install_atomic() {    # <src> <dst>
+  local src="$1" dst="$2"
+  [ -f "$src" ] || { echo "wtf-update: missing build artifact: $src" >&2; return 1; }
+  if [ -f "$dst" ]; then cp -fP "$dst" "$dst.wtfbak" || return 1; fi
+  cp -fP "$src" "$dst.wtfnew.$$" || return 1
+  mv -f "$dst.wtfnew.$$" "$dst" || return 1
+  INSTALLED+=("$dst")
+}
+rollback() {
+  echo ">> rolling back to the previous build" >&2
+  local d
+  for d in "${INSTALLED[@]}"; do
+    [ -f "$d.wtfbak" ] && mv -f "$d.wtfbak" "$d"
+  done
+}
+cleanup_baks() { local d; for d in "${INSTALLED[@]}"; do rm -f "$d.wtfbak"; done; }
+
+echo ">> installing over $LIBWTF (atomic)"
+install_atomic "$ROOT/compositor/build/libwtf_shim.so"           "$LIBWTF/libwtf_shim.so"     || { rollback; exit 1; }
+install_atomic "$ROOT/compositor/.scenefx/lib/libscenefx-0.4.so" "$LIBWTF/libscenefx-0.4.so"  || { rollback; exit 1; }
+if [ -f "$ROOT/compositor/.wlroots/lib/libwlroots-0.19.so" ]; then
+  install_atomic "$ROOT/compositor/.wlroots/lib/libwlroots-0.19.so" "$LIBWTF/libwlroots-0.19.so" || { rollback; exit 1; }
+fi
+
+HB="$ROOT/src/WTF.Host/bin/Release/net10.0"
+CB="$ROOT/src/wtfctl/bin/Release/net10.0"
+install_atomic "$HB/WTF.Host.dll" "$LIBWTF/WTF.Host.dll" || { rollback; exit 1; }
+install_atomic "$HB/WTF.Core.dll" "$LIBWTF/WTF.Core.dll" || { rollback; exit 1; }
+# wtfctl only needs its own dll refreshed: it emits the restart command as a raw
+# JSON string, and the {"cmd":"restart"} PARSE lives host-side in WTF.Core (the
+# copy in $LIBWTF root), so ctl/ carries no WTF.Core of its own.
+if [ -d "$LIBWTF/ctl" ]; then
+  install_atomic "$CB/wtfctl.dll" "$LIBWTF/ctl/wtfctl.dll" || { rollback; exit 1; }
+fi
+
+# The session wrapper (rc=42 re-exec + all the anti-lockout logic) — atomic too,
+# so replacing it can never corrupt the bash source the CURRENT wrapper is still
+# reading from (it keeps the old inode).
+if [ -w "$PREFIX/bin" ] 2>/dev/null; then
+  install_atomic "$ROOT/scripts/wtf-session" "$PREFIX/bin/wtf-session" || { rollback; exit 1; }
+  chmod 755 "$PREFIX/bin/wtf-session" 2>/dev/null || true
+fi
+
+# --- self-test the freshly-installed prefix, roll back if it can't even start --
+# Catches version-skew bricks (a WTF.*.dll referencing an assembly not in the
+# staged self-contained runtime / frozen deps.json): the apphost JITs the
+# managed entrypoint and exits 0, or throws -> nonzero -> we restore the previous
+# build so the session is NEVER left crash-looping at next login.
+echo ">> self-test"
+if WTF_SELFTEST=1 "$LIBWTF/WTF.Host" >/dev/null 2>&1; then
+  cleanup_baks
+  echo ">> wtf-update OK. Apply live:  wtfctl restart   (or use wtf-reload)"
+else
+  echo "wtf-update: self-test FAILED — the new build won't start." >&2
+  rollback
+  cleanup_baks
+  echo "wtf-update: rolled back to the previous build; nothing applied." >&2
+  exit 1
+fi

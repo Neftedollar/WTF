@@ -201,6 +201,13 @@ type WtfConfig =
       InactiveBorder: string            // appearance: unfocused border color (#hex)
       CornerRadius: int                 // appearance: rounded corners (scenefx)
       Blur: bool                        // appearance: backdrop blur (scenefx)
+      Glass: bool                       // appearance: frosted-glass window frames (border blurs the backdrop)
+      GlassTint: float                  // glass border tint alpha over the blur (0..1; lower = clearer)
+      GlassRefraction: float            // px the glass rim lenses the backdrop (0 = flat frost; ~6-14 = liquid glass)
+      GlassFrost: bool                  // glass lens source: true = frosted (blurred), false = clear water-drop
+      Glow: bool                        // appearance: colored halo around the FOCUSED frame
+      GlowSigma: float                  // glow spread in px
+      GlowIntensity: float              // glow strength 0..1
       Shadow: bool                      // appearance: macOS-style drop shadow (scenefx)
       ShadowSigma: float                // shadow blur spread in px
       ShadowColor: string               // shadow color (#hex)
@@ -234,6 +241,13 @@ module WtfConfig =
           InactiveBorder = "#45475a"
           CornerRadius = 0
           Blur = false
+          Glass = false
+          GlassTint = 0.35
+          GlassRefraction = 0.0
+          GlassFrost = false
+          Glow = false
+          GlowSigma = 20.0
+          GlowIntensity = 0.6
           Shadow = false
           ShadowSigma = 24.0
           ShadowColor = "#000000"
@@ -369,6 +383,31 @@ type ConfigBuilder() =
     member _.CornerRadius(c, v) = { c with CornerRadius = v }
     [<CustomOperation "blur">]
     member _.Blur(c, v) = { c with Blur = v }
+    /// Frosted-glass window frames (scenefx): the border blurs the backdrop
+    /// behind it, tinted translucent. Best paired with `cornerRadius`.
+    [<CustomOperation "glass">]
+    member _.Glass(c, v) = { c with Glass = v }
+    /// Glass border tint alpha over the blur (0..1; lower = clearer glass).
+    [<CustomOperation "glassTint">]
+    member _.GlassTint(c, v: float) = { c with GlassTint = v }
+    /// Glass edge refraction: px the rim lenses the backdrop (0 = flat frost;
+    /// ~6-14 = the "liquid glass" edge-bend). Needs `glass` + a `cornerRadius`.
+    [<CustomOperation "glassRefraction">]
+    member _.GlassRefraction(c, v: float) = { c with GlassRefraction = v }
+    /// Glass lens source: false (default) = clear "water-drop" glass that
+    /// refracts the sharp backdrop; true = frosted glass (lens the blur).
+    [<CustomOperation "glassFrost">]
+    member _.GlassFrost(c, v) = { c with GlassFrost = v }
+    /// Focus glow: a colored halo around the FOCUSED window's frame, in the
+    /// frame's own color (`activeBorder` drives the hue). "The frame emits light."
+    [<CustomOperation "glow">]
+    member _.Glow(c, v) = { c with Glow = v }
+    /// Glow halo spread in px (like a blur sigma; bigger = softer, wider halo).
+    [<CustomOperation "glowSigma">]
+    member _.GlowSigma(c, v: float) = { c with GlowSigma = v }
+    /// Glow strength 0..1 (alpha of the halo at its brightest).
+    [<CustomOperation "glowIntensity">]
+    member _.GlowIntensity(c, v: float) = { c with GlowIntensity = v }
     [<CustomOperation "shadow">]
     member _.Shadow(c, v) = { c with Shadow = v }
     [<CustomOperation "shadowSigma">]

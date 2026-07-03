@@ -17,8 +17,22 @@ find_scenefx_lib() {
   find "$PREFIX/lib" "$PREFIX/lib64" -name 'libscenefx-0.4.so' -print -quit 2>/dev/null
 }
 
+# The WTF patches are ABI-load-bearing (the glass-refraction patch adds a public
+# symbol the shim links against), so a prebuilt prefix is only valid if it was
+# built from the CURRENT patch set. Stamp the prefix with a hash of the patches
+# and force a rebuild when they change — otherwise a stale cached .scenefx would
+# silently miss new symbols and the shim link would fail far from the cause.
+PATCH_STAMP="$PREFIX/.wtf-patchset.sha256"
+patchset_hash() {
+  cat "$ROOT"/packaging/patches/scenefx-*.patch 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+
 if [ -n "$(find_scenefx_lib)" ]; then
-  echo ">> scenefx already built at $PREFIX"; exit 0
+  if [ "$(cat "$PATCH_STAMP" 2>/dev/null)" = "$(patchset_hash)" ]; then
+    echo ">> scenefx already built at $PREFIX (patch set current)"; exit 0
+  fi
+  echo ">> scenefx prefix present but patch set changed — rebuilding"
+  rm -rf "$PREFIX"
 fi
 
 echo ">> fetching scenefx $TAG"
@@ -26,20 +40,27 @@ rm -rf "$SRC"
 git clone --depth 1 --branch "$TAG" https://github.com/wlrfx/scenefx.git "$SRC"
 
 # WTF patches on the pinned tag (see packaging/patches/*.patch for rationale):
-#   - primary-node fallback: machines without a DRM RENDER node (VMs without
-#     GPU passthrough, CI) get software GL via kms_swrast on the card node
-#     instead of a refused startup.
+#   - glass-refraction: adds the frosted-glass edge-refraction shader + a public
+#     wlr_scene_rect_set_refraction() symbol. REQUIRED — the shim links it, so a
+#     failure to apply must abort rather than yield an unlinkable scenefx.
+#   - primary-node fallback: software GL on render-node-less machines (CI/VMs).
+#     Optional — a real GPU builds fine without it, so it only warns.
+REQUIRED_PATCHES="scenefx-glass-refraction.patch"
 for p in "$ROOT"/packaging/patches/scenefx-*.patch; do
   [ -f "$p" ] || continue
-  echo ">> applying $(basename "$p")"
-  # A patch that no longer applies to the pinned tag must NOT abort the build:
-  # the fallback it adds only matters on render-node-less machines (CI/VMs), and
-  # a real GPU builds fine without it. Warn loudly and continue so a stale patch
-  # never blocks the whole compositor build; re-port it separately.
-  if ! git -C "$SRC" apply "$p"; then
-    echo "build-scenefx.sh: WARNING — $(basename "$p") did not apply to $TAG; " \
-         "skipping (render-node fallback absent — fine on real GPUs)" >&2
+  base="$(basename "$p")"
+  echo ">> applying $base"
+  if git -C "$SRC" apply "$p"; then
+    continue
   fi
+  if printf '%s\n' $REQUIRED_PATCHES | grep -qx "$base"; then
+    echo "build-scenefx.sh: FATAL — required patch $base did not apply to $TAG;" \
+         "scenefx would build without the glass-refraction ABI and the shim" \
+         "would fail to link. Re-port the patch to the pinned tag." >&2
+    exit 1
+  fi
+  echo "build-scenefx.sh: WARNING — $base did not apply to $TAG; skipping" \
+       "(optional; render-node fallback absent — fine on real GPUs)" >&2
 done
 
 echo ">> building scenefx -> $PREFIX"
@@ -57,5 +78,8 @@ if ! meson setup "$SRC/build" "$SRC" --prefix="$PREFIX" --libdir=lib \
 fi
 ninja -C "$SRC/build"
 ninja -C "$SRC/build" install >/dev/null
+# Record which patch set this prefix was built from so a later run with changed
+# patches invalidates the early-exit above and rebuilds.
+patchset_hash > "$PATCH_STAMP"
 PC_DIR="$(dirname "$(find "$PREFIX" -name 'scenefx-0.4.pc' -print -quit)")"
 echo ">> scenefx installed: $(PKG_CONFIG_PATH="$PC_DIR" pkg-config --modversion scenefx-0.4)"

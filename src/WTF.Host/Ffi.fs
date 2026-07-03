@@ -87,9 +87,17 @@ module Ffi =
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_blur(int enabled, int radius, int passes)
 
+    /// Frosted-glass window frames: border blurs the backdrop, tinted translucent.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_glass(int enabled, double tintAlpha, double refraction, int frost)
+
     /// macOS-style drop shadow under every window (scenefx shadow nodes).
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_shadow(int enabled, double sigma, double r, double g, double b, double a, int dx, int dy)
+
+    /// Focus glow: colored halo around the focused frame (activeBorder hue).
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_glow(int enabled, double sigma, double intensity)
 
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_fullscreen(int id, int on)

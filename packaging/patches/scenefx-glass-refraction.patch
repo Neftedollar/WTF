@@ -1,0 +1,660 @@
+diff --git a/include/render/fx_renderer/shaders.h b/include/render/fx_renderer/shaders.h
+index 539a802..43bdf91 100644
+--- a/include/render/fx_renderer/shaders.h
++++ b/include/render/fx_renderer/shaders.h
+@@ -119,6 +119,17 @@ struct tex_shader {
+ 	GLint radius_bottom_right;
+ 
+ 	GLint discard_transparent;
++
++	// Frosted-glass edge refraction (WTF); 0 refraction = untouched.
++	GLint refraction;
++	GLint tex_scale;
++	// Clip hole for the honest glass ring (WTF); clip_size 0 = no hole.
++	GLint clip_size;
++	GLint clip_position;
++	GLint clip_radius_top_left;
++	GLint clip_radius_top_right;
++	GLint clip_radius_bottom_left;
++	GLint clip_radius_bottom_right;
+ };
+ 
+ bool link_tex_program(struct tex_shader *shader, GLint client_version, enum fx_tex_shader_source source);
+diff --git a/include/scenefx/render/pass.h b/include/scenefx/render/pass.h
+index 491fabc..3407b11 100644
+--- a/include/scenefx/render/pass.h
++++ b/include/scenefx/render/pass.h
+@@ -58,6 +58,16 @@ struct fx_render_texture_options {
+ 	enum corner_location corners;
+ 	int corner_radius;
+ 	bool discard_transparent;
++	// Frosted-glass edge refraction (WTF): px the sampled backdrop is displaced
++	// along the rounded-edge normal at the rim. 0 (the default) = no refraction,
++	// so ordinary texture draws are unaffected.
++	float refraction;
++	// Clip HOLE (WTF honest glass ring): a rounded region cut OUT of the draw so
++	// the (refracted) backdrop fills only the ring around a window. Zero-size
++	// area (the default) = no hole.
++	struct wlr_box clip_hole;
++	int clip_hole_corner_radius;
++	enum corner_location clip_hole_corners;
+ };
+ 
+ struct fx_render_rect_options {
+diff --git a/include/scenefx/types/wlr_scene.h b/include/scenefx/types/wlr_scene.h
+index f190801..87a1db9 100644
+--- a/include/scenefx/types/wlr_scene.h
++++ b/include/scenefx/types/wlr_scene.h
+@@ -151,6 +151,13 @@ struct wlr_scene_rect {
+ 	enum corner_location corners;
+ 	bool backdrop_blur;
+ 	bool backdrop_blur_optimized;
++	// Frosted-glass edge refraction (WTF): px the backdrop is lensed along this
++	// rect's rounded edge. 0 (default) = plain backdrop blur.
++	float refraction;
++	// When refraction > 0: true = lens the FROSTED (globally blurred) backdrop;
++	// false (default) = lens a near-SHARP copy of the backdrop, so the edge reads
++	// as clear "water-drop" glass rather than flat frost.
++	bool refraction_frost;
+ 
+ 	bool accepts_input;
+ 	struct clipped_region clipped_region;
+@@ -534,6 +541,22 @@ void wlr_scene_rect_set_backdrop_blur(struct wlr_scene_rect *rect,
+ void wlr_scene_rect_set_backdrop_blur_optimized(struct wlr_scene_rect *rect,
+ 		bool enabled);
+ 
++/**
++* Sets the frosted-glass edge refraction strength, in px of maximum backdrop
++* displacement at the rounded rim. 0 (the default) is plain backdrop blur.
++* Only has a visible effect together with backdrop blur + a corner radius.
++*/
++void wlr_scene_rect_set_refraction(struct wlr_scene_rect *rect,
++		float refraction);
++
++/**
++* Selects the refraction source: true lenses the frosted (globally blurred)
++* backdrop; false (the default) lenses a near-sharp copy for clear "water-drop"
++* glass. Only meaningful when refraction > 0.
++*/
++void wlr_scene_rect_set_refraction_frost(struct wlr_scene_rect *rect,
++		bool frost);
++
+ /**
+  * Add a node displaying a shadow to the scene-graph.
+  */
+diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
+index 0592c4d..832c012 100644
+--- a/render/fx_renderer/fx_pass.c
++++ b/render/fx_renderer/fx_pass.c
+@@ -376,6 +376,28 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
+ 			fx_options->corner_radius : 0);
+ 	glUniform1f(shader->radius_bottom_right, (CORNER_LOCATION_BOTTOM_RIGHT & corners) == CORNER_LOCATION_BOTTOM_RIGHT ?
+ 			fx_options->corner_radius : 0);
++	// Frosted-glass edge refraction: the shader displaces its sample by up to
++	// `refraction` px along the rounded-edge normal. tex_scale converts that px
++	// offset into UV space (the glass backdrop is drawn 1:1 over the monitor, so
++	// one screen px == one texel). 0 refraction leaves ordinary draws untouched.
++	glUniform1f(shader->refraction, fx_options->refraction);
++	glUniform2f(shader->tex_scale,
++			1.0f / (float)options->texture->width,
++			1.0f / (float)options->texture->height);
++	// Clip hole (glass ring): cut the window interior out of the (refracted)
++	// backdrop so only the ring renders. Zero size disables it in the shader.
++	enum corner_location hole_c = fx_options->clip_hole_corners;
++	int hole_r = fx_options->clip_hole_corner_radius;
++	glUniform2f(shader->clip_size, fx_options->clip_hole.width, fx_options->clip_hole.height);
++	glUniform2f(shader->clip_position, fx_options->clip_hole.x, fx_options->clip_hole.y);
++	glUniform1f(shader->clip_radius_top_left,
++			(CORNER_LOCATION_TOP_LEFT & hole_c) == CORNER_LOCATION_TOP_LEFT ? hole_r : 0);
++	glUniform1f(shader->clip_radius_top_right,
++			(CORNER_LOCATION_TOP_RIGHT & hole_c) == CORNER_LOCATION_TOP_RIGHT ? hole_r : 0);
++	glUniform1f(shader->clip_radius_bottom_left,
++			(CORNER_LOCATION_BOTTOM_LEFT & hole_c) == CORNER_LOCATION_BOTTOM_LEFT ? hole_r : 0);
++	glUniform1f(shader->clip_radius_bottom_right,
++			(CORNER_LOCATION_BOTTOM_RIGHT & hole_c) == CORNER_LOCATION_BOTTOM_RIGHT ? hole_r : 0);
+ 
+ 	set_proj_matrix(shader->proj, pass->projection_matrix, &dst_box);
+ 	set_tex_matrix(shader->tex_proj, options->transform, &src_fbox);
+@@ -859,6 +881,34 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
+ 	// Artifacts with NEAREST filter
+ 	fx_options->tex_options.base.filter_mode = WLR_SCALE_FILTER_BILINEAR;
+ 
++	// Sharp lens (num_passes == 0, WTF clear "water-drop" glass): skip the
++	// dual-kawase down/upscale entirely and make a full-res 1:1 copy of the
++	// backdrop into the effects buffer. The caller then displaces a CRISP
++	// backdrop — refraction you can actually SEE bending true-colour content,
++	// not a frosted smear — while still sampling a buffer distinct from
++	// pass->buffer (so no read-while-write self-sampling). render_blur_effects
++	// with neutral params (noise 0, brightness/contrast/saturation 1) is an
++	// identity passthrough copy.
++	if (blur_data->num_passes <= 0) {
++		// The lens displaces samples up to `refraction` px past the ring (the
++		// outer half pulls the backdrop OUTWARD). Expand the copied region by
++		// that margin so every displaced sample lands on real copied content
++		// instead of stale/uninitialised effects-buffer pixels (which read as
++		// white blow-outs along straight edges).
++		int lens_margin = (int)fx_options->tex_options.refraction + 4;
++		wlr_region_expand(&damage, &damage, lens_margin);
++		fx_framebuffer_bind(pass->fx_effect_framebuffers->effects_buffer);
++		fx_options->tex_options.base.clip = &damage;
++		fx_options->tex_options.base.texture = fx_texture_from_buffer(
++				&renderer->wlr_renderer, pass->buffer->buffer);
++		render_blur_effects(pass, fx_options);   // neutral => sharp copy
++		fx_options->current_buffer = pass->fx_effect_framebuffers->effects_buffer;
++		pixman_region32_fini(&scaled_damage);
++		pixman_region32_fini(&damage);
++		fx_framebuffer_bind(pass->buffer);
++		return fx_options->current_buffer;
++	}
++
+ 	// Downscale
+ 	for (int i = 0; i < blur_data->num_passes; ++i) {
+ 		wlr_region_scale(&scaled_damage, &damage, 1.0f / (1 << (i + 1)));
+@@ -929,7 +979,17 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
+ 	struct fx_framebuffer *buffer = pass->fx_effect_framebuffers->optimized_blur_buffer;
+ 	if (!buffer || !fx_options->use_optimized_blur) {
+ 		if (!buffer) {
+-			wlr_log(WLR_ERROR, "Warning: Failed to use optimized blur");
++			/* WTF patch: log ONCE, not per blur draw per frame. A compositor
++			 * that never populates the optimized-blur buffer (WTF's glass uses
++			 * the per-rect path by design) would otherwise emit this at
++			 * ERROR level for every glass border on every damaged frame. */
++			static bool warned_no_optimized = false;
++			if (!warned_no_optimized) {
++				warned_no_optimized = true;
++				wlr_log(WLR_INFO, "Optimized blur buffer not populated; "
++					"using the per-rect blur path (expected under WTF glass; "
++					"logged once)");
++			}
+ 		}
+ 		pixman_region32_translate(&translucent_region, dst_box.x, dst_box.y);
+ 		pixman_region32_intersect(&translucent_region, &translucent_region, options->clip);
+diff --git a/render/fx_renderer/gles2/shaders/tex.frag b/render/fx_renderer/gles2/shaders/tex.frag
+index 08ad3a1..b9e3d70 100644
+--- a/render/fx_renderer/gles2/shaders/tex.frag
++++ b/render/fx_renderer/gles2/shaders/tex.frag
+@@ -37,18 +37,146 @@ uniform float radius_bottom_right;
+ 
+ uniform bool discard_transparent;
+ 
+-vec4 sample_texture() {
++// Frosted-glass edge refraction (WTF): when `refraction` > 0 the sampled
++// backdrop is displaced along the rounded-rect edge normal, strongest at the
++// rim and fading inward — the "liquid glass" lensing macOS Tahoe has. 0 = off,
++// so every ordinary window texture (refraction defaults to 0) is untouched.
++uniform float refraction;   // px displacement at the rim
++uniform vec2 tex_scale;     // 1.0 / texture_size; turns a px offset into a UV offset
++
++// Clip HOLE (WTF honest glass frame): cut this rounded region out of the draw so
++// the refracted backdrop only fills the RING around a window, not the window
++// itself. clip_size == 0 disables it (ordinary draws are unaffected).
++uniform vec2 clip_size;
++uniform vec2 clip_position;
++uniform float clip_radius_top_left;
++uniform float clip_radius_top_right;
++uniform float clip_radius_bottom_left;
++uniform float clip_radius_bottom_right;
++
++vec4 sample_texture(vec2 uv) {
+ #if SOURCE == SOURCE_TEXTURE_RGBA || SOURCE == SOURCE_TEXTURE_EXTERNAL
+-	return texture2D(tex, v_texcoord);
++	return texture2D(tex, uv);
+ #elif SOURCE == SOURCE_TEXTURE_RGBX
+-	return vec4(texture2D(tex, v_texcoord).rgb, 1.0);
++	return vec4(texture2D(tex, uv).rgb, 1.0);
+ #endif
+ }
+ 
+ float corner_alpha(vec2 size, vec2 position, float round_tl, float round_tr, float round_bl, float round_br);
+ 
++// Distance-field scale for mediump-only GLES2 GPUs (no
++// GL_FRAGMENT_PRECISION_HIGH): glass_sd squares its inputs, and rect
++// half-sizes in raw px (hundreds) overflow fp16 (max ~65504) into Inf/NaN.
++// Working in 1/64-px units keeps every square well inside fp16 while all the
++// derived RATIOS (t across the ring, the normal direction) are scale-free.
++// 1/64 is a power of two, so px values stay exactly representable.
++#define SD_SCALE 0.015625
++
++// Signed distance to a rounded rect centered on the origin (negative inside).
++// Inputs are expected PRE-SCALED by SD_SCALE (see above).
++float glass_sd(vec2 p, vec2 half_size, float r) {
++	vec2 q = abs(p) - half_size + r;
++	return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
++}
++
++// Convex glass bead: model a lens cross-section ACROSS the ring width. `t` runs
++// from 0 at the outer rim to 1 at the inner (window) edge; a parabolic height
++// profile h(t)=1-(2t-1)^2 has a slope that FLIPS sign across the ring, so the
++// backdrop is pulled outward on the outer half and inward on the inner half —
++// an S-curve, the tell-tale of a rounded convex bead rather than flat glass. A
++// thinner ring packs that same slope into fewer pixels, so it curves *harder*
++// (why a 4px frame refracts more than a 26px one). No-op when refraction<=0, so
++// ordinary window textures (refraction defaults to 0) are untouched.
++vec2 refract_texcoord() {
++	if (refraction <= 0.0) {
++		return v_texcoord;
++	}
++	// All px-space quantities pre-scaled by SD_SCALE for fp16 safety.
++	vec2 half_size = size * (0.5 * SD_SCALE);
++	float ro = max(max(radius_top_left, radius_top_right),
++			max(radius_bottom_left, radius_bottom_right)) * SD_SCALE;
++	vec2 p = (gl_FragCoord.xy - (position + size * 0.5)) * SD_SCALE;
++	float sd_outer = glass_sd(p, half_size, ro);   // <= 0 inside the outer contour
++
++	// Position across the ring. With a clip hole (honest frame) the far side of
++	// the lens is the window edge; without one, fall back to a fixed inward band.
++	float t;
++	if (clip_size.x > 0.5 && clip_size.y > 0.5) {
++		vec2 clip_half = clip_size * (0.5 * SD_SCALE);
++		float ri = max(max(clip_radius_top_left, clip_radius_top_right),
++				max(clip_radius_bottom_left, clip_radius_bottom_right)) * SD_SCALE;
++		vec2 pc = (gl_FragCoord.xy - (clip_position + clip_size * 0.5)) * SD_SCALE;
++		float sd_inner = glass_sd(pc, clip_half, ri);   // >= 0 within the ring
++		float denom = (-sd_outer) + sd_inner;           // ring width along the normal
++		t = denom > 1e-3 * SD_SCALE ? (-sd_outer) / denom : 0.0;
++	} else {
++		float band = max(refraction * 3.0, 12.0) * SD_SCALE;
++		t = -sd_outer / band;
++	}
++	t = clamp(t, 0.0, 1.0);
++
++	// Slope of the parabolic bead, normalised to [-1, 1]: +1 at the outer rim,
++	// 0 at the crown, -1 at the inner edge.
++	float slope = -(2.0 * t - 1.0);
++
++	// Outward edge normal via central differences of the outer distance field.
++	float e = SD_SCALE; // 1 px, scaled
++	vec2 grad = vec2(
++		glass_sd(p + vec2(e, 0.0), half_size, ro) - glass_sd(p - vec2(e, 0.0), half_size, ro),
++		glass_sd(p + vec2(0.0, e), half_size, ro) - glass_sd(p - vec2(0.0, e), half_size, ro));
++	// Guard against a degenerate gradient (mediump-safe: no normalize(0) NaN).
++	float glen = length(grad);
++	vec2 n = glen > 1e-4 ? grad / glen : vec2(0.0);
++
++	vec2 uv = v_texcoord + n * (slope * refraction) * tex_scale;
++	return clamp(uv, 0.0, 1.0);
++}
++
++// Specular crown of the convex bead: a glossy highlight peaking along the middle
++// of the ring (t~0.5, the crown) and brightening on the side facing the light,
++// so the frame reads as a rounded glass bead "gathering light from all sides"
++// rather than a flat, seamless pane. Pure refraction is near-invisible (the
++// bent backdrop ~= the real backdrop); this is what makes the glass legible.
++// Returns 0 when refraction is off.
++float lens_spec() {
++	if (refraction <= 0.0) {
++		return 0.0;
++	}
++	// Same SD_SCALE treatment as refract_texcoord (fp16 safety on mediump).
++	vec2 half_size = size * (0.5 * SD_SCALE);
++	float ro = max(max(radius_top_left, radius_top_right),
++			max(radius_bottom_left, radius_bottom_right)) * SD_SCALE;
++	vec2 p = (gl_FragCoord.xy - (position + size * 0.5)) * SD_SCALE;
++	float sd_outer = glass_sd(p, half_size, ro);
++	float t;
++	if (clip_size.x > 0.5 && clip_size.y > 0.5) {
++		vec2 clip_half = clip_size * (0.5 * SD_SCALE);
++		float ri = max(max(clip_radius_top_left, clip_radius_top_right),
++				max(clip_radius_bottom_left, clip_radius_bottom_right)) * SD_SCALE;
++		vec2 pc = (gl_FragCoord.xy - (clip_position + clip_size * 0.5)) * SD_SCALE;
++		float sd_inner = glass_sd(pc, clip_half, ri);
++		float denom = (-sd_outer) + sd_inner;
++		t = denom > 1e-3 * SD_SCALE ? (-sd_outer) / denom : 0.0;
++	} else {
++		t = -sd_outer / (max(refraction * 3.0, 12.0) * SD_SCALE);
++	}
++	t = clamp(t, 0.0, 1.0);
++	float crown = 1.0 - abs(2.0 * t - 1.0);   // 1 at the crown, 0 at both edges
++	crown = crown * crown;                     // tighten to a glossy line
++	float e = SD_SCALE; // 1 px, scaled
++	vec2 grad = vec2(
++		glass_sd(p + vec2(e, 0.0), half_size, ro) - glass_sd(p - vec2(e, 0.0), half_size, ro),
++		glass_sd(p + vec2(0.0, e), half_size, ro) - glass_sd(p - vec2(0.0, e), half_size, ro));
++	float glen = length(grad);
++	vec2 n = glen > 1e-4 ? grad / glen : vec2(0.0);
++	// Light from the upper-left (screen y grows downward): the up-left arc of the
++	// bead is brightest, the lower-right arc dimmer — a convex, lit look.
++	float lit = clamp(dot(n, normalize(vec2(-0.6, -0.8))), 0.0, 1.0);
++	return crown * mix(0.25, 1.0, lit);
++}
++
+ void main() {
+-    float corner_alpha = corner_alpha(
++    float edge_a = corner_alpha(
+         size - 0.5,
+         position + 0.25,
+         radius_top_left,
+@@ -56,7 +184,22 @@ void main() {
+         radius_bottom_left,
+         radius_bottom_right
+     );
+-	gl_FragColor = mix(sample_texture() * alpha, vec4(0.0), corner_alpha);
++	gl_FragColor = mix(sample_texture(refract_texcoord()) * alpha, vec4(0.0), edge_a);
++
++	// Glossy crown of the convex glass bead, faded to nothing at the rounded
++	// outer edge so it stays within the frame.
++	gl_FragColor.rgb += vec3(lens_spec() * 0.9) * (1.0 - edge_a);
++
++	// Cut the clip hole (glass ring): keep the ring, drop the window interior.
++	if (clip_size.x > 0.5 && clip_size.y > 0.5) {
++		gl_FragColor *= corner_alpha(
++			clip_size - 1.0,
++			clip_position + 0.5,
++			clip_radius_top_left,
++			clip_radius_top_right,
++			clip_radius_bottom_left,
++			clip_radius_bottom_right);
++	}
+ 
+ 	if (discard_transparent && gl_FragColor.a == 0.0) {
+ 		discard;
+diff --git a/render/fx_renderer/gles3/shaders/tex.frag b/render/fx_renderer/gles3/shaders/tex.frag
+index f8f7edf..4744276 100644
+--- a/render/fx_renderer/gles3/shaders/tex.frag
++++ b/render/fx_renderer/gles3/shaders/tex.frag
+@@ -35,20 +35,137 @@ uniform float radius_bottom_right;
+ 
+ uniform bool discard_transparent;
+ 
++// Frosted-glass edge refraction (WTF): when `refraction` > 0 the sampled
++// backdrop is displaced along the rounded-rect edge normal, strongest at the
++// rim and fading inward — the "liquid glass" lensing macOS Tahoe has. 0 = off,
++// so every ordinary window texture (refraction defaults to 0) is untouched.
++uniform float refraction;   // px displacement at the rim
++uniform vec2 tex_scale;     // 1.0 / texture_size; turns a px offset into a UV offset
++
++// Clip HOLE (WTF honest glass frame): cut this rounded region out of the draw so
++// the refracted backdrop only fills the RING around a window, not the window
++// itself. clip_size == 0 disables it (ordinary draws are unaffected).
++uniform vec2 clip_size;
++uniform vec2 clip_position;
++uniform float clip_radius_top_left;
++uniform float clip_radius_top_right;
++uniform float clip_radius_bottom_left;
++uniform float clip_radius_bottom_right;
++
+ out vec4 fragColor;
+ 
+-vec4 sample_texture() {
++vec4 sample_texture(vec2 uv) {
+ #if SOURCE == SOURCE_TEXTURE_RGBA || SOURCE == SOURCE_TEXTURE_EXTERNAL
+-	return texture2D(tex, v_texcoord);
++	return texture2D(tex, uv);
+ #elif SOURCE == SOURCE_TEXTURE_RGBX
+-	return vec4(texture2D(tex, v_texcoord).rgb, 1.0);
++	return vec4(texture2D(tex, uv).rgb, 1.0);
+ #endif
+ }
+ 
+ float corner_alpha(vec2 size, vec2 position, float round_tl, float round_tr, float round_bl, float round_br);
+ 
++// Signed distance to a rounded rect centered on the origin (negative inside).
++float glass_sd(vec2 p, vec2 half_size, float r) {
++	vec2 q = abs(p) - half_size + r;
++	return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
++}
++
++// Convex glass bead: model a lens cross-section ACROSS the ring width. `t` runs
++// from 0 at the outer rim to 1 at the inner (window) edge; a parabolic height
++// profile h(t)=1-(2t-1)^2 has a slope that FLIPS sign across the ring, so the
++// backdrop is pulled outward on the outer half and inward on the inner half —
++// an S-curve, the tell-tale of a rounded convex bead rather than flat glass. A
++// thinner ring packs that same slope into fewer pixels, so it curves *harder*
++// (why a 4px frame refracts more than a 26px one). No-op when refraction<=0, so
++// ordinary window textures (refraction defaults to 0) are untouched.
++vec2 refract_texcoord() {
++	if (refraction <= 0.0) {
++		return v_texcoord;
++	}
++	vec2 half_size = size * 0.5;
++	float ro = max(max(radius_top_left, radius_top_right),
++			max(radius_bottom_left, radius_bottom_right));
++	vec2 p = gl_FragCoord.xy - (position + half_size);
++	float sd_outer = glass_sd(p, half_size, ro);   // <= 0 inside the outer contour
++
++	// Position across the ring. With a clip hole (honest frame) the far side of
++	// the lens is the window edge; without one, fall back to a fixed inward band.
++	float t;
++	if (clip_size.x > 0.5 && clip_size.y > 0.5) {
++		vec2 clip_half = clip_size * 0.5;
++		float ri = max(max(clip_radius_top_left, clip_radius_top_right),
++				max(clip_radius_bottom_left, clip_radius_bottom_right));
++		vec2 pc = gl_FragCoord.xy - (clip_position + clip_half);
++		float sd_inner = glass_sd(pc, clip_half, ri);   // >= 0 within the ring
++		float denom = (-sd_outer) + sd_inner;           // ring width along the normal
++		t = denom > 1e-3 ? (-sd_outer) / denom : 0.0;
++	} else {
++		float band = max(refraction * 3.0, 12.0);
++		t = -sd_outer / band;
++	}
++	t = clamp(t, 0.0, 1.0);
++
++	// Slope of the parabolic bead, normalised to [-1, 1]: +1 at the outer rim,
++	// 0 at the crown, -1 at the inner edge.
++	float slope = -(2.0 * t - 1.0);
++
++	// Outward edge normal via central differences of the outer distance field.
++	float e = 1.0;
++	vec2 grad = vec2(
++		glass_sd(p + vec2(e, 0.0), half_size, ro) - glass_sd(p - vec2(e, 0.0), half_size, ro),
++		glass_sd(p + vec2(0.0, e), half_size, ro) - glass_sd(p - vec2(0.0, e), half_size, ro));
++	// Guard against a degenerate gradient (mediump-safe: no normalize(0) NaN).
++	float glen = length(grad);
++	vec2 n = glen > 1e-4 ? grad / glen : vec2(0.0);
++
++	vec2 uv = v_texcoord + n * (slope * refraction) * tex_scale;
++	return clamp(uv, 0.0, 1.0);
++}
++
++// Specular crown of the convex bead: a glossy highlight peaking along the middle
++// of the ring (t~0.5, the crown) and brightening on the side facing the light,
++// so the frame reads as a rounded glass bead "gathering light from all sides"
++// rather than a flat, seamless pane. Pure refraction is near-invisible (the
++// bent backdrop ~= the real backdrop); this is what makes the glass legible.
++// Returns 0 when refraction is off.
++float lens_spec() {
++	if (refraction <= 0.0) {
++		return 0.0;
++	}
++	vec2 half_size = size * 0.5;
++	float ro = max(max(radius_top_left, radius_top_right),
++			max(radius_bottom_left, radius_bottom_right));
++	vec2 p = gl_FragCoord.xy - (position + half_size);
++	float sd_outer = glass_sd(p, half_size, ro);
++	float t;
++	if (clip_size.x > 0.5 && clip_size.y > 0.5) {
++		vec2 clip_half = clip_size * 0.5;
++		float ri = max(max(clip_radius_top_left, clip_radius_top_right),
++				max(clip_radius_bottom_left, clip_radius_bottom_right));
++		vec2 pc = gl_FragCoord.xy - (clip_position + clip_half);
++		float sd_inner = glass_sd(pc, clip_half, ri);
++		float denom = (-sd_outer) + sd_inner;
++		t = denom > 1e-3 ? (-sd_outer) / denom : 0.0;
++	} else {
++		t = -sd_outer / max(refraction * 3.0, 12.0);
++	}
++	t = clamp(t, 0.0, 1.0);
++	float crown = 1.0 - abs(2.0 * t - 1.0);   // 1 at the crown, 0 at both edges
++	crown = crown * crown;                     // tighten to a glossy line
++	float e = 1.0;
++	vec2 grad = vec2(
++		glass_sd(p + vec2(e, 0.0), half_size, ro) - glass_sd(p - vec2(e, 0.0), half_size, ro),
++		glass_sd(p + vec2(0.0, e), half_size, ro) - glass_sd(p - vec2(0.0, e), half_size, ro));
++	float glen = length(grad);
++	vec2 n = glen > 1e-4 ? grad / glen : vec2(0.0);
++	// Light from the upper-left (screen y grows downward): the up-left arc of the
++	// bead is brightest, the lower-right arc dimmer — a convex, lit look.
++	float lit = clamp(dot(n, normalize(vec2(-0.6, -0.8))), 0.0, 1.0);
++	return crown * mix(0.25, 1.0, lit);
++}
++
+ void main() {
+-    float corner_alpha = corner_alpha(
++    float edge_a = corner_alpha(
+         size - 0.5,
+         position + 0.25,
+         radius_top_left,
+@@ -56,7 +173,24 @@ void main() {
+         radius_bottom_left,
+         radius_bottom_right
+     );
+-	fragColor = mix(sample_texture() * alpha, vec4(0.0), corner_alpha);
++	fragColor = mix(sample_texture(refract_texcoord()) * alpha, vec4(0.0), edge_a);
++
++	// Glossy crown of the convex glass bead, faded to nothing at the rounded
++	// outer edge so it stays within the frame.
++	fragColor.rgb += vec3(lens_spec() * 0.9) * (1.0 - edge_a);
++
++	// Cut the clip hole (glass ring): corner_alpha() is ~1 outside the rounded
++	// clip region and ~0 inside, so multiplying keeps the ring and drops the
++	// window interior. Skipped when clip_size is 0 (no hole requested).
++	if (clip_size.x > 0.5 && clip_size.y > 0.5) {
++		fragColor *= corner_alpha(
++			clip_size - 1.0,
++			clip_position + 0.5,
++			clip_radius_top_left,
++			clip_radius_top_right,
++			clip_radius_bottom_left,
++			clip_radius_bottom_right);
++	}
+ 
+ 	if (discard_transparent && fragColor.a == 0.0) {
+ 		discard;
+diff --git a/render/fx_renderer/shaders.c b/render/fx_renderer/shaders.c
+index 2686a5b..b5e5e8f 100644
+--- a/render/fx_renderer/shaders.c
++++ b/render/fx_renderer/shaders.c
+@@ -265,8 +265,11 @@ bool link_quad_grad_round_program(struct quad_grad_round_shader *shader, GLint c
+ }
+ 
+ bool link_tex_program(struct tex_shader *shader, GLint client_version, enum fx_tex_shader_source source) {
+-	GLchar frag_src_part[2048];
+-	GLchar frag_src[4096];
++	// The frosted-glass refraction path (WTF) grows the tex shader past the
++	// original 2 KiB; size these to comfortably hold it plus the appended
++	// corner_alpha helper so snprintf never truncates the source.
++	GLchar frag_src_part[8192];
++	GLchar frag_src[16384];
+ 	if (client_version > 2) {
+ 		snprintf(frag_src_part, sizeof(frag_src_part),
+ 			tex_frag_gles3_src, source);
+@@ -297,6 +300,14 @@ bool link_tex_program(struct tex_shader *shader, GLint client_version, enum fx_t
+ 	shader->radius_bottom_left = glGetUniformLocation(prog, "radius_bottom_left");
+ 	shader->radius_bottom_right = glGetUniformLocation(prog, "radius_bottom_right");
+ 	shader->discard_transparent = glGetUniformLocation(prog, "discard_transparent");
++	shader->refraction = glGetUniformLocation(prog, "refraction");
++	shader->tex_scale = glGetUniformLocation(prog, "tex_scale");
++	shader->clip_size = glGetUniformLocation(prog, "clip_size");
++	shader->clip_position = glGetUniformLocation(prog, "clip_position");
++	shader->clip_radius_top_left = glGetUniformLocation(prog, "clip_radius_top_left");
++	shader->clip_radius_top_right = glGetUniformLocation(prog, "clip_radius_top_right");
++	shader->clip_radius_bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
++	shader->clip_radius_bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
+ 
+ 	return true;
+ }
+diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
+index c8f84fc..c20c61e 100644
+--- a/types/scene/wlr_scene.c
++++ b/types/scene/wlr_scene.c
+@@ -803,6 +803,8 @@ struct wlr_scene_rect *wlr_scene_rect_create(struct wlr_scene_tree *parent,
+ 	scene_rect->clipped_region = clipped_region_get_default();
+ 	scene_rect->backdrop_blur = false;
+ 	scene_rect->backdrop_blur_optimized = false;
++	scene_rect->refraction = 0.0f;
++	scene_rect->refraction_frost = false;
+ 
+ 	scene_node_update(&scene_rect->node, NULL);
+ 
+@@ -848,6 +850,24 @@ void wlr_scene_rect_set_backdrop_blur_optimized(struct wlr_scene_rect *rect,
+ 	scene_node_update(&rect->node, NULL);
+ }
+ 
++void wlr_scene_rect_set_refraction(struct wlr_scene_rect *rect,
++		float refraction) {
++	if (rect->refraction == refraction) {
++		return;
++	}
++	rect->refraction = refraction;
++	scene_node_update(&rect->node, NULL);
++}
++
++void wlr_scene_rect_set_refraction_frost(struct wlr_scene_rect *rect,
++		bool frost) {
++	if (rect->refraction_frost == frost) {
++		return;
++	}
++	rect->refraction_frost = frost;
++	scene_node_update(&rect->node, NULL);
++}
++
+ static void scene_buffer_handle_buffer_release(struct wl_listener *listener,
+ 		void *data) {
+ 	struct wlr_scene_buffer *scene_buffer =
+@@ -1807,10 +1827,12 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 
+ 		corner_location_transform(node_transform, &rect_corners);
+ 
+-		// blur
++		// blur / refraction. A refraction rect (WTF glass lens) runs even when
++		// global blur is disabled — it lenses its own backdrop copy.
+ 		bool has_alpha = !pixman_region32_empty(&opaque);
++		bool want_refraction = scene_rect->refraction > 0.0f;
+ 		if (has_alpha && scene_rect->backdrop_blur &&
+-				is_scene_blur_enabled(&scene->blur_data)) {
++				(is_scene_blur_enabled(&scene->blur_data) || want_refraction)) {
+ 			pixman_region32_t opaque_region;
+ 			pixman_region32_init(&opaque_region);
+ 			scene_node_opaque_region(node, x, y, &opaque_region);
+@@ -1821,6 +1843,35 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 			*/
+ 			float blur_alpha = 1.0;
+ 
++			/* Refraction source: a clear "water-drop" lens (default) refracts a
++			 * SHARP, effect-neutral copy of the backdrop so the edge bends
++			 * true-color content, not a frosted smear. num_passes == 0 selects
++			 * scenefx's sharp copy-to-effects-buffer path (a full-res 1:1 blit,
++			 * no dual-kawase downscale — a single kawase pass alone smears thin
++			 * detail to grey, which is why refraction was invisible). A frosted
++			 * lens (refraction_frost) or a plain blur rect uses the global blur
++			 * data instead. */
++			struct blur_data clear_lens = {
++				.num_passes = 0, .radius = 1,
++				.noise = 0.0f, .brightness = 1.0f,
++				.contrast = 1.0f, .saturation = 1.0f,
++			};
++			struct blur_data *lens_blur =
++				(want_refraction && !scene_rect->refraction_frost)
++					? &clear_lens : &scene->blur_data;
++
++			/* Honest glass ring (WTF): cut the window interior (the rect's
++			 * clipped_region) out of the refracted backdrop so it fills only the
++			 * ring — the frame then lenses the scene on BOTH sides of itself. */
++			struct wlr_box lens_hole = scene_rect->clipped_region.area;
++			enum corner_location lens_hole_corners = scene_rect->clipped_region.corners;
++			if (!wlr_box_empty(&lens_hole)) {
++				lens_hole.x += x;
++				lens_hole.y += y;
++				transform_output_box(&lens_hole, data);
++				corner_location_transform(node_transform, &lens_hole_corners);
++			}
++
+ 			struct fx_render_blur_pass_options blur_options = {
+ 				.tex_options = {
+ 					.base = (struct wlr_render_texture_options) {
+@@ -1837,10 +1888,14 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 					.corner_radius = scene_rect->corner_radius * data->scale,
+ 					.corners = rect_corners,
+ 					.discard_transparent = false,
++					.refraction = scene_rect->refraction * data->scale,
++					.clip_hole = lens_hole,
++					.clip_hole_corner_radius = scene_rect->clipped_region.corner_radius * data->scale,
++					.clip_hole_corners = lens_hole_corners,
+ 				},
+ 				.opaque_region = &opaque_region,
+ 				.use_optimized_blur = scene_rect->backdrop_blur_optimized,
+-				.blur_data = &scene->blur_data,
++				.blur_data = lens_blur,
+ 				.ignore_transparent = false,
+ 			};
+ 			// Render the actual blur behind the surface

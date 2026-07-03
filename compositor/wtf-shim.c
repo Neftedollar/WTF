@@ -200,7 +200,10 @@ struct wtf_toplevel {
 	bool anim_init;             /* false until the first wtf_configure */
 	int cw, ch;                 /* configured content size (for border sizing) */
 	struct wlr_scene_rect *border;  /* colored frame behind the window */
+	float border_base[4];           /* last OPAQUE border RGBA; glass re-tints from here */
 	struct wlr_scene_shadow *shadow; /* scenefx drop shadow below the border */
+	struct wlr_scene_shadow *glow;   /* focus glow: colored halo around the frame */
+	bool is_active;                  /* has keyboard focus (drives the glow) */
 
 	/* --- E1 per-window style overrides (driven by the F# brain per window) --- */
 	float  win_border[4];       /* override border RGBA, used when has_win_border */
@@ -345,12 +348,23 @@ static float g_inactive_border[4] = {0.27f, 0.28f, 0.35f, 1.0f};  /* unfocused *
 static int g_corner_radius = 0;           /* rounded corners (0 = sharp) */
 static bool g_blur_enabled = false;       /* backdrop blur behind windows */
 static struct blur_data g_blur;           /* blur params (init in wtf_run) */
+static bool g_glass_enabled = false;      /* frosted-glass frames: backdrop blur on the border rect */
+static double g_glass_alpha = 0.35;       /* border tint alpha over the blur when glass is on */
+static double g_glass_refraction = 0.0;   /* px the glass rim lenses the backdrop (0 = flat frost) */
+static bool g_glass_frost = false;         /* true = lens the frosted blur; false = clear water-drop lens */
 /* macOS-style drop shadow (scenefx shadow node per toplevel, below border). */
 static bool  g_shadow_enabled = false;
 static float g_shadow_sigma = 24.0f;      /* blur spread in px */
 static float g_shadow_color[4] = {0.0f, 0.0f, 0.0f, 0.45f};
 static int   g_shadow_dx = 0;             /* offset (macOS: light from above */
 static int   g_shadow_dy = 8;             /*  => shadow shifted down)        */
+
+/* Focus glow: a colored halo (scenefx shadow node) hugging the FOCUSED window's
+ * frame, in the frame's own color — "the frame emits light". Centered, no
+ * offset (a drop shadow falls; a glow radiates). */
+static bool  g_glow_enabled = false;
+static float g_glow_sigma = 20.0f;        /* halo spread in px */
+static float g_glow_intensity = 0.6f;     /* halo strength 0..1 */
 
 /* ---- input config (xkb keymap + key repeat, set via wtf_set_keymap) ---- */
 /* Each xkb field is NULL => let xkb pick its compile default for that field. */
@@ -445,7 +459,144 @@ static void sync_shadow(struct wtf_toplevel *t) {
 		t->x - m + g_shadow_dx, t->y - m + g_shadow_dy);
 }
 
+/* Create/resize/destroy the FOCUS GLOW to match the toplevel's frame. Only the
+ * active toplevel glows, in its border color (so themes drive it from config:
+ * activeBorder = glow hue) — inactive windows get their glow torn down. Safe to
+ * call at any time; eye-candy only, never fatal. */
+static void sync_glow(struct wtf_toplevel *t) {
+	if (!g_glow_enabled || !t->is_active || t->scene_tree == NULL ||
+			t->cw <= 0 || t->ch <= 0 || t->fullscreen || t->hidden) {
+		if (t->glow != NULL) {
+			wlr_scene_node_destroy(&t->glow->node);
+			t->glow = NULL;
+		}
+		return;
+	}
+	int m = (int)ceilf(g_glow_sigma);
+	int bw = g_border_width;
+	int w = t->cw + 2 * bw + 2 * m;
+	int h = t->ch + 2 * bw + 2 * m;
+	/* Halo color = the frame's own, but EMITTING light rather than painting over
+	 * it: with premultiplied blending (out = src.rgb + dst*(1-src.a)), keeping
+	 * rgb at full intensity while alpha stays LOW leaves most of the backdrop
+	 * and ADDS the colour on top — luminous neon, not a colored overlay. */
+	float i = g_glow_intensity;
+	float col[4] = { t->border_base[0] * i, t->border_base[1] * i,
+		t->border_base[2] * i, i * 0.25f };
+	if (t->glow == NULL) {
+		t->glow = wlr_scene_shadow_create(server.toplevel_tree, w, h,
+			g_corner_radius, g_glow_sigma, col);
+		if (t->glow == NULL) {
+			return;
+		}
+	} else {
+		wlr_scene_shadow_set_size(t->glow, w, h);
+		wlr_scene_shadow_set_blur_sigma(t->glow, g_glow_sigma);
+		wlr_scene_shadow_set_color(t->glow, col);
+	}
+	/* The halo must sit UNDER the window (its center is a solid fill — over the
+	 * window it would flood it with colour, seen live). Under glass the border
+	 * sits ABOVE the window, so "below the border" is NOT below the window —
+	 * anchor to the drop shadow (always bottom-most) or to whichever of
+	 * window/border is lower. Re-assert every sync: restacks happen around us. */
+	if (t->shadow != NULL) {
+		wlr_scene_node_place_above(&t->glow->node, &t->shadow->node);
+	} else if (g_glass_enabled || t->border == NULL) {
+		wlr_scene_node_place_below(&t->glow->node, &t->scene_tree->node);
+	} else {
+		wlr_scene_node_place_below(&t->glow->node, &t->border->node);
+	}
+	wlr_scene_shadow_set_corner_radius(t->glow,
+		g_corner_radius > 0 ? g_corner_radius + bw : 0);
+	wlr_scene_node_set_position(&t->glow->node, t->x - bw - m, t->y - bw - m);
+}
+
 /* Re-apply the current corner-radius / blur style to one toplevel. */
+/* Set the border color, honoring frosted glass. When glass is on, the border
+ * rect blurs the backdrop behind it (scenefx) and its fill drops to a
+ * translucent tint so the blur shows through — the active/inactive hue still
+ * reads as focus, just glassy. The base OPAQUE color is remembered so toggling
+ * glass at runtime can re-tint every border without the caller re-deriving it. */
+static void apply_border(struct wtf_toplevel *t, const float base[4]) {
+	if (t->border == NULL) {
+		return;
+	}
+	t->border_base[0] = base[0];
+	t->border_base[1] = base[1];
+	t->border_base[2] = base[2];
+	t->border_base[3] = base[3];
+	/* Cap the glass tint below fully-opaque: at alpha 1.0 the border rect reads
+	 * as opaque, scenefx skips its backdrop-blur pass, and "glass" collapses to
+	 * a flat border. 0.99 keeps the frame effectively fully tinted yet glassy. */
+	float tint = g_glass_alpha > 0.99 ? 0.99f : (float)g_glass_alpha;
+	/* Tinted glass: the fill is the active/inactive border colour at the tint
+	 * alpha, over the blurred backdrop. Focus stays visible (the focused frame
+	 * keeps its colour, unfocused go grey) AND the frame stays see-through —
+	 * glassTint sets how strongly the colour reads (0 = pure backdrop). */
+	float a = g_glass_enabled ? base[3] * tint : base[3];
+	/* wlroots rect colours are PREMULTIPLIED: rgb must be scaled by alpha, or a
+	 * translucent tint renders as an additive glow (an opaque-looking white/pale
+	 * frame instead of see-through glass). */
+	float col[4] = { base[0] * a, base[1] * a, base[2] * a, a };
+	wlr_scene_rect_set_color(t->border, col);
+	wlr_scene_rect_set_backdrop_blur(t->border, g_glass_enabled);
+	/* We never create a WLR_SCENE_NODE_OPTIMIZED_BLUR node, so the optimized
+	 * whole-screen blur buffer is never populated; request the per-rect blur
+	 * path explicitly (passing "optimized" here would only be a no-op that also
+	 * risks stale wallpaper-only blur if an optimized node ever appears). */
+	wlr_scene_rect_set_backdrop_blur_optimized(t->border, false);
+	wlr_scene_rect_set_refraction(t->border,
+		g_glass_enabled ? (float)g_glass_refraction : 0.0f);
+	wlr_scene_rect_set_refraction_frost(t->border, g_glass_frost);
+}
+
+/* Glass makes the border an HONEST frame: a ring sitting ABOVE the window so its
+ * backdrop lensing refracts the window content (inner side) as well as the
+ * wallpaper/neighbours (outer side) — a convex bead gathering light from both
+ * sides. The clipped_region cuts the window interior out so only the ring draws;
+ * without glass the border is a plain solid frame under the window. Call after
+ * (re)sizing the border. */
+static void border_apply_clip(struct wtf_toplevel *t) {
+	if (t->border == NULL) {
+		return;
+	}
+	struct clipped_region clip;
+	if (g_glass_enabled) {
+		clip.area = (struct wlr_box){ g_border_width, g_border_width, t->cw, t->ch };
+		clip.corner_radius = g_corner_radius;
+		clip.corners = CORNER_LOCATION_ALL;
+	} else {
+		clip.area = (struct wlr_box){ 0, 0, 0, 0 };
+		clip.corner_radius = 0;
+		clip.corners = CORNER_LOCATION_NONE;
+	}
+	wlr_scene_rect_set_clipped_region(t->border, clip);
+}
+
+/* Restack shadow / window / border. Glass puts the ring ABOVE the window (so it
+ * lenses both sides); otherwise the window sits above its solid border. The
+ * shadow is always at the bottom of the three. */
+static void border_restack(struct wtf_toplevel *t) {
+	if (t->shadow != NULL) {
+		wlr_scene_node_raise_to_top(&t->shadow->node);
+	}
+	if (t->glow != NULL) {
+		/* Glow above the drop shadow, below the frame: light hugging the border. */
+		wlr_scene_node_raise_to_top(&t->glow->node);
+	}
+	if (g_glass_enabled) {
+		wlr_scene_node_raise_to_top(&t->scene_tree->node);
+		if (t->border != NULL) {
+			wlr_scene_node_raise_to_top(&t->border->node);
+		}
+	} else {
+		if (t->border != NULL) {
+			wlr_scene_node_raise_to_top(&t->border->node);
+		}
+		wlr_scene_node_raise_to_top(&t->scene_tree->node);
+	}
+}
+
 static void style_toplevel(struct wtf_toplevel *t) {
 	if (t->scene_tree != NULL) {
 		node_apply_fx(&t->scene_tree->node, g_corner_radius, g_blur_enabled);
@@ -494,6 +645,10 @@ static bool animate_toplevels(void) {
 			wlr_scene_node_set_position(&t->shadow->node,
 				px - m + g_shadow_dx, py - m + g_shadow_dy);
 		}
+		if (t->glow != NULL) {
+			int gm = (int)ceilf(g_glow_sigma) + g_border_width;
+			wlr_scene_node_set_position(&t->glow->node, px - gm, py - gm);
+		}
 
 		double dop = t->target_opacity - t->opacity;
 		if (fabs(dop) > 0.01) {
@@ -539,13 +694,10 @@ static void focus_toplevel(struct wtf_toplevel *toplevel) {
 		}
 	}
 	struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
-	/* Raise the border first, then the window on top of it (same order as
-	 * wtf_configure) so a focused floating window's border isn't left occluded
+	/* Restack shadow/window/border (glass puts the ring on top; same order as
+	 * wtf_configure) so a focused floating window's frame isn't left occluded
 	 * behind an adjacent window. */
-	if (toplevel->border != NULL) {
-		wlr_scene_node_raise_to_top(&toplevel->border->node);
-	}
-	wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+	border_restack(toplevel);
 	if (toplevel->is_xwayland) {
 		wlr_xwayland_surface_activate(toplevel->xwl_surface, true);
 	} else {
@@ -569,13 +721,15 @@ static void focus_toplevel(struct wtf_toplevel *toplevel) {
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		bool active = (t == toplevel);
+		t->is_active = active;
 		t->target_opacity = t->has_win_opacity ? t->win_opacity
 			: (active ? WTF_ACTIVE_OPACITY : g_inactive_opacity);
 		if (t->border != NULL) {
-			wlr_scene_rect_set_color(t->border,
+			apply_border(t,
 				t->has_win_border ? t->win_border
 					: (active ? g_active_border : g_inactive_border));
 		}
+		sync_glow(t); /* focus moved: light up the new frame, dim the rest */
 	}
 	schedule_frame();
 
@@ -1515,6 +1669,16 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
 		}
 	}
 
+	/* Unmap-without-destroy (mode switches, re-parenting): once off
+	 * server.toplevels the focus loop can't reach this toplevel, so a live
+	 * glow would float at the old position forever. Kill it now; a re-map
+	 * recreates it via the focus/configure path. */
+	toplevel->is_active = false;
+	if (toplevel->glow != NULL) {
+		wlr_scene_node_destroy(&toplevel->glow->node);
+		toplevel->glow = NULL;
+	}
+
 	wl_list_remove(&toplevel->link);
 }
 
@@ -1560,6 +1724,9 @@ static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
 	}
 	if (toplevel->shadow != NULL) {
 		wlr_scene_node_destroy(&toplevel->shadow->node);
+	}
+	if (toplevel->glow != NULL) {
+		wlr_scene_node_destroy(&toplevel->glow->node);
 	}
 	free(toplevel);
 }
@@ -1656,6 +1823,7 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
 	toplevel->border = wlr_scene_rect_create(srv->toplevel_tree, 0, 0, g_inactive_border);
 	if (toplevel->border != NULL)
 		wlr_scene_node_place_below(&toplevel->border->node, &toplevel->scene_tree->node);
+	apply_border(toplevel, g_inactive_border);   /* seed border_base + glass state */
 
 	toplevel->map.notify = xdg_toplevel_map;
 	wl_signal_add(&xdg_toplevel->base->surface->events.map, &toplevel->map);
@@ -1726,6 +1894,14 @@ static void xwl_unmap(struct wl_listener *listener, void *data) {
 		}
 	}
 
+	/* Same unmap-without-destroy glow teardown as the xdg path (XWayland
+	 * withdraw is the COMMON case: games switching modes, tray minimize). */
+	toplevel->is_active = false;
+	if (toplevel->glow != NULL) {
+		wlr_scene_node_destroy(&toplevel->glow->node);
+		toplevel->glow = NULL;
+	}
+
 	wl_list_remove(&toplevel->link);
 }
 
@@ -1739,6 +1915,10 @@ static void xwl_destroy_scene(struct wtf_toplevel *toplevel) {
 	if (toplevel->shadow != NULL) {
 		wlr_scene_node_destroy(&toplevel->shadow->node);
 		toplevel->shadow = NULL;
+	}
+	if (toplevel->glow != NULL) {
+		wlr_scene_node_destroy(&toplevel->glow->node);
+		toplevel->glow = NULL;
 	}
 	if (toplevel->scene_tree != NULL) {
 		wlr_scene_node_destroy(&toplevel->scene_tree->node);
@@ -1768,6 +1948,7 @@ static void xwl_associate(struct wl_listener *listener, void *data) {
 		wlr_scene_rect_create(srv->toplevel_tree, 0, 0, g_inactive_border);
 	if (toplevel->border != NULL)
 		wlr_scene_node_place_below(&toplevel->border->node, &toplevel->scene_tree->node);
+	apply_border(toplevel, g_inactive_border);   /* seed border_base + glass state */
 
 	/* map/unmap listeners live ONLY while associated (the #1 UAF guard). */
 	toplevel->map.notify = xwl_map;
@@ -2280,7 +2461,9 @@ void wtf_configure(int id, int x, int y, int width, int height) {
 		wlr_scene_rect_set_size(t->border,
 			width + 2 * g_border_width, height + 2 * g_border_width);
 	}
+	border_apply_clip(t); /* glass: cut the window interior out of the ring */
 	sync_shadow(t);    /* (re)create + size the drop shadow for the new tile */
+	sync_glow(t);      /* keep the focus halo hugging the new geometry */
 	style_toplevel(t); /* (re)apply rounded corners + blur */
 	if (!t->anim_init) {
 		/* First placement: start the slide from just below the target so the
@@ -2297,13 +2480,7 @@ void wtf_configure(int id, int x, int y, int width, int height) {
 	 * windows do not overlap, so their relative raise order is irrelevant. This
 	 * reorders within toplevel_tree only — the TOP/OVERLAY layer trees still sit
 	 * above it, so bars/popups/menus are unaffected. */
-	if (t->shadow != NULL) {
-		wlr_scene_node_raise_to_top(&t->shadow->node);
-	}
-	if (t->border != NULL) {
-		wlr_scene_node_raise_to_top(&t->border->node);
-	}
-	wlr_scene_node_raise_to_top(&t->scene_tree->node);
+	border_restack(t);
 
 	/* Size is applied immediately (clients can't smoothly resize); only the
 	 * scene-node position and opacity animate, in output_frame. */
@@ -2373,6 +2550,7 @@ void wtf_set_fullscreen(int id, int on) {
 	if (t->border != NULL) {
 		wlr_scene_node_set_enabled(&t->border->node, !t->fullscreen && !t->hidden);
 	}
+	sync_glow(t); /* fullscreen owns the screen: no halo around it */
 	schedule_frame();
 }
 
@@ -2397,6 +2575,7 @@ void wtf_set_hidden(int id, int hidden) {
 	if (t->shadow != NULL) {
 		wlr_scene_node_set_enabled(&t->shadow->node, show);
 	}
+	sync_glow(t); /* hidden kills the halo; unhiding re-lights it if focused */
 	schedule_frame();
 }
 
@@ -2460,13 +2639,19 @@ void wtf_set_inactive_opacity(double opacity) {
 void wtf_set_border_width(int width) {
 	if (width < 0) width = 0;
 	g_border_width = width;
-	/* Resize every existing border to match the new width. */
+	/* Resize every existing border to match the new width — and re-derive
+	 * everything that bakes the width in: the glass clip hole (else the ring
+	 * overlaps the window interior until the next configure), the shadow's
+	 * corner radius, and the glow's size/position. */
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		if (t->border != NULL) {
 			wlr_scene_rect_set_size(t->border,
 				t->cw + 2 * width, t->ch + 2 * width);
 		}
+		border_apply_clip(t);
+		sync_shadow(t);
+		sync_glow(t);
 	}
 	schedule_frame();
 }
@@ -2500,8 +2685,9 @@ void wtf_set_window_border_color(int id, double r, double g, double b, double a)
 	t->win_border[3] = na;
 	t->has_win_border = true;
 	if (t->border != NULL) {
-		wlr_scene_rect_set_color(t->border, t->win_border);
+		apply_border(t, t->win_border);
 	}
+	sync_glow(t); /* a focused window's halo follows its override color */
 	schedule_frame();
 }
 
@@ -2567,6 +2753,29 @@ void wtf_set_shadow(int enabled, double sigma, double r, double g, double b,
 	schedule_frame();
 }
 
+void wtf_set_glow(int enabled, double sigma, double intensity) {
+	g_glow_enabled = (enabled != 0);
+	if (sigma > 0) {
+		g_glow_sigma = (float)sigma;
+	} else if (enabled && sigma != 0) {
+		wlr_log(WLR_ERROR, "wtf_set_glow: sigma %.1f out of range, keeping %.1f",
+			sigma, g_glow_sigma);
+	}
+	if (intensity >= 0.0 && intensity <= 1.0) {
+		g_glow_intensity = (float)intensity;
+	} else if (enabled) {
+		wlr_log(WLR_ERROR, "wtf_set_glow: intensity %.2f outside 0..1, keeping %.2f",
+			intensity, g_glow_intensity);
+	}
+	wlr_log(WLR_INFO, "glow %s (sigma %.1f, intensity %.2f)",
+		g_glow_enabled ? "on" : "off", g_glow_sigma, g_glow_intensity);
+	struct wtf_toplevel *t;
+	wl_list_for_each(t, &server.toplevels, link) {
+		sync_glow(t);
+	}
+	schedule_frame();
+}
+
 /* scenefx 0.4 unpacked wlr_scene_set_blur_data() from a struct into scalar
  * params. Keep g_blur as our single source of truth and splat it in one place
  * so both call sites (enable + init) stay in lockstep. */
@@ -2583,6 +2792,35 @@ void wtf_set_blur(int enabled, int radius, int passes) {
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		style_toplevel(t);
+	}
+	schedule_frame();
+}
+
+/* Frosted-glass window frames: the border rect blurs the backdrop behind it and
+ * its fill drops to a translucent tint. tint_alpha in [0,1] scales that tint
+ * (lower = clearer glass); out-of-range leaves the current value. refraction is
+ * the px the rim lenses the backdrop (0 = flat frost); negative leaves it be.
+ * Re-applies every live border from its remembered base color. */
+void wtf_set_glass(int enabled, double tint_alpha, double refraction, int frost) {
+	g_glass_enabled = (enabled != 0);
+	g_glass_frost = (frost != 0);
+	if (tint_alpha >= 0.0 && tint_alpha <= 1.0) {
+		g_glass_alpha = tint_alpha;
+	} else {
+		wlr_log(WLR_INFO, "wtf_set_glass: glassTint %.3f out of [0,1]; keeping %.3f",
+			tint_alpha, g_glass_alpha);
+	}
+	if (refraction >= 0.0) {
+		g_glass_refraction = refraction;
+	} else {
+		wlr_log(WLR_INFO, "wtf_set_glass: glassRefraction %.3f < 0; keeping %.3f",
+			refraction, g_glass_refraction);
+	}
+	struct wtf_toplevel *t;
+	wl_list_for_each(t, &server.toplevels, link) {
+		apply_border(t, t->border_base);
+		border_apply_clip(t);  /* glass toggled: (un)cut the ring hole */
+		border_restack(t);     /* glass toggled: move ring above/below window */
 	}
 	schedule_frame();
 }

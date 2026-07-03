@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Rebuild + install (wtf-update) and then restart the RUNNING compositor into the
+# fresh build — the one-shot dogfooding loop. `wtfctl restart` makes the host
+# quit with rc=42; the wtf-session wrapper re-execs the new binary in place. No
+# logout, no reboot. Clients close (Wayland has no compositor handover); the
+# window layout is restored from the saved session on the next launch.
+#
+#   ~/Dev/WTF/scripts/wtf-reload
+#
+# Must run INSIDE a running WTF session (it talks to WTF's control socket). From
+# a TTY/GNOME, run scripts/wtf-update instead and pick WTF at the greeter.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+bash scripts/wtf-update
+
+if ! command -v wtfctl >/dev/null 2>&1; then
+  echo "wtf-reload: wtfctl not on PATH; restart WTF manually (log out / back in)." >&2
+  exit 1
+fi
+echo ">> restarting the running compositor into the new build…"
+wtfctl restart

@@ -168,3 +168,39 @@ module Palette =
     /// Snap `c` to the nearest ROLE color (perceptual deltaE).
     let nearestRole (c: Color) (p: Palette) : Color =
         Color.nearest [ p.Base; p.Surface; p.Overlay; p.Text; p.Subtext ] c
+
+    // =====================================================================
+    // CONTRAST PICKS — "a frame color that stands OUT of the wallpaper it
+    // sits on, yet comes FROM the wallpaper's own palette".
+    // =====================================================================
+
+    /// Minimum OKLCH chroma for a pick to read as COLOR (below ≈ gray).
+    [<Literal>]
+    let private MinAccentChroma = 0.06
+
+    /// Minimum perceptual distance (OKLab deltaE; black↔white ≈ 1.0) from Base
+    /// for a pick to read as CONTRAST rather than camouflage.
+    [<Literal>]
+    let private MinAccentContrast = 0.25
+
+    /// The palette color most CONTRASTING with `Base` — the wallpaper's dominant
+    /// ground the window frames sit over. Samples the accent ramp and scores by
+    /// perceptual distance to Base, gated by a minimum chroma (the pick must read
+    /// as color, not gray) and a minimum deltaE (it must actually stand out).
+    /// `None` when the palette is effectively MONOCHROME (no sample clears both
+    /// bars) — the config then supplies its own out-of-palette contrast color.
+    /// Deterministic: same palette in, same pick out.
+    let contrastAccent (p: Palette) : Color option =
+        Ramp.samples 9 p.Accents
+        |> List.filter (fun c ->
+            (Color.toOklch c).C >= MinAccentChroma
+            && Color.deltaE c p.Base >= MinAccentContrast)
+        |> function
+            | [] -> None
+            | survivors -> Some(survivors |> List.maxBy (fun c -> Color.deltaE c p.Base))
+
+    /// `contrastAccent` with the monochrome fallback inline: the shape configs
+    /// want — "contrast from the wallpaper, or MY color when the wallpaper has
+    /// no color to offer".
+    let contrastAccentOr (fallback: Color) (p: Palette) : Color =
+        contrastAccent p |> Option.defaultValue fallback

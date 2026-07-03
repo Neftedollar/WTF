@@ -468,6 +468,13 @@ let onOutputResize (x: int) (y: int) (width: int) (height: int) : unit =
 // ---- agent-first IPC, marshalled onto the loop thread by the bridge ----
 let private bridge = Bridge.LoopBridge()
 
+/// Set when a `restart` request arrives: the compositor tears down cleanly and
+/// `main` returns the session-reload exit code (42) instead of 0, which the
+/// wtf-session wrapper treats as "re-exec me" — picking up a freshly installed
+/// build without a logout/reboot. See scripts/wtf-session and wtf-reload.
+let [<Literal>] private RestartExitCode = 42
+let mutable private restartRequested = false
+
 /// The full agent-socket snapshot: world + "desktop" (live D-Bus state) + "ui"
 /// (bar/omnibox styling from the LIVE cfg — this is how a config.fsx hot-reload
 /// restyles the bar: its next poll simply sees the new values).
@@ -495,6 +502,16 @@ let private handleOnLoop (line: string) : string =
     // under "desktop".
     | Some (Protocol.Notify (summary, body)) ->
         desktopNotify summary body
+        snapshotNow ()
+    // Hot session reload: persist the world, flag the restart, and quit. The
+    // wrapper re-execs the (possibly just-rebuilt) host. Clients don't survive a
+    // compositor restart — Wayland has no handover — but layout is restored from
+    // the saved session on the next launch.
+    | Some Protocol.Restart ->
+        SessionIO.save world
+        restartRequested <- true
+        eprintfn "WTF: restart requested — quitting for wrapper re-exec"
+        Ffi.wtf_quit ()
         snapshotNow ()
     // Opt-in in-process LLM brain. The real (async, off-loop) wiring lands in the
     // next step; until a Brain is constructed it is gracefully disabled.
@@ -562,12 +579,20 @@ let applyConfig (c: WtfConfig) : unit =
     border false c.InactiveBorder
     Ffi.wtf_set_corner_radius cornerRadius
     Ffi.wtf_set_blur ((if blurOn then 1 else 0), 0, 0)
+    // Frosted-glass frames: the border blurs the backdrop (scenefx). Eye-candy,
+    // so forced off in safe mode with everything else.
+    let glassOn = if safeMode then false else c.Glass
+    Ffi.wtf_set_glass ((if glassOn then 1 else 0), c.GlassTint, c.GlassRefraction, (if c.GlassFrost then 1 else 0))
     // macOS-style drop shadow (scenefx). Forced off in safe mode with the rest
     // of the eye-candy; a bad ShadowColor degrades to black, never fails.
     let shadowOn = if safeMode then false else c.Shadow
     let sdx, sdy = c.ShadowOffset
     let sr, sg, sb = Protocol.hexColor c.ShadowColor |> Option.defaultValue (0.0, 0.0, 0.0)
     Ffi.wtf_set_shadow ((if shadowOn then 1 else 0), c.ShadowSigma, sr, sg, sb, c.ShadowOpacity, sdx, sdy)
+    // Focus glow: colored halo around the focused frame (activeBorder hue).
+    // Eye-candy => also forced off in safe mode.
+    let glowOn = if safeMode then false else c.Glow
+    Ffi.wtf_set_glow ((if glowOn then 1 else 0), c.GlowSigma, c.GlowIntensity)
     // Input devices: keyboard xkb/repeat + libinput knobs.
     // Empty xkb fields stay "" — the C side converts those to NULL for xkb defaults.
     let kb = c.Input.Keyboard
@@ -788,6 +813,15 @@ let onReady () : unit =
 // ---- entry point ----
 [<EntryPoint>]
 let main _argv =
+    // Self-test fast-exit (WTF_SELFTEST=1): resolve + JIT the managed assemblies
+    // and touch Core, then exit 0 WITHOUT starting the compositor. `wtf-update`
+    // runs this against the freshly-copied prefix so a version-skewed or missing
+    // dependency surfaces as a nonzero exit HERE — the updater rolls back to the
+    // previous build instead of leaving the session a crash-loop at next login.
+    if not (String.IsNullOrEmpty(Environment.GetEnvironmentVariable "WTF_SELFTEST")) then
+        let w = World.empty (Rect.create 0 0 100 100)
+        eprintfn "WTF selftest ok: mod=%s ws=%s gaps=%d" defaultConfig.ModKey w.Current defaultConfig.Gaps
+        exit 0
     // Load the user's F# config (~/.config/wtf/config.fsx) BEFORE the compositor
     // starts — like xMonad recompiling on launch. The first FCS eval can take a
     // few seconds; this blocks briefly here (acceptable, nothing is on screen
@@ -877,4 +911,6 @@ let main _argv =
 #if !WTF_NO_FCS
     GC.KeepAlive configEngine
 #endif
-    rc
+    // A restart request overrides the compositor's own exit code so the wrapper
+    // re-execs a fresh build instead of ending the session.
+    if restartRequested then RestartExitCode else rc

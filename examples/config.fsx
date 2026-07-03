@@ -106,10 +106,27 @@ let wtfConfig =
         borderWidth 2
         activeBorder "#89b4fa"      // Catppuccin blue
         inactiveBorder "#45475a"
+        // ---- OR: frames auto-contrast against the wallpaper's palette ----
+        // The most contrasting color OF the wallpaper's own palette; on a
+        // monochrome wallpaper (grays / solid) falls back to YOUR color:
+        // borderColor (fun ctx ->
+        //     let accent = ctx.Palette |> Palette.contrastAccentOr (Color.ofHexOr Color.white "#f38ba8")
+        //     let c = if ctx.Focused then accent else Color.mix 0.7 accent ctx.Palette.Overlay
+        //     Color.toHex c)
         inactiveOpacity 0.92        // unfocused windows slightly transparent
         animSpeed 0.30              // window slide/fade speed
         cornerRadius 10             // rounded corners (scenefx)
         blur true                   // backdrop blur behind windows (scenefx)
+        // glass true               // watercolor glass frames: tinted frost, backdrop shows through
+        // glassTint 0.35           // how strongly the frame color reads over the frost (0..1)
+        // glassFrost true          // true = frosted (blurred) backdrop; false = sharp
+        // glassRefraction 0.0      // px of edge lensing (subtle; needs high DPI to shine)
+
+        // ---- focus glow: the FOCUSED frame emits a halo in its own color ----
+        // (activeBorder drives the hue — change it and the glow follows)
+        // glow true
+        // glowSigma 20.0           // halo spread in px (bigger = softer, wider)
+        // glowIntensity 0.6        // halo strength 0..1
 
         // ---- macOS-style drop shadow under every window (scenefx) ----
         shadow true

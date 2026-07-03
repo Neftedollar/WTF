@@ -95,11 +95,18 @@ void wtf_clear_window_style(int id);
 void wtf_set_corner_radius(int radius);
 /* Backdrop blur: enable/disable + radius and pass count (<=0 keeps current). */
 void wtf_set_blur(int enabled, int radius, int passes);
+/* Frosted-glass frames: the window border blurs the backdrop behind it, tinted
+ * translucent. tint_alpha in [0,1] scales the tint (out of range keeps current). */
+void wtf_set_glass(int enabled, double tint_alpha, double refraction, int frost);
 /* macOS-style drop shadow under every window (scenefx shadow nodes). sigma =
  * blur spread in px (<=0 keeps current), color RGBA in 0..1, (dx,dy) = offset
  * in px (macOS look: dx=0, dy>0 -- light from above). */
 void wtf_set_shadow(int enabled, double sigma, double r, double g, double b,
 		double a, int dx, int dy);
+/* Focus glow: a colored halo around the FOCUSED window's frame, in the frame's
+ * own (activeBorder) color. sigma = halo spread in px (<=0 keeps current),
+ * intensity in [0,1] (out of range keeps current). */
+void wtf_set_glow(int enabled, double sigma, double intensity);
 
 /* ---- wallpaper (BACKGROUND layer, drawn below layer-shell bg clients) ---- */
 /* Set an image wallpaper from raw RGBA pixels. `rgba` is exactly width*height*4

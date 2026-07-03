@@ -162,6 +162,8 @@ module Protocol =
         | Tools                          // {"tools":true} -> the agent tool manifest
         | Notify of string * string      // {"notify":{summary,body}} -> desktop notification
         | Ask of string                  // {"ask":"<nl>"} -> the opt-in in-process LLM brain
+        | Restart                        // {"cmd":"restart"} -> quit with the session-reload code
+                                         // so the wtf-session wrapper re-execs a fresh build
 
     /// Parse one command object, e.g. {"cmd":"focus","by":"next"} or
     /// {"cmd":"layout","name":"bsp"}. Returns None on unknown/invalid input.
@@ -237,6 +239,7 @@ module Protocol =
     let parseRequest (line: string) : Request option =
         match line.Trim() with
         | "" | "state" | "snapshot" -> Some Query
+        | "restart" -> Some Restart
         | t when t.StartsWith "{" ->
             match (try Some(JsonNode.Parse t) with _ -> None) with
             | None -> None
@@ -266,5 +269,6 @@ module Protocol =
                                 | None ->
                                     match str o "cmd" with
                                     | Some "state" | Some "snapshot" -> Some Query
+                                    | Some "restart" -> Some Restart
                                     | _ -> None
         | _ -> None

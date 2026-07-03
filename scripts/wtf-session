@@ -125,6 +125,11 @@ WINDOW=10
 # + an unbounded log). After this many total abnormal exits, escalate no matter
 # the spacing.
 MAX_TOTAL=20
+# Consecutive quick (rc=42, <8s-lived) reloads tolerated before the loop guard
+# routes to the crash path. Bounds an instant boot loop while allowing rapid
+# hand-driven iteration.
+MAX_FAST_RELOADS=5
+fast_reloads=0
 total=0
 attempts=0
 if command -v date >/dev/null 2>&1; then
@@ -141,6 +146,11 @@ while true; do
 	fi
 
 	log "launching host (attempt window count=$attempts)"
+	if command -v date >/dev/null 2>&1; then
+		host_start="$(date +%s 2>/dev/null || echo 0)"
+	else
+		host_start=0
+	fi
 	"$HOST" >>"$LOG" 2>&1
 	rc=$?
 	restore_console
@@ -149,6 +159,40 @@ while true; do
 	if [ "$rc" -eq 0 ]; then
 		log "clean exit — leaving"
 		exit 0
+	fi
+
+	# Intentional session reload (`wtfctl restart` / wtf-reload): re-exec the host
+	# so a freshly installed build is picked up WITHOUT counting as a crash and
+	# WITHOUT a logout/reboot.
+	#
+	# LOOP-GUARDED: a build that hits the restart path at STARTUP — a stray
+	# `exit 42` / `wtfctl restart` in config.fsx or StartupApps, or a client
+	# spamming the control socket — would otherwise re-exec instantly forever, an
+	# unbounded loop that never escalates to safe mode. We still honor a QUICK
+	# manual reload (rapid shader/config iteration re-exec's within seconds), but
+	# count CONSECUTIVE fast (<8s-lived) rc=42s; after MAX_FAST_RELOADS of them we
+	# stop trusting it and fall through to the crash path (safe-mode → fallback).
+	# A reload after a healthy-length session resets the streak.
+	if [ "$rc" -eq 42 ]; then
+		if command -v date >/dev/null 2>&1; then
+			host_now="$(date +%s 2>/dev/null || echo 0)"
+		else
+			host_now=0
+		fi
+		uptime="$((host_now - host_start))"
+		if [ "$uptime" -ge 8 ]; then
+			fast_reloads=0
+		else
+			fast_reloads="$((fast_reloads + 1))"
+		fi
+		if [ "$fast_reloads" -le "$MAX_FAST_RELOADS" ]; then
+			log "session reload (rc=42, uptime ${uptime}s, fast streak ${fast_reloads}/${MAX_FAST_RELOADS}) — re-exec fresh build"
+			attempts=0
+			window_start="$host_now"
+			continue
+		fi
+		log "rc=42 loop guard: ${fast_reloads} fast reloads in a row — treating as a crash"
+		# fall through to crash accounting below (-> safe mode -> fallback)
 	fi
 
 	# Sliding-window restart accounting.

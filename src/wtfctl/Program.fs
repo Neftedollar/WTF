@@ -16,6 +16,8 @@ module wtfctl.Program
 //   wtfctl fullscreen                toggle fullscreen on the focused window
 //   wtfctl sinkall                   clear all floating on the current workspace
 //   wtfctl close                     close the focused window
+//   wtfctl reload                    re-read config.fsx live (no restart)
+//   wtfctl restart                   restart the compositor into a fresh build (no reboot)
 //   wtfctl eval "config { gaps 20 }" run F# live (hot-swap config / dispatch cmd)
 //   wtfctl tools                     the agent tool manifest (JSON)
 //   wtfctl notify "Build done"       send a desktop notification
@@ -72,6 +74,10 @@ let toJson (args: string list) : string option =
     // Re-read ~/.config/wtf/config.fsx from disk and apply it live (xMonad Mod+q
     // for the config — the save-watcher does this automatically; this is on demand).
     | [ "reload" ] -> Some """{"cmd":"reload"}"""
+    // Restart the whole compositor: quit with the session-reload code so the
+    // wtf-session wrapper re-execs a freshly built/installed host (no reboot).
+    // Clients close (Wayland has no handover); layout restores from the session.
+    | [ "restart" ] -> Some """{"cmd":"restart"}"""
     // Agent-first surface: discover the curated LLM tool manifest, and notify the
     // user through WTF's own daemon.
     //   wtfctl tools                          the agent tool manifest (JSON)
@@ -108,9 +114,18 @@ let main argv =
         eprintfn "wtfctl: unrecognized command. Try: state | focus next | layout bsp | workspace 2 | spawn kitty | eval \"config { gaps 20 }\""
         2
     | Some line ->
+        // `restart` makes the compositor tear down as it handles the request, so
+        // the reply write races process death — a dropped reply is EXPECTED and
+        // must not read as failure (else `wtf-reload`'s `set -e` aborts on a
+        // restart that actually worked).
+        let isRestart = line.Contains "\"cmd\":\"restart\""
         try
             printfn "%s" (pretty (send line))
             0
         with ex ->
-            eprintfn "wtfctl: cannot reach WTF socket (%s): %s" (socketPath ()) ex.Message
-            1
+            if isRestart then
+                printfn "restart dispatched (compositor is tearing down)"
+                0
+            else
+                eprintfn "wtfctl: cannot reach WTF socket (%s): %s" (socketPath ()) ex.Message
+                1
