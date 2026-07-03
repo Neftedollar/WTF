@@ -663,6 +663,11 @@ module private BarScripts =
                     eprintfn "WTF bar: script widget '%s' failed (nonzero exit / missing / timeout); shows empty. Logged once." sw.Exec
                 p.Value <- ""
             p.Cts.Token.WaitHandle.WaitOne(max 100 sw.IntervalMs) |> ignore
+        // This poller thread OWNS the CTS lifetime: `retain` only Cancel()s (then
+        // drops the Poller from the table), so once the loop observes cancellation
+        // we release the CTS and the WaitHandle materialized by `.Token.WaitHandle`
+        // above — otherwise every reconfigured/removed script widget leaks a handle.
+        p.Cts.Dispose()
 
     /// Cached output for a Script widget; starts its poller on first sight.
     let resolve (sw: ScriptWidget) : string =
