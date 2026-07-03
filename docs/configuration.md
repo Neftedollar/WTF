@@ -200,11 +200,44 @@ the `right` list stacks from the bottom, and the clock splits `HH:mm` into
 two lines. Long segments (`Player`, `Network`) render compact glyphs there.
 
 Bar segments: `Workspaces`, `Clock "<.NET time format>"`, `Battery`,
-`Network`, `Player` (MPRIS now-playing), `Label "<text>"`. Bar knobs also
-include `refreshMs` (int, 50–5000) and `glass` (bool). Omnibox knobs: `width`, `height`, `rowHeight`,
+`Network`, `Player` (MPRIS now-playing), `Label "<text>"`, plus two custom
+widgets (below). Bar knobs also include `refreshMs` (int, 50–5000) and `glass`
+(bool). Omnibox knobs: `width`, `height`, `rowHeight`,
 `fontSize`, `background`, `inputBackground`, `foreground`, `dim`, `selection`,
 `prompt`, `promptColor`, `placeholder`, `glass`. Every color knob takes a
 `#rrggbb`/`#rrggbbaa` string **or** a `(fun p -> …)` palette function.
+
+### Custom widgets
+
+Two segment kinds let you show your own content:
+
+```fsharp
+bar (barConfig {
+    right [
+        // F# widget: a function of the live WM+desktop state, evaluated by the
+        // WM each snapshot. Type-safe, hot-reloads, zero external process.
+        Custom (fun c -> sprintf "%d win" c.Windows.Length)
+        Custom (fun c ->
+            match c.Battery with
+            | Some (pct, _) when pct < 20.0 -> sprintf "LOW %.0f%%" pct
+            | _ -> "")
+        // Shell widget (waybar/polybar-style): the WM polls the command every
+        // `intervalMs` and shows its first stdout line. `script exec ms` is sugar
+        // for `Script { Exec = exec; IntervalMs = ms }`.
+        script "~/bin/cpu.sh" 2000
+        Clock "HH:mm"
+    ]
+})
+```
+
+`Custom` receives a **`BarContext`** — a flat read-model of the live state:
+`Windows` (list), `FocusedTitle`/`FocusedApp`, `Workspace`, `OccupiedTags`,
+`Battery` (`(percent, state) option`), `Network` (`state option`), `Player`
+(`(status, title, artist) option`), `Time`. It runs host-side (respecting the
+bar's `refreshMs`); a widget that throws shows empty and is logged once — it can
+never break the bar. `Script` runs `Exec` via `/bin/sh -c` on a background
+poller with a timeout; a nonzero exit / missing binary / timeout shows empty.
+Both render as plain text, so they work on the standalone bar over the socket.
 
 ## Dynamic appearance — knobs as functions
 

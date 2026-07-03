@@ -162,7 +162,14 @@ let wtfConfig =
         //     background (fun p -> Color.toHexA 0.45 p.Base)          // translucent, from wallpaper
         //     foreground (fun p -> Color.toHex p.Text)
         //     accent     (fun p -> Palette.accent 0.5 p |> Color.toHex) // workspace pills
-        //     right [ Player; Battery; Clock "ddd HH:mm" ]
+        //     right [
+        //         // Custom F# widget: a function of the live state (Windows,
+        //         // FocusedApp, Battery, Network, Player, Workspace, Time …).
+        //         Custom (fun c -> sprintf "%d win" c.Windows.Length)
+        //         // Shell widget: poll a command, show its first stdout line.
+        //         script "~/bin/cpu.sh" 2000
+        //         Player; Battery; Clock "ddd HH:mm"
+        //     ]
         // })
         // omnibox (omniboxConfig {
         //     glass true

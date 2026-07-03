@@ -296,10 +296,12 @@ let ``barConfig CE overrides only what is set`` () =
     Assert.Equal("bottom", b.Name)
     Assert.Equal(Bottom, b.Position)
     Assert.Equal("#f38ba8", ColorSpec.resolve Palette.defaultPalette b.Accent)
-    Assert.Equal<BarSegment list>([ Clock "ddd HH:mm" ], b.Right)
+    // BarSegment carries a function case (Custom) so the DU is reference-equal;
+    // compare via a structural projection instead of value equality.
+    Assert.Equal(sprintf "%A" [ Clock "ddd HH:mm" ], sprintf "%A" b.Right)
     // untouched knobs keep the defaults
     Assert.Equal(BarConfig.defaults.Height, b.Height)
-    Assert.Equal<BarSegment list>(BarConfig.defaults.Left, b.Left)
+    Assert.Equal(sprintf "%A" BarConfig.defaults.Left, sprintf "%A" b.Left)
 
 [<Fact>]
 let ``omniboxConfig CE overrides only what is set`` () =
@@ -320,7 +322,7 @@ let ``config CE: bar sets a single entry, bars a list`` () =
 [<Fact>]
 let ``ClientUi.json emits the wire contract shape`` () =
     let bars = [ { BarConfig.defaults with Name = "main"; Position = Right; Left = [ Workspaces; Label "λ" ] } ]
-    let node = ClientUi.json Palette.defaultPalette bars OmniboxConfig.defaults
+    let node = ClientUi.json Palette.defaultPalette BarContext.empty (fun _ -> "") bars OmniboxConfig.defaults
     let s = node.ToJsonString()
     Assert.Contains("\"bars\":[{", s)
     Assert.Contains("\"name\":\"main\"", s)
@@ -331,12 +333,34 @@ let ``ClientUi.json emits the wire contract shape`` () =
     Assert.Contains("\"prompt\":\"\\u003E\"", s.Replace("\">\"", "\"\\u003E\"")) // '>' raw or escaped
 
 [<Fact>]
+let ``Custom widget is resolved host-side to a label with its computed text`` () =
+    let ctx = { BarContext.empty with FocusedApp = "firefox"; Windows = [ { Id = 1; AppId = "firefox"; Title = "t"; Floating = false } ] }
+    let bars = [ { BarConfig.defaults with Left = [ Custom(fun c -> sprintf "%s/%d" c.FocusedApp c.Windows.Length) ] } ]
+    let s = (ClientUi.json Palette.defaultPalette ctx (fun _ -> "") bars OmniboxConfig.defaults).ToJsonString()
+    Assert.Contains("{\"label\":\"firefox/1\"}", s)
+
+[<Fact>]
+let ``a throwing Custom widget degrades to an empty label, not an exception`` () =
+    let bars = [ { BarConfig.defaults with Left = [ Custom(fun _ -> failwith "boom") ] } ]
+    // Must NOT throw — the whole snapshot would be lost otherwise.
+    let s = (ClientUi.json Palette.defaultPalette BarContext.empty (fun _ -> "") bars OmniboxConfig.defaults).ToJsonString()
+    Assert.Contains("{\"label\":\"\"}", s)
+
+[<Fact>]
+let ``Script widget is resolved through the host-provided cache lookup`` () =
+    let sw = { Exec = "echo hi"; IntervalMs = 1000 }
+    let bars = [ { BarConfig.defaults with Left = [ Script sw ] } ]
+    let resolve (s: ScriptWidget) = if s.Exec = "echo hi" then "cached-out" else "?"
+    let json = (ClientUi.json Palette.defaultPalette BarContext.empty resolve bars OmniboxConfig.defaults).ToJsonString()
+    Assert.Contains("{\"label\":\"cached-out\"}", json)
+
+[<Fact>]
 let ``ColorSpec palette function is resolved into the wire hex`` () =
     // A palette-driven background must serialize as the RESOLVED hex, not a
     // function — so the client (which never sees the palette) gets a plain color.
     let pal = { Palette.defaultPalette with Base = { R = 1.0; G = 0.0; B = 0.0; A = 1.0 } }
     let bars = [ { BarConfig.defaults with Background = OfPalette(fun p -> Color.toHex p.Base) } ]
-    let s = (ClientUi.json pal bars OmniboxConfig.defaults).ToJsonString()
+    let s = (ClientUi.json pal BarContext.empty (fun _ -> "") bars OmniboxConfig.defaults).ToJsonString()
     Assert.Contains("\"background\":\"#ff0000\"", s)
 
 [<Fact>]

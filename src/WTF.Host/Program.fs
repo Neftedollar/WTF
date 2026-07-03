@@ -491,6 +491,119 @@ let private bridge = Bridge.LoopBridge()
 let [<Literal>] private RestartExitCode = 42
 let mutable private restartRequested = false
 
+/// Host-side pollers for `Script { Exec; IntervalMs }` bar widgets. One background
+/// thread per unique (interval,exec) caches the latest first-line stdout; the
+/// snapshot reads the cache and NEVER blocks. A per-run timeout means a hung
+/// script can't wedge its poller; a failure (nonzero exit / missing binary /
+/// timeout) shows empty and is logged once per script. `retain` reaps pollers no
+/// longer referenced after a reload so a changing config can't leak threads. All
+/// entry points run on the loop thread (snapshot build / reload).
+module private BarScripts =
+    open System.Diagnostics
+    open System.Threading
+    open System.Collections.Concurrent
+
+    type private Poller =
+        { mutable Value: string
+          mutable Warned: bool
+          Cts: CancellationTokenSource }
+
+    let private table = ConcurrentDictionary<string, Poller>()
+    let private keyOf (sw: ScriptWidget) = sprintf "%d|%s" sw.IntervalMs sw.Exec
+
+    /// Run `exec` once via /bin/sh -c with a hard timeout; return its trimmed
+    /// first stdout line, or None on failure/timeout.
+    let private runOnce (exec: string) (timeoutMs: int) : string option =
+        try
+            let psi = ProcessStartInfo("/bin/sh")
+            psi.ArgumentList.Add "-c"
+            psi.ArgumentList.Add exec
+            psi.RedirectStandardOutput <- true
+            psi.RedirectStandardError <- true
+            psi.UseShellExecute <- false
+            use p = Process.Start psi
+            let stdoutTask = p.StandardOutput.ReadToEndAsync()
+            if p.WaitForExit timeoutMs then
+                let text = try stdoutTask.Result with _ -> ""
+                Some((text.Split('\n') |> Array.tryHead |> Option.defaultValue "").Trim())
+            else
+                (try p.Kill true with _ -> ())
+                None
+        with _ -> None
+
+    let private loop (p: Poller) (sw: ScriptWidget) =
+        // Per-run timeout clamped to the interval (with a floor so a fast poll
+        // still gives the process a chance, and a cap so a wedged script can't
+        // hold its slot forever).
+        let timeoutMs = sw.IntervalMs |> max 500 |> min 5000
+        while not p.Cts.IsCancellationRequested do
+            match runOnce sw.Exec timeoutMs with
+            | Some v -> p.Value <- v
+            | None ->
+                if not p.Warned then
+                    p.Warned <- true
+                    eprintfn "WTF bar: script widget '%s' failed (nonzero exit / missing / timeout); shows empty. Logged once." sw.Exec
+                p.Value <- ""
+            p.Cts.Token.WaitHandle.WaitOne(max 100 sw.IntervalMs) |> ignore
+
+    /// Cached output for a Script widget; starts its poller on first sight.
+    let resolve (sw: ScriptWidget) : string =
+        let k = keyOf sw
+        match table.TryGetValue k with
+        | true, p -> p.Value
+        | _ ->
+            let p = { Value = ""; Warned = false; Cts = new CancellationTokenSource() }
+            if table.TryAdd(k, p) then
+                let t = Thread(fun () -> loop p sw)
+                t.IsBackground <- true
+                t.Name <- "wtf-bar-script"
+                t.Start()
+                ""
+            else
+                match table.TryGetValue k with
+                | true, pp -> pp.Value
+                | _ -> ""
+
+    /// Stop and drop pollers not referenced by `keep` (called on config reload).
+    let retain (keep: ScriptWidget list) : unit =
+        let live = keep |> List.map keyOf |> Set.ofList
+        for kv in table do
+            if not (live.Contains kv.Key) then
+                match table.TryRemove kv.Key with
+                | true, p -> p.Cts.Cancel()
+                | _ -> ()
+
+/// Every `Script` widget referenced across a set of bars.
+let private scriptsIn (bars: BarConfig list) : ScriptWidget list =
+    bars
+    |> List.collect (fun b -> b.Left @ b.Right)
+    |> List.choose (function Script sw -> Some sw | _ -> None)
+
+/// Build the flat read-model a `Custom` bar widget sees, from the live World and
+/// (JIT only) the D-Bus desktop state. Runs on the loop thread, so reading
+/// `world` is safe; Desktop.snapshot is thread-safe.
+let private barContextNow () : BarContext =
+    let focused =
+        World.focusedWindow world |> Option.bind (fun id -> Map.tryFind id world.Windows)
+    let ctx =
+        { BarContext.empty with
+            Windows = world.Windows |> Map.toList |> List.map snd
+            FocusedTitle = focused |> Option.map (fun w -> w.Title) |> Option.defaultValue ""
+            FocusedApp = focused |> Option.map (fun w -> w.AppId) |> Option.defaultValue ""
+            Workspace = world.Current
+            OccupiedTags =
+                world.Workspaces |> List.filter (fun ws -> ws.Stack.IsSome) |> List.map (fun ws -> ws.Tag)
+            Time = System.DateTime.Now }
+#if WTF_NO_DESKTOP
+    ctx
+#else
+    let d = Desktop.snapshot ()
+    { ctx with
+        Battery = d.Battery |> Option.map (fun b -> b.Percentage, b.State)
+        Network = d.Network |> Option.map (fun n -> n.State)
+        Player = d.Players |> List.tryHead |> Option.map (fun p -> p.Status, p.Title, p.Artist) }
+#endif
+
 /// The full agent-socket snapshot: world + "desktop" (live D-Bus state) + "ui"
 /// (bar/omnibox styling from the LIVE cfg — this is how a config.fsx hot-reload
 /// restyles the bar: its next poll simply sees the new values).
@@ -499,7 +612,7 @@ let private snapshotNow () : string =
         [ match desktopSnapshot () with
           | Some d -> yield ("desktop", d :> System.Text.Json.Nodes.JsonNode)
           | None -> ()
-          yield ("ui", ClientUi.json activePalette cfg.Bars cfg.Omnibox) ]
+          yield ("ui", ClientUi.json activePalette (barContextNow ()) BarScripts.resolve cfg.Bars cfg.Omnibox) ]
     Protocol.snapshotLineWithNodes extras world
 
 /// Apply one control-socket request ON the loop thread (safe to mutate world and
@@ -696,6 +809,9 @@ let applyConfigReload (newCfg: WtfConfig) : unit =
     world <- { world with Gaps = cfg.Gaps }
     applyConfig cfg
     applyEffects [ Arrange(World.arrange world) ]
+    // Reap script-widget pollers no longer referenced by the new config so a bar
+    // that drops a Script (or changes its command/interval) doesn't leak threads.
+    BarScripts.retain (scriptsIn cfg.Bars)
     eprintfn "WTF: config reloaded (mod=%s, %d keybinds)" cfg.ModKey cfg.Keys.Length
 
 // Wire the ReloadConfig hook now that loadConfig + applyConfigReload both exist:
