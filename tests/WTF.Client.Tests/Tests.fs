@@ -763,3 +763,26 @@ let ``buildWith honors configured segments and clock format`` () =
     // a garbage clock format degrades to HH:mm instead of throwing
     let g = WTF.Client.BarModel.buildWith [] [ SClock "\\invalid\\" ] now ""
     Assert.Equal<WTF.Client.BarModel.Segment list>([ WTF.Client.BarModel.Clock "23:45" ], g.Right)
+
+// ---------------------------------------------------------------------------
+// BarRender.draw — the shared bar composition (standalone shm + in-process bar)
+// ---------------------------------------------------------------------------
+
+[<Fact>]
+let ``BarRender.draw fills a full-size pixel buffer`` () =
+    let u = WTF.Client.ClientConfig.barDefaults
+    let model = WTF.Client.BarModel.buildWith u.Left u.Right System.DateTime.Now ""
+    use surface = new WTF.Client.Render.Surface()
+    let w, h = 200, 28
+    WTF.Client.BarRender.draw surface u model w h
+    let bytes = surface.CopyOut(w, h)
+    Assert.Equal(w * h * 4, bytes.Length)
+    // The opaque background fill guarantees at least one non-zero byte drawn.
+    Assert.True(Array.exists (fun b -> b <> 0uy) bytes, "bar render produced only zero pixels")
+
+[<Fact>]
+let ``Surface.CopyOut returns a zeroed buffer before anything is drawn`` () =
+    use surface = new WTF.Client.Render.Surface()
+    let bytes = surface.CopyOut(10, 4)
+    Assert.Equal(10 * 4 * 4, bytes.Length)
+    Assert.True(Array.forall (fun b -> b = 0uy) bytes)

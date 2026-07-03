@@ -205,6 +205,8 @@ type BarConfig =
       Dim: ColorSpec            // idle workspace / secondary text
       Accent: ColorSpec         // current-workspace pill / highlights
       Glass: bool               // frost the bar: scenefx backdrop blur behind it
+      Embedded: bool            // render IN-PROCESS in the compositor (no separate
+                                // wtf-bar process/poll); false = external client
       Left: BarSegment list
       Right: BarSegment list }
 
@@ -221,6 +223,7 @@ module BarConfig =
           Dim = Fixed "#6c7086"
           Accent = Fixed "#89b4fa"
           Glass = false
+          Embedded = true
           Left = [ Workspaces ]
           Right = [ Player; Network; Battery; Clock "HH:mm" ] }
 
@@ -617,6 +620,8 @@ type BarConfigBuilder() =
     member _.Accent(c: BarConfig, v: Palette.Palette -> string) = { c with Accent = OfPalette v }
     [<CustomOperation "glass">]
     member _.Glass(c: BarConfig, v: bool) = { c with Glass = v }
+    [<CustomOperation "embedded">]
+    member _.Embedded(c: BarConfig, v: bool) = { c with Embedded = v }
     [<CustomOperation "left">]
     member _.Left(c: BarConfig, v: BarSegment list) = { c with Left = v }
     [<CustomOperation "right">]

@@ -304,6 +304,12 @@ let ``barConfig CE overrides only what is set`` () =
     Assert.Equal(sprintf "%A" BarConfig.defaults.Left, sprintf "%A" b.Left)
 
 [<Fact>]
+let ``bars are embedded (in-process) by default and the CE can opt out`` () =
+    Assert.True(BarConfig.defaults.Embedded)
+    Assert.True((barConfig { name "x" }).Embedded)
+    Assert.False((barConfig { embedded false }).Embedded)
+
+[<Fact>]
 let ``omniboxConfig CE overrides only what is set`` () =
     let o = omniboxConfig { width 720; prompt "λ"; selection "#f38ba8" }
     Assert.Equal(720, o.Width)

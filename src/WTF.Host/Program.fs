@@ -615,6 +615,91 @@ let private snapshotNow () : string =
           yield ("ui", ClientUi.json activePalette (barContextNow ()) BarScripts.resolve cfg.Bars cfg.Omnibox) ]
     Protocol.snapshotLineWithNodes extras world
 
+#if !WTF_NO_CLIENT
+/// In-process embedded bars: render WTF.Client's BarRender pipeline into a scene
+/// buffer via `wtf_set_bar`, reading the LIVE in-process snapshot — the exact
+/// pipeline the standalone `wtf-bar` runs, minus the process/poll. The heavy
+/// ImageSharp render runs on a background timer thread; only the scene mutation
+/// (wtf_set_bar / wtf_clear_bar) is marshalled onto the loop thread via `bridge`.
+/// A bar flipped to `embedded false` (or removed) is cleared, returning its strip.
+/// AOT: WTF.Client is out of the graph, so this whole module is compiled out.
+module private EmbeddedBars =
+    open WTF.Client
+
+    let private surfaces = System.Collections.Generic.Dictionary<int, Render.Surface>()
+    let private lastKey = System.Collections.Generic.Dictionary<int, string>()
+    let mutable private active: Set<int> = Set.empty
+
+    let private anchorOf =
+        function Top -> 0 | Bottom -> 1 | Left -> 2 | Right -> 3
+
+    /// One render pass, OFF the loop thread. `bars`/`json`/`sw`/`sh` were read on
+    /// the loop thread; `push`/`clear` marshal the scene mutation back onto it.
+    let private pass (bars: BarConfig list) (json: string) (sw: int) (sh: int)
+                     (push: int -> byte[] -> int -> int -> int -> int -> unit)
+                     (clear: int -> unit) : unit =
+        let embedded = bars |> List.indexed |> List.filter (fun (i, b) -> b.Embedded && i < 4)
+        let nowActive = embedded |> List.map fst |> Set.ofList
+        for id in Set.difference active nowActive do
+            clear id
+            surfaces.Remove id |> ignore
+            lastKey.Remove id |> ignore
+        active <- nowActive
+        for (id, bar) in embedded do
+            let ui = ClientConfig.barOfSnapshot (Some bar.Name) json
+            let model = BarModel.buildWith ui.Left ui.Right System.DateTime.Now json
+            let vertical = (bar.Position = Left || bar.Position = Right)
+            let w = if vertical then bar.Height else sw
+            let h = if vertical then sh else bar.Height
+            if w > 0 && h > 0 then
+                // Repaint only when the visible content or size changed.
+                let key = sprintf "%dx%d|%A|%A" w h ui model
+                let changed = match lastKey.TryGetValue id with true, k -> k <> key | _ -> true
+                if changed then
+                    lastKey[id] <- key
+                    let surface =
+                        match surfaces.TryGetValue id with
+                        | true, s -> s
+                        | _ ->
+                            let s = new Render.Surface()
+                            surfaces[id] <- s
+                            s
+                    BarRender.draw surface ui model w h
+                    let bytes = surface.CopyOut(w, h)
+                    push id bytes w h (anchorOf bar.Position) bar.Height
+
+    /// Start the background render loop. `snapshotNow`, `cfg`, and `world` are all
+    /// READ-ONLY here and read atomically (a mutable ref to an immutable value +
+    /// the lock-guarded desktop aggregator), so building the JSON off-loop is safe;
+    /// only the scene MUTATION (wtf_set_bar / wtf_clear_bar) is marshalled onto the
+    /// loop thread via `bridge.Post`.
+    let start () : unit =
+        let push id (bytes: byte[]) w h anchor th =
+            bridge.Post(Ffi.wtf_command_notify, fun () -> Ffi.wtf_set_bar(id, bytes, w, h, anchor, th))
+        let clear id =
+            bridge.Post(Ffi.wtf_command_notify, fun () -> Ffi.wtf_clear_bar id)
+        let t =
+            System.Threading.Thread(fun () ->
+                while true do
+                    let mutable interval = 300
+                    try
+                        let bars = cfg.Bars
+                        let wld = world                       // one atomic ref read
+                        let json = snapshotNow ()
+                        let sw = Px.rawL wld.Screen.Width
+                        let sh = Px.rawL wld.Screen.Height
+                        match bars |> List.filter (fun b -> b.Embedded) |> List.map (fun b -> b.RefreshMs) with
+                        | [] -> ()
+                        | ms -> interval <- max 50 (List.min ms)
+                        pass bars json sw sh push clear
+                    with ex ->
+                        eprintfn "WTF: embedded bar render failed: %s" ex.Message
+                    System.Threading.Thread.Sleep interval)
+        t.IsBackground <- true
+        t.Name <- "wtf-embedded-bars"
+        t.Start()
+#endif
+
 /// Apply one control-socket request ON the loop thread (safe to mutate world and
 /// call wlroots), returning the resulting snapshot. A Query changes nothing.
 let private handleOnLoop (line: string) : string =
@@ -958,6 +1043,13 @@ let onReady () : unit =
         world <- restoreSettings saved world
         history <- History.create cfg.HistoryLimit world
     | None -> ()
+    // In-process embedded bars (default): render them in the compositor instead of
+    // a separate wtf-bar process. Skipped in safe mode (minimal appearance) and in
+    // the AOT build (no WTF.Client render in the graph — use the standalone client).
+#if !WTF_NO_CLIENT
+    if not safeMode then
+        EmbeddedBars.start ()
+#endif
     eprintfn "WTF: ready — agent socket at %s — spawning startup: %A" path cfg.StartupApps
     if safeMode then
         eprintfn "WTF: safe mode — skipping %d startup app(s)" cfg.StartupApps.Length

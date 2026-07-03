@@ -124,6 +124,17 @@ void wtf_set_wallpaper_color(double r, double g, double b);
 /* Remove any wallpaper (image buffer + color rect). */
 void wtf_clear_wallpaper(void);
 
+/* ---- embedded bars (TOP layer, drawn above tiled windows) ---- */
+/* Set/update embedded bar `id` (0..3) from raw RGBA pixels (same format as the
+ * wallpaper: width*height*4 bytes, R,G,B,A, copied synchronously). `anchor` is
+ * 0=top 1=bottom 2=left 3=right; `thickness` is the px reserved on that edge
+ * (subtracted from the tiling usable area). The brain sizes the buffer to the
+ * full edge extent x thickness and re-pushes on output resize / state change. */
+void wtf_set_bar(int id, const unsigned char *rgba, int width, int height,
+	int anchor, int thickness);
+/* Remove embedded bar `id`, returning its reserved strip to the usable area. */
+void wtf_clear_bar(int id);
+
 /* ---- input configuration (keyboard xkb/repeat + libinput pointer/touchpad) ---- */
 
 /* Set the xkb rule-names and key-repeat applied to every keyboard (existing and

@@ -147,9 +147,12 @@ let wtfConfig =
 
         // ---- bar & omnibox styling (optional; defaults look like this seed) ----
         // Colors/segments/font restyle a RUNNING bar live on save; position and
-        // height apply when the bar starts. Multiple bars: `bars [ ... ]` with
-        // names + one `wtf-bar --name <n>` process per entry. Left/Right =
-        // vertical bars. See docs/configuration.md#bar--omnibox-styling.
+        // height apply when the bar starts. Bars render IN-PROCESS by default
+        // (`embedded true`); `embedded false` falls back to a standalone `wtf-bar`
+        // you launch from `startup`. Multiple bars: `bars [ ... ]` with names —
+        // embedded ones need no launcher; each `embedded false` entry wants one
+        // `wtf-bar --name <n>`. Left/Right = vertical bars. See
+        // docs/configuration.md#bar--omnibox-styling.
         //
         // Every color takes a fixed hex OR a palette function (fun p -> …) — the
         // SAME wallpaper palette the borders read, re-resolved each snapshot so a
@@ -157,6 +160,7 @@ let wtfConfig =
         // panel (backdrop blur); translucency is just the alpha in `background`.
         // bar (barConfig {
         //     position Top
+        //     embedded true                                          // in-process (default); false = standalone wtf-bar
         //     refreshMs 300                                           // poll/redraw cadence; repaints only on change
         //     glass true
         //     background (fun p -> Color.toHexA 0.45 p.Base)          // translucent, from wallpaper

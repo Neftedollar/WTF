@@ -63,8 +63,9 @@ src/
   WTF.Desktop/           D-Bus desktop services: notifications, battery,
                          network, media players
   WTF.Agent/             the opt-in LLM driver behind `wtfctl ask`
-  WTF.Client/            shared client plumbing (socket, fuzzy match, panel render)
-  WTF.Bar/               the status bar
+  WTF.Client/            shared client plumbing (socket, fuzzy match, panel +
+                         bar render — reused in-process by the embedded bar)
+  WTF.Bar/               the status bar (standalone layer-shell client)
   WTF.Omnibox/           the launcher
   WTF.Plugins/           reflective layout-plugin loader
   wtfctl/                the CLI over the control socket
@@ -73,6 +74,28 @@ scripts/                 build / install / smoke / session tooling
 packaging/               .desktop, portals config, PKGBUILD, rpm spec, patches
 docs/                    user documentation
 ```
+
+## Surfaces: bar & omnibox
+
+WTF's own bar and launcher are **surfaces** — pixels the WM draws over the tiled
+windows. Two paths render them, sharing one pure composition (`WTF.Client`'s
+`BarRender` / `Render.Surface`, `Bgra32` = `ARGB8888`):
+
+- **In-process (default).** The host renders each `embedded` bar directly:
+  `BarRender.draw` → `byte[]` → `wtf_set_bar(id, pixels, …)`, which the shim puts
+  in a scene buffer on the layer-shell TOP layer and reserves its strip from the
+  usable area (so tiling never overlaps the bar) — the same mechanism the
+  wallpaper uses one layer down. State is read in-process (no socket), on a timer
+  gated by `refreshMs` with change-detection, so an idle bar costs nothing.
+- **External (opt-in / third-party).** `bar { embedded false }`, `wtf-bar`,
+  `wtf-omnibox`, and any third-party client (waybar, wofi…) run as **standalone
+  layer-shell clients** and poll the **agent socket** for the state snapshot. The
+  socket + layer-shell contract is stable, so external surfaces stay first-class
+  and portable to other compositors.
+
+The standalone exes are thin layer-shell wrappers around the *same* shared
+render, so both paths look identical. Under NativeAOT the host has no embedded
+surface (it uses the external `wtf-bar`).
 
 ## Builds
 
