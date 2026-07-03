@@ -295,7 +295,7 @@ let ``barConfig CE overrides only what is set`` () =
     let b = barConfig { name "bottom"; position Bottom; accent "#f38ba8"; right [ Clock "ddd HH:mm" ] }
     Assert.Equal("bottom", b.Name)
     Assert.Equal(Bottom, b.Position)
-    Assert.Equal("#f38ba8", b.Accent)
+    Assert.Equal("#f38ba8", ColorSpec.resolve Palette.defaultPalette b.Accent)
     Assert.Equal<BarSegment list>([ Clock "ddd HH:mm" ], b.Right)
     // untouched knobs keep the defaults
     Assert.Equal(BarConfig.defaults.Height, b.Height)
@@ -306,7 +306,7 @@ let ``omniboxConfig CE overrides only what is set`` () =
     let o = omniboxConfig { width 720; prompt "λ"; selection "#f38ba8" }
     Assert.Equal(720, o.Width)
     Assert.Equal("λ", o.Prompt)
-    Assert.Equal("#f38ba8", o.Selection)
+    Assert.Equal("#f38ba8", ColorSpec.resolve Palette.defaultPalette o.Selection)
     Assert.Equal(OmniboxConfig.defaults.Height, o.Height)
 
 [<Fact>]
@@ -320,7 +320,7 @@ let ``config CE: bar sets a single entry, bars a list`` () =
 [<Fact>]
 let ``ClientUi.json emits the wire contract shape`` () =
     let bars = [ { BarConfig.defaults with Name = "main"; Position = Right; Left = [ Workspaces; Label "λ" ] } ]
-    let node = ClientUi.json bars OmniboxConfig.defaults
+    let node = ClientUi.json Palette.defaultPalette bars OmniboxConfig.defaults
     let s = node.ToJsonString()
     Assert.Contains("\"bars\":[{", s)
     Assert.Contains("\"name\":\"main\"", s)
@@ -329,3 +329,30 @@ let ``ClientUi.json emits the wire contract shape`` () =
     Assert.Contains("{\"label\":\"\\u03BB\"", s.Replace("λ", "\\u03BB")) // Label survives (raw or escaped)
     Assert.Contains("\"omnibox\":{", s)
     Assert.Contains("\"prompt\":\"\\u003E\"", s.Replace("\">\"", "\"\\u003E\"")) // '>' raw or escaped
+
+[<Fact>]
+let ``ColorSpec palette function is resolved into the wire hex`` () =
+    // A palette-driven background must serialize as the RESOLVED hex, not a
+    // function — so the client (which never sees the palette) gets a plain color.
+    let pal = { Palette.defaultPalette with Base = { R = 1.0; G = 0.0; B = 0.0; A = 1.0 } }
+    let bars = [ { BarConfig.defaults with Background = OfPalette(fun p -> Color.toHex p.Base) } ]
+    let s = (ClientUi.json pal bars OmniboxConfig.defaults).ToJsonString()
+    Assert.Contains("\"background\":\"#ff0000\"", s)
+
+[<Fact>]
+let ``ColorSpec.resolve degrades a throwing palette function to the client default`` () =
+    // TOTAL: a pathological user function must not unwind the whole snapshot; it
+    // yields the EMPTY sentinel (not a valid hex), so the client's parseHex fails
+    // and it falls back to its built-in default — the element stays VISIBLE.
+    let bad = OfPalette(fun _ -> failwith "boom")
+    Assert.Equal("", ColorSpec.resolve Palette.defaultPalette bad)
+    Assert.Equal("#1e1e2eeb", ColorSpec.resolve Palette.defaultPalette (Fixed "#1e1e2eeb"))
+
+[<Fact>]
+let ``barConfig CE accepts a palette function for a color`` () =
+    // Guards the MAIN user path: the overloaded custom-operation must route a
+    // lambda into OfPalette (not just the direct DU construction the other tests
+    // use). A compiler/overload regression would surface here, not silently.
+    let pal = { Palette.defaultPalette with Base = { R = 0.0; G = 1.0; B = 0.0; A = 1.0 } }
+    let b = barConfig { background (fun p -> Color.toHex p.Base) }
+    Assert.Equal("#00ff00", ColorSpec.resolve pal b.Background)

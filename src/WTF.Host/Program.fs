@@ -483,7 +483,7 @@ let private snapshotNow () : string =
         [ match desktopSnapshot () with
           | Some d -> yield ("desktop", d :> System.Text.Json.Nodes.JsonNode)
           | None -> ()
-          yield ("ui", ClientUi.json cfg.Bars cfg.Omnibox) ]
+          yield ("ui", ClientUi.json activePalette cfg.Bars cfg.Omnibox) ]
     Protocol.snapshotLineWithNodes extras world
 
 /// Apply one control-socket request ON the loop thread (safe to mutate world and
@@ -593,6 +593,14 @@ let applyConfig (c: WtfConfig) : unit =
     // Eye-candy => also forced off in safe mode.
     let glowOn = if safeMode then false else c.Glow
     Ffi.wtf_set_glow ((if glowOn then 1 else 0), c.GlowSigma, c.GlowIntensity)
+    // Glass (frosted) bar / omnibox: tell the shim to backdrop-blur those layer
+    // surfaces by namespace. Per-namespace, so all "wtf-bar" surfaces frost when
+    // ANY bar sets glass (one namespace for the fleet); the omnibox is separate.
+    // Off in safe mode with the rest of the eye-candy.
+    let barGlass = not safeMode && (c.Bars |> List.exists (fun b -> b.Glass))
+    Ffi.wtf_set_layer_blur ("wtf-bar", (if barGlass then 1 else 0))
+    let omniGlass = not safeMode && c.Omnibox.Glass
+    Ffi.wtf_set_layer_blur ("wtf-omnibox", (if omniGlass then 1 else 0))
     // Input devices: keyboard xkb/repeat + libinput knobs.
     // Empty xkb fields stay "" — the C side converts those to NULL for xkb defaults.
     let kb = c.Input.Keyboard

@@ -150,12 +150,25 @@ let wtfConfig =
         // height apply when the bar starts. Multiple bars: `bars [ ... ]` with
         // names + one `wtf-bar --name <n>` process per entry. Left/Right =
         // vertical bars. See docs/configuration.md#bar--omnibox-styling.
+        //
+        // Every color takes a fixed hex OR a palette function (fun p -> …) — the
+        // SAME wallpaper palette the borders read, re-resolved each snapshot so a
+        // dynamic .heic re-tints the bar through the day. `glass true` frosts the
+        // panel (backdrop blur); translucency is just the alpha in `background`.
         // bar (barConfig {
-        //     position Bottom
-        //     accent "#f38ba8"
+        //     position Top
+        //     glass true
+        //     background (fun p -> Color.toHexA 0.45 p.Base)          // translucent, from wallpaper
+        //     foreground (fun p -> Color.toHex p.Text)
+        //     accent     (fun p -> Palette.accent 0.5 p |> Color.toHex) // workspace pills
         //     right [ Player; Battery; Clock "ddd HH:mm" ]
         // })
-        // omnibox (omniboxConfig { width 720; prompt "λ" })
+        // omnibox (omniboxConfig {
+        //     glass true
+        //     selection   (fun p -> Palette.accent 0.4 p |> Color.toHex)
+        //     promptColor (fun p -> Palette.accent 0.7 p |> Color.toHex)
+        //     prompt "λ"
+        // })
 
         // ---- input devices: applied per device type as each attaches ----
         // `input` plugs an InputConfig; build it with the `inputDevices { ... }`

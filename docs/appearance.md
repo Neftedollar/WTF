@@ -180,6 +180,47 @@ segments, fonts, position (all four screen edges), multiple bars. A save
 restyles the running bar live. Full reference:
 [Configuration → Bar & omnibox styling](configuration.md#bar--omnibox-styling).
 
+### Palette colors (from the wallpaper)
+
+Every bar/omnibox color takes **either** a fixed hex **or** a function of the
+wallpaper palette — the same `Palette` the borders read:
+
+```fsharp
+bar (barConfig {
+    background (fun p -> Color.toHexA 0.45 p.Base)   // translucent, wallpaper-derived
+    foreground (fun p -> Color.toHex p.Text)
+    accent     (fun p -> Palette.accent 0.5 p |> Color.toHex)  // workspace pills
+})
+omnibox (omniboxConfig {
+    selection   (fun p -> Palette.accent 0.4 p |> Color.toHex)
+    promptColor (fun p -> Palette.accent 0.7 p |> Color.toHex)
+})
+```
+
+`Color.toHexA a c` overrides the alpha (0..1) for a translucent panel. Palette
+colors are resolved **host-side each snapshot**, so with a dynamic (`.heic`)
+wallpaper the bar/omnibox re-tint through the day — no restart. The wire stays
+plain hex, so the clients need no change.
+
+Taste tip: keep the **background** calm (a fixed dark, or `p.Base` which is the
+wallpaper's darkest role) and pull **accents** from the palette — a saturated
+`p.Base` can make a whole panel vivid. `Palette.accent t` (t in 0..1) samples
+the accent ramp; `p.Text`/`p.Subtext` are legible on `p.Base`.
+
+### Glass panels
+
+```fsharp
+bar (barConfig { glass true; background (fun p -> Color.toHexA 0.5 p.Base) })
+omnibox (omniboxConfig { glass true; background (fun p -> Color.toHexA 0.85 p.Base) })
+```
+
+`glass true` makes the compositor **backdrop-blur** behind that panel (scenefx),
+so a translucent bar/omnibox frosts what is behind it. Transparency itself is
+just the alpha in `background` — `glass` adds the blur. Implemented per
+layer-shell namespace: all `wtf-bar` surfaces frost when any bar sets `glass`
+(one namespace for the fleet); the omnibox is separate. Off in safe mode with
+the rest of the eye-candy.
+
 ## Gaps
 
 ```fsharp

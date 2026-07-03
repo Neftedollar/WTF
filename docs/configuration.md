@@ -140,6 +140,7 @@ apply when the bar starts). The omnibox reads its styling each time it opens.
 bar (barConfig {
     position Bottom               // Top | Bottom | Left | Right
     height 32                     // thickness (bar width for Left/Right)
+    glass true                    // frost: backdrop-blur behind the bar
     accent "#f38ba8"
     background "#11111bcc"        // #rrggbbaa — translucent
     left  [ Workspaces; Label "λ" ]
@@ -148,11 +149,27 @@ bar (barConfig {
 
 omnibox (omniboxConfig {
     width 720
+    glass true                    // frost the launcher too
     selection "#f38ba8"
     prompt "λ"
     placeholder "run…"
 })
 ```
+
+**Colors take a palette function too.** Any color knob accepts either a fixed
+hex or `(fun p -> …)` reading the wallpaper palette (resolved host-side each
+snapshot, so it tracks a dynamic wallpaper live):
+
+```fsharp
+bar (barConfig {
+    background (fun p -> Color.toHexA 0.45 p.Base)      // translucent, from wallpaper
+    accent     (fun p -> Palette.accent 0.5 p |> Color.toHex)
+    foreground (fun p -> Color.toHex p.Text)
+})
+```
+
+`Color.toHexA a c` overrides alpha (0..1). Keep backgrounds calm and pull
+accents from the palette — see [Appearance → Bar & omnibox](appearance.md#bar--omnibox).
 
 **Multiple bars** — give each a name and launch one `wtf-bar` process per
 entry (the `--name` flag picks the entry; no flag = the first):
@@ -170,10 +187,11 @@ the `right` list stacks from the bottom, and the clock splits `HH:mm` into
 two lines. Long segments (`Player`, `Network`) render compact glyphs there.
 
 Bar segments: `Workspaces`, `Clock "<.NET time format>"`, `Battery`,
-`Network`, `Player` (MPRIS now-playing), `Label "<text>"`. Omnibox knobs:
-`width`, `height`, `rowHeight`, `fontSize`, `background`, `inputBackground`,
-`foreground`, `dim`, `selection`, `prompt`, `promptColor`, `placeholder`.
-All colors are `#rrggbb` / `#rrggbbaa`.
+`Network`, `Player` (MPRIS now-playing), `Label "<text>"`. Bar knobs also
+include `glass` (bool). Omnibox knobs: `width`, `height`, `rowHeight`,
+`fontSize`, `background`, `inputBackground`, `foreground`, `dim`, `selection`,
+`prompt`, `promptColor`, `placeholder`, `glass`. Every color knob takes a
+`#rrggbb`/`#rrggbbaa` string **or** a `(fun p -> …)` palette function.
 
 ## Dynamic appearance — knobs as functions
 

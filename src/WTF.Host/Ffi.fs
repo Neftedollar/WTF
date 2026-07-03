@@ -99,6 +99,11 @@ module Ffi =
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_glow(int enabled, double sigma, double intensity)
 
+    /// Glass panels: backdrop-blur every layer-shell surface with this namespace
+    /// (e.g. "wtf-bar", "wtf-omnibox"). enabled 0 removes it.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_layer_blur(string ns, int enabled)
+
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_fullscreen(int id, int on)
 

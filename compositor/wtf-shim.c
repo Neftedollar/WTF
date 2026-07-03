@@ -366,6 +366,25 @@ static bool  g_glow_enabled = false;
 static float g_glow_sigma = 20.0f;        /* halo spread in px */
 static float g_glow_intensity = 0.6f;     /* halo strength 0..1 */
 
+/* Glass panels: layer-shell namespaces whose surfaces get scenefx backdrop blur
+ * (frosted bar / omnibox). A handful at most — a fixed set keeps it allocation-
+ * light and the match a cheap strcmp on commit. */
+#define WTF_MAX_BLUR_NS 8
+static char *g_blur_ns[WTF_MAX_BLUR_NS];
+static int   g_blur_ns_count = 0;
+
+static bool layer_ns_should_blur(const char *ns) {
+	if (ns == NULL) {
+		return false;
+	}
+	for (int i = 0; i < g_blur_ns_count; i++) {
+		if (g_blur_ns[i] != NULL && strcmp(g_blur_ns[i], ns) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 /* ---- input config (xkb keymap + key repeat, set via wtf_set_keymap) ---- */
 /* Each xkb field is NULL => let xkb pick its compile default for that field. */
 static char *g_kb_rules   = NULL;
@@ -2299,10 +2318,25 @@ static void server_new_toplevel_decoration(struct wl_listener *listener,
 /* layer-shell (bars, wallpaper, launchers, notifications)            */
 /* ------------------------------------------------------------------ */
 
+/* Frost a layer surface (bar / omnibox) if its namespace opted into glass:
+ * scenefx backdrop blur on its scene buffers, so the translucent panel blurs
+ * what is behind it. Re-applied on every commit because the client re-commits
+ * fresh buffers (which arrive without the effect). No-op namespace => no blur,
+ * so ordinary layer clients are untouched. */
+static void layer_apply_blur(struct wtf_layer_surface *ls) {
+	if (ls->scene == NULL) {
+		return;
+	}
+	bool blur = layer_ns_should_blur(ls->layer_surface->namespace);
+	/* radius 0: bars are square; blur is the whole point here. */
+	node_apply_fx(&ls->scene->tree->node, 0, blur);
+}
+
 static void layer_surface_map(struct wl_listener *listener, void *data) {
 	struct wtf_layer_surface *ls = wl_container_of(listener, ls, map);
 	struct wtf_server *srv = ls->server;
 
+	layer_apply_blur(ls);
 	arrange_layers(srv);
 
 	/* An EXCLUSIVE layer surface (e.g. a launcher / lockscreen) grabs the
@@ -2352,6 +2386,7 @@ static void layer_surface_commit(struct wl_listener *listener, void *data) {
 		}
 	}
 
+	layer_apply_blur(ls); /* fresh buffer this commit lost the effect; re-apply */
 	arrange_layers(srv);
 }
 
@@ -2772,6 +2807,44 @@ void wtf_set_glow(int enabled, double sigma, double intensity) {
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		sync_glow(t);
+	}
+	schedule_frame();
+}
+
+void wtf_set_layer_blur(const char *ns, int enabled) {
+	if (ns == NULL || ns[0] == '\0') {
+		return;
+	}
+	/* Remove any existing entry (idempotent; swap-with-last to keep it dense). */
+	for (int i = 0; i < g_blur_ns_count; i++) {
+		if (g_blur_ns[i] != NULL && strcmp(g_blur_ns[i], ns) == 0) {
+			free(g_blur_ns[i]);
+			g_blur_ns[i] = g_blur_ns[--g_blur_ns_count];
+			g_blur_ns[g_blur_ns_count] = NULL;
+			break;
+		}
+	}
+	if (enabled) {
+		if (g_blur_ns_count >= WTF_MAX_BLUR_NS) {
+			wlr_log(WLR_ERROR, "wtf_set_layer_blur: too many glass namespaces "
+				"(max %d); ignoring '%s'", WTF_MAX_BLUR_NS, ns);
+		} else {
+			char *dup = strdup(ns);
+			if (dup == NULL) {
+				/* OOM: don't inc the count with a NULL slot (it could never be
+				 * removed and the "(N glass namespace(s))" log would lie). */
+				wlr_log(WLR_ERROR, "wtf_set_layer_blur: strdup OOM; dropping '%s'", ns);
+			} else {
+				g_blur_ns[g_blur_ns_count++] = dup;
+			}
+		}
+	}
+	wlr_log(WLR_INFO, "layer blur: '%s' %s (%d glass namespace(s))",
+		ns, enabled ? "on" : "off", g_blur_ns_count);
+	/* Re-apply to every existing layer surface (config hot-reload path). */
+	struct wtf_layer_surface *ls;
+	wl_list_for_each(ls, &server.layer_surfaces, link) {
+		layer_apply_blur(ls);
 	}
 	schedule_frame();
 }

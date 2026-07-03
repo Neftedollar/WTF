@@ -84,6 +84,11 @@ module Color =
         if a >= 255 then sprintf "#%02x%02x%02x" r g b
         else sprintf "#%02x%02x%02x%02x" r g b a
 
+    /// `toHex` with the alpha OVERRIDDEN to `alpha` (0..1). The ergonomic form for
+    /// translucent palette colors in bar/omnibox configs: `Color.toHexA 0.55 p.Base`
+    /// => a #rrggbbaa the client parses as a see-through fill.
+    let toHexA (alpha: float) (c: Color) : string = toHex { c with A = clamp01 alpha }
+
     // =====================================================================
     // COLOR SPACES — Bjorn Ottosson OKLab, standard constants.
     // =====================================================================

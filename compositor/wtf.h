@@ -107,6 +107,9 @@ void wtf_set_shadow(int enabled, double sigma, double r, double g, double b,
  * own (activeBorder) color. sigma = halo spread in px (<=0 keeps current),
  * intensity in [0,1] (out of range keeps current). */
 void wtf_set_glow(int enabled, double sigma, double intensity);
+/* Glass panels: backdrop-blur every layer-shell surface whose namespace equals
+ * `ns` (e.g. "wtf-bar", "wtf-omnibox"). enabled 0 removes that namespace. */
+void wtf_set_layer_blur(const char *ns, int enabled);
 
 /* ---- wallpaper (BACKGROUND layer, drawn below layer-shell bg clients) ---- */
 /* Set an image wallpaper from raw RGBA pixels. `rgba` is exactly width*height*4

@@ -101,19 +101,53 @@ type BarPosition =
     | Left     // vertical bar; Height acts as THICKNESS, segments stack top->bottom
     | Right
 
-/// Colors are "#rrggbb" or "#rrggbbaa" hex strings (same convention as borders).
-/// Multiple bars are supported: give each a Name and launch one wtf-bar process
-/// per entry (`wtf-bar` takes the first/only bar; `wtf-bar --name status2`
-/// takes the entry named "status2").
+/// A bar/omnibox color: either a FIXED "#rrggbb"/"#rrggbbaa" hex, or a function
+/// of the wallpaper palette (the SAME palette the borders read). Palette colors
+/// are resolved host-side at snapshot time, so they track a dynamic wallpaper
+/// live — the bar re-styles itself through the day. The wire stays plain hex.
+type ColorSpec =
+    | Fixed of string
+    | OfPalette of (Palette.Palette -> string)
+
+module ColorSpec =
+    /// Set once the first time a palette function throws, so the diagnostic is
+    /// emitted a single time per process rather than ~once/second per snapshot.
+    let mutable private warnedThrow = false
+
+    /// Resolve to a "#rrggbb(aa)" string. TOTAL: a throwing palette function
+    /// degrades to the EMPTY string — deliberately NOT a valid hex, so the client
+    /// (`parseHex ""` -> None -> `Option.defaultValue fallback`) keeps rendering
+    /// its built-in default color and the element stays VISIBLE, rather than a
+    /// valid-but-transparent "#00000000" that would silently hide it. The throw
+    /// is logged once (observability: a fix isn't done without a trace) rather
+    /// than swallowed on every snapshot.
+    let resolve (pal: Palette.Palette) (c: ColorSpec) : string =
+        match c with
+        | Fixed s -> s
+        | OfPalette f ->
+            try
+                f pal
+            with ex ->
+                if not warnedThrow then
+                    warnedThrow <- true
+                    eprintfn "WTF.Config: a palette color function threw (%s); \
+                              the client keeps its default for it. Logged once." ex.Message
+                ""
+
+/// Colors are `ColorSpec` (a fixed hex OR a palette function). Multiple bars are
+/// supported: give each a Name and launch one wtf-bar process per entry
+/// (`wtf-bar` takes the first/only bar; `wtf-bar --name status2` the entry named
+/// "status2").
 type BarConfig =
     { Name: string
       Position: BarPosition
       Height: int              // thickness: bar height (Top/Bottom) or width (Left/Right)
       FontSize: float
-      Background: string       // supports alpha (#rrggbbaa) for translucency
-      Foreground: string
-      Dim: string              // idle workspace / secondary text
-      Accent: string           // current-workspace pill / highlights
+      Background: ColorSpec     // supports alpha (#rrggbbaa) for translucency
+      Foreground: ColorSpec
+      Dim: ColorSpec            // idle workspace / secondary text
+      Accent: ColorSpec         // current-workspace pill / highlights
+      Glass: bool               // frost the bar: scenefx backdrop blur behind it
       Left: BarSegment list
       Right: BarSegment list }
 
@@ -124,10 +158,11 @@ module BarConfig =
           Position = Top
           Height = 28
           FontSize = 14.0
-          Background = "#1e1e2eeb"
-          Foreground = "#cdd6f4"
-          Dim = "#6c7086"
-          Accent = "#89b4fa"
+          Background = Fixed "#1e1e2eeb"
+          Foreground = Fixed "#cdd6f4"
+          Dim = Fixed "#6c7086"
+          Accent = Fixed "#89b4fa"
+          Glass = false
           Left = [ Workspaces ]
           Right = [ Player; Network; Battery; Clock "HH:mm" ] }
 
@@ -136,14 +171,15 @@ type OmniboxConfig =
       Height: int
       RowHeight: int
       FontSize: float
-      Background: string
-      InputBackground: string
-      Foreground: string
-      Dim: string
-      Selection: string        // selected-row background
+      Background: ColorSpec
+      InputBackground: ColorSpec
+      Foreground: ColorSpec
+      Dim: ColorSpec
+      Selection: ColorSpec     // selected-row background
       Prompt: string           // prompt glyph/text, e.g. ">" or "λ"
-      PromptColor: string
-      Placeholder: string }    // hint shown while the query is empty
+      PromptColor: ColorSpec
+      Placeholder: string      // hint shown while the query is empty
+      Glass: bool }            // frost the launcher: scenefx backdrop blur behind it
 
 module OmniboxConfig =
     let defaults =
@@ -151,14 +187,15 @@ module OmniboxConfig =
           Height = 400
           RowHeight = 30
           FontSize = 16.0
-          Background = "#181825f4"
-          InputBackground = "#313244"
-          Foreground = "#cdd6f4"
-          Dim = "#7f849c"
-          Selection = "#89b4fa"
+          Background = Fixed "#181825f4"
+          InputBackground = Fixed "#313244"
+          Foreground = Fixed "#cdd6f4"
+          Dim = Fixed "#7f849c"
+          Selection = Fixed "#89b4fa"
           Prompt = ">"
-          PromptColor = "#a6e3a1"
-          Placeholder = "type to search apps…" }
+          PromptColor = Fixed "#a6e3a1"
+          Placeholder = "type to search apps…"
+          Glass = false }
 
 // --- dynamic appearance model (E1: appearance as functions of context) ---
 
@@ -504,14 +541,22 @@ type BarConfigBuilder() =
     member _.Height(c: BarConfig, v) = { c with Height = v }
     [<CustomOperation "fontSize">]
     member _.FontSize(c: BarConfig, v) = { c with FontSize = v }
+    // Each color knob takes EITHER a fixed hex string OR a palette function
+    // `(fun p -> Color.toHexA 0.5 p.Base)` — overloaded so both read naturally.
     [<CustomOperation "background">]
-    member _.Background(c: BarConfig, v: string) = { c with Background = v }
+    member _.Background(c: BarConfig, v: string) = { c with Background = Fixed v }
+    member _.Background(c: BarConfig, v: Palette.Palette -> string) = { c with Background = OfPalette v }
     [<CustomOperation "foreground">]
-    member _.Foreground(c: BarConfig, v: string) = { c with Foreground = v }
+    member _.Foreground(c: BarConfig, v: string) = { c with Foreground = Fixed v }
+    member _.Foreground(c: BarConfig, v: Palette.Palette -> string) = { c with Foreground = OfPalette v }
     [<CustomOperation "dim">]
-    member _.Dim(c: BarConfig, v: string) = { c with Dim = v }
+    member _.Dim(c: BarConfig, v: string) = { c with Dim = Fixed v }
+    member _.Dim(c: BarConfig, v: Palette.Palette -> string) = { c with Dim = OfPalette v }
     [<CustomOperation "accent">]
-    member _.Accent(c: BarConfig, v: string) = { c with Accent = v }
+    member _.Accent(c: BarConfig, v: string) = { c with Accent = Fixed v }
+    member _.Accent(c: BarConfig, v: Palette.Palette -> string) = { c with Accent = OfPalette v }
+    [<CustomOperation "glass">]
+    member _.Glass(c: BarConfig, v: bool) = { c with Glass = v }
     [<CustomOperation "left">]
     member _.Left(c: BarConfig, v: BarSegment list) = { c with Left = v }
     [<CustomOperation "right">]
@@ -529,22 +574,31 @@ type OmniboxConfigBuilder() =
     member _.RowHeight(c: OmniboxConfig, v) = { c with RowHeight = v }
     [<CustomOperation "fontSize">]
     member _.FontSize(c: OmniboxConfig, v) = { c with FontSize = v }
+    // Color knobs: fixed hex OR palette function, same as the bar builder.
     [<CustomOperation "background">]
-    member _.Background(c: OmniboxConfig, v: string) = { c with Background = v }
+    member _.Background(c: OmniboxConfig, v: string) = { c with Background = Fixed v }
+    member _.Background(c: OmniboxConfig, v: Palette.Palette -> string) = { c with Background = OfPalette v }
     [<CustomOperation "inputBackground">]
-    member _.InputBackground(c: OmniboxConfig, v: string) = { c with InputBackground = v }
+    member _.InputBackground(c: OmniboxConfig, v: string) = { c with InputBackground = Fixed v }
+    member _.InputBackground(c: OmniboxConfig, v: Palette.Palette -> string) = { c with InputBackground = OfPalette v }
     [<CustomOperation "foreground">]
-    member _.Foreground(c: OmniboxConfig, v: string) = { c with Foreground = v }
+    member _.Foreground(c: OmniboxConfig, v: string) = { c with Foreground = Fixed v }
+    member _.Foreground(c: OmniboxConfig, v: Palette.Palette -> string) = { c with Foreground = OfPalette v }
     [<CustomOperation "dim">]
-    member _.Dim(c: OmniboxConfig, v: string) = { c with Dim = v }
+    member _.Dim(c: OmniboxConfig, v: string) = { c with Dim = Fixed v }
+    member _.Dim(c: OmniboxConfig, v: Palette.Palette -> string) = { c with Dim = OfPalette v }
     [<CustomOperation "selection">]
-    member _.Selection(c: OmniboxConfig, v: string) = { c with Selection = v }
+    member _.Selection(c: OmniboxConfig, v: string) = { c with Selection = Fixed v }
+    member _.Selection(c: OmniboxConfig, v: Palette.Palette -> string) = { c with Selection = OfPalette v }
+    [<CustomOperation "promptColor">]
+    member _.PromptColor(c: OmniboxConfig, v: string) = { c with PromptColor = Fixed v }
+    member _.PromptColor(c: OmniboxConfig, v: Palette.Palette -> string) = { c with PromptColor = OfPalette v }
     [<CustomOperation "prompt">]
     member _.Prompt(c: OmniboxConfig, v: string) = { c with Prompt = v }
-    [<CustomOperation "promptColor">]
-    member _.PromptColor(c: OmniboxConfig, v: string) = { c with PromptColor = v }
     [<CustomOperation "placeholder">]
     member _.Placeholder(c: OmniboxConfig, v: string) = { c with Placeholder = v }
+    [<CustomOperation "glass">]
+    member _.Glass(c: OmniboxConfig, v: bool) = { c with Glass = v }
 
 /// `agent { focusApp "firefox"; layout "bsp"; moveTo "2" }` -> Command list.
 /// Agent-first: an LLM (or a script) expresses a *program of intents* declaratively,
@@ -645,7 +699,8 @@ module ClientUi =
             o["label"] <- JsonValue.Create text
             o :> JsonNode
 
-    let private barJson (bar: BarConfig) : JsonNode =
+    let private barJson (pal: Palette.Palette) (bar: BarConfig) : JsonNode =
+        let hex (c: ColorSpec) = ColorSpec.resolve pal c
         let b = JsonObject()
         b["name"] <- JsonValue.Create bar.Name
         b["position"] <- JsonValue.Create(
@@ -653,30 +708,34 @@ module ClientUi =
             | Top -> "top" | Bottom -> "bottom" | Left -> "left" | Right -> "right")
         b["height"] <- JsonValue.Create bar.Height
         b["fontSize"] <- JsonValue.Create bar.FontSize
-        b["background"] <- JsonValue.Create bar.Background
-        b["foreground"] <- JsonValue.Create bar.Foreground
-        b["dim"] <- JsonValue.Create bar.Dim
-        b["accent"] <- JsonValue.Create bar.Accent
+        b["background"] <- JsonValue.Create(hex bar.Background)
+        b["foreground"] <- JsonValue.Create(hex bar.Foreground)
+        b["dim"] <- JsonValue.Create(hex bar.Dim)
+        b["accent"] <- JsonValue.Create(hex bar.Accent)
         b["left"] <- JsonArray(bar.Left |> List.map segmentJson |> Array.ofList)
         b["right"] <- JsonArray(bar.Right |> List.map segmentJson |> Array.ofList)
         b :> JsonNode
 
-    /// The "ui" object for the snapshot: { bars = [...]; omnibox = {...} }.
-    let json (bars: BarConfig list) (omnibox: OmniboxConfig) : JsonNode =
+    /// The "ui" object for the snapshot: { bars = [...]; omnibox = {...} }. Colors
+    /// are resolved against `pal` (the active wallpaper palette) HERE — the wire
+    /// stays plain hex, so a `ColorSpec.OfPalette` re-resolves every snapshot and
+    /// the bar/omnibox track a dynamic wallpaper without any client change.
+    let json (pal: Palette.Palette) (bars: BarConfig list) (omnibox: OmniboxConfig) : JsonNode =
+        let hex (c: ColorSpec) = ColorSpec.resolve pal c
         let o = JsonObject()
         o["width"] <- JsonValue.Create omnibox.Width
         o["height"] <- JsonValue.Create omnibox.Height
         o["rowHeight"] <- JsonValue.Create omnibox.RowHeight
         o["fontSize"] <- JsonValue.Create omnibox.FontSize
-        o["background"] <- JsonValue.Create omnibox.Background
-        o["inputBackground"] <- JsonValue.Create omnibox.InputBackground
-        o["foreground"] <- JsonValue.Create omnibox.Foreground
-        o["dim"] <- JsonValue.Create omnibox.Dim
-        o["selection"] <- JsonValue.Create omnibox.Selection
+        o["background"] <- JsonValue.Create(hex omnibox.Background)
+        o["inputBackground"] <- JsonValue.Create(hex omnibox.InputBackground)
+        o["foreground"] <- JsonValue.Create(hex omnibox.Foreground)
+        o["dim"] <- JsonValue.Create(hex omnibox.Dim)
+        o["selection"] <- JsonValue.Create(hex omnibox.Selection)
         o["prompt"] <- JsonValue.Create omnibox.Prompt
-        o["promptColor"] <- JsonValue.Create omnibox.PromptColor
+        o["promptColor"] <- JsonValue.Create(hex omnibox.PromptColor)
         o["placeholder"] <- JsonValue.Create omnibox.Placeholder
         let ui = JsonObject()
-        ui["bars"] <- JsonArray(bars |> List.map barJson |> Array.ofList)
+        ui["bars"] <- JsonArray(bars |> List.map (barJson pal) |> Array.ofList)
         ui["omnibox"] <- o
         ui :> JsonNode
