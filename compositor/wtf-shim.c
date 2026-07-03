@@ -781,6 +781,24 @@ static void report_usable_area(struct wtf_server *srv, struct wlr_box *usable) {
 
 static void wallpaper_layout(struct wtf_server *srv);
 
+/* ------------------------------------------------------------------ */
+/* embedded bars: the brain renders a bar into RGBA and hands it up as a
+ * scene buffer (like the wallpaper, one layer higher). Unlike a layer-shell
+ * client bar (a separate wtf-bar process), an embedded bar lives IN the
+ * compositor: no Wayland round-trip, no poll — the brain reads its own state.
+ * Because it is not a wtf_layer_surface, arrange_layers must reserve its strip
+ * from the usable area by hand (see below). */
+#define WTF_MAX_BARS 4
+struct wtf_bar {
+	struct wlr_scene_buffer *node;  /* the pixels, in the TOP layer tree */
+	struct wlr_buffer *buffer;      /* producer ref for ^ (dropped on replace) */
+	int anchor;                     /* 0=top 1=bottom 2=left 3=right */
+	int thickness;                  /* px reserved on that edge */
+	bool enabled;
+};
+static struct wtf_bar g_bars[WTF_MAX_BARS];
+static void bar_layout(struct wtf_server *srv);
+
 /* Arrange every layer surface on the primary output, letting wlroots' scene
  * helper apply anchors/margins/exclusive zones and shrink the usable area; then
  * report the resulting usable rectangle to the brain so tiling reflows. */
@@ -815,10 +833,30 @@ static void arrange_layers(struct wtf_server *srv) {
 	if (usable.width < 0) usable.width = 0;
 	if (usable.height < 0) usable.height = 0;
 
+	/* Embedded bars are not layer surfaces, so wlroots did not shrink `usable`
+	 * for them above — reserve their strips by hand, then re-clamp (a bar
+	 * thicker than the output must not drive the usable area negative). */
+	for (int i = 0; i < WTF_MAX_BARS; i++) {
+		struct wtf_bar *b = &g_bars[i];
+		if (!b->enabled) {
+			continue;
+		}
+		switch (b->anchor) {
+		case 0: usable.y += b->thickness; usable.height -= b->thickness; break; /* top */
+		case 1: usable.height -= b->thickness; break;                          /* bottom */
+		case 2: usable.x += b->thickness; usable.width -= b->thickness; break; /* left */
+		case 3: usable.width -= b->thickness; break;                          /* right */
+		default: break;
+		}
+	}
+	if (usable.width < 0) usable.width = 0;
+	if (usable.height < 0) usable.height = 0;
+
 	report_usable_area(srv, &usable);
 
-	/* The background also tracks the full output box. */
+	/* The background tracks the full output box; the bars anchor to its edges. */
 	wallpaper_layout(srv);
+	bar_layout(srv);
 }
 
 /* ------------------------------------------------------------------ */
@@ -864,10 +902,13 @@ static const struct wlr_buffer_impl wtf_wallpaper_buffer_impl = {
 	.end_data_ptr_access = wallpaper_buffer_end_data_ptr_access,
 };
 
-/* Build a producer-referenced buffer from a copy of `rgba` (w*h*4 bytes,
- * R,G,B,A order). Returns NULL on allocation failure. */
-static struct wlr_buffer *wtf_wallpaper_buffer_create(const unsigned char *rgba,
-		int w, int h) {
+/* Build a producer-referenced buffer from a copy of `rgba` (w*h*4 bytes). The
+ * caller picks the DRM format so the byte order matches the producer: the
+ * wallpaper feeds ImageSharp Rgba32 (DRM_FORMAT_ABGR8888 = R,G,B,A) and the bar
+ * feeds ImageSharp Bgra32 (DRM_FORMAT_ARGB8888 = B,G,R,A). Returns NULL on bad
+ * args / allocation failure. */
+static struct wlr_buffer *wtf_pixbuf_create(const unsigned char *rgba,
+		int w, int h, uint32_t format) {
 	if (rgba == NULL || w <= 0 || h <= 0) {
 		return NULL;
 	}
@@ -882,7 +923,7 @@ static struct wlr_buffer *wtf_wallpaper_buffer_create(const unsigned char *rgba,
 		return NULL;
 	}
 	memcpy(wb->data, rgba, size);
-	wb->format = DRM_FORMAT_ABGR8888;
+	wb->format = format;
 	wb->stride = (size_t)w * 4;
 	wlr_buffer_init(&wb->base, &wtf_wallpaper_buffer_impl, w, h);
 	return &wb->base;
@@ -2899,7 +2940,7 @@ void wtf_set_glass(int enabled, double tint_alpha, double refraction, int frost)
 }
 
 void wtf_set_wallpaper(const unsigned char *rgba, int width, int height) {
-	struct wlr_buffer *buf = wtf_wallpaper_buffer_create(rgba, width, height);
+	struct wlr_buffer *buf = wtf_pixbuf_create(rgba, width, height, DRM_FORMAT_ABGR8888);
 	if (buf == NULL) {
 		return; /* bad args / OOM: leave any existing wallpaper untouched */
 	}
@@ -2963,6 +3004,102 @@ void wtf_clear_wallpaper(void) {
 	if (g_wallpaper_rect != NULL) {
 		wlr_scene_node_destroy(&g_wallpaper_rect->node);
 		g_wallpaper_rect = NULL;
+	}
+	schedule_frame();
+}
+
+/* ------------------------------------------------------------------ */
+/* embedded bars (TOP layer): scene buffer anchored to an output edge. */
+/* ------------------------------------------------------------------ */
+
+/* Anchor each enabled bar to its edge of the full output box. The buffer is
+ * sized by the brain (full extent x thickness), so we only position it. */
+static void bar_layout(struct wtf_server *srv) {
+	if (srv->primary_output == NULL) {
+		return;
+	}
+	struct wlr_box full;
+	wlr_output_layout_get_box(srv->output_layout, srv->primary_output, &full);
+	if (full.width == 0 && full.height == 0) {
+		full.x = 0;
+		full.y = 0;
+		wlr_output_effective_resolution(srv->primary_output, &full.width, &full.height);
+	}
+	for (int i = 0; i < WTF_MAX_BARS; i++) {
+		struct wtf_bar *b = &g_bars[i];
+		if (!b->enabled || b->node == NULL) {
+			continue;
+		}
+		int x = full.x, y = full.y;
+		switch (b->anchor) {
+		case 1: y = full.y + full.height - b->thickness; break;         /* bottom */
+		case 3: x = full.x + full.width - b->thickness; break;          /* right */
+		default: break;                                                 /* top / left at origin */
+		}
+		wlr_scene_node_set_position(&b->node->node, x, y);
+		wlr_scene_node_raise_to_top(&b->node->node);
+	}
+}
+
+/* Set/update embedded bar `id`'s pixels + geometry. `rgba` is width*height*4
+ * bytes (R,G,B,A), `anchor` 0=top 1=bottom 2=left 3=right, `thickness` the px
+ * to reserve on that edge. A changed anchor/thickness re-runs the layer arrange
+ * (so tiling reflows around the new strip); otherwise we just re-position. */
+void wtf_set_bar(int id, const unsigned char *rgba, int width, int height,
+		int anchor, int thickness) {
+	if (id < 0 || id >= WTF_MAX_BARS) {
+		return;
+	}
+	struct wlr_buffer *buf = wtf_pixbuf_create(rgba, width, height, DRM_FORMAT_ARGB8888);
+	if (buf == NULL) {
+		return; /* bad args / OOM: leave the existing bar untouched */
+	}
+	struct wtf_bar *b = &g_bars[id];
+	if (b->node == NULL) {
+		b->node = wlr_scene_buffer_create(
+			server.layer_tree[ZWLR_LAYER_SHELL_V1_LAYER_TOP], buf);
+	} else {
+		wlr_scene_buffer_set_buffer(b->node, buf);
+	}
+	if (b->node != NULL) {
+		wlr_scene_buffer_set_dest_size(b->node, width, height);
+	}
+	/* Scene took its own lock; drop the old producer ref, keep the new one. */
+	if (b->buffer != NULL) {
+		wlr_buffer_drop(b->buffer);
+	}
+	b->buffer = buf;
+	bool geometry_changed = (!b->enabled || b->anchor != anchor || b->thickness != thickness);
+	b->anchor = anchor;
+	b->thickness = thickness;
+	b->enabled = true;
+	if (geometry_changed) {
+		arrange_layers(&server); /* reserve the (new) strip + reflow tiling */
+	} else {
+		bar_layout(&server);
+	}
+	schedule_frame();
+}
+
+/* Remove embedded bar `id` and give its reserved strip back to tiling. */
+void wtf_clear_bar(int id) {
+	if (id < 0 || id >= WTF_MAX_BARS) {
+		return;
+	}
+	struct wtf_bar *b = &g_bars[id];
+	if (b->node != NULL) {
+		wlr_scene_node_destroy(&b->node->node);
+		b->node = NULL;
+	}
+	if (b->buffer != NULL) {
+		wlr_buffer_drop(b->buffer);
+		b->buffer = NULL;
+	}
+	bool was_enabled = b->enabled;
+	b->enabled = false;
+	b->thickness = 0;
+	if (was_enabled) {
+		arrange_layers(&server); /* return the strip to the usable area */
 	}
 	schedule_frame();
 }

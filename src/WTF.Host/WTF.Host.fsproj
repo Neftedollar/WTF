@@ -14,7 +14,7 @@
        those subsystems compile to graceful no-ops. The lean graph == WTF.Core +
        WTF.Host(+ImageSharp) + the C shim. See docs/AOT.md. -->
   <PropertyGroup Condition="'$(WtfAot)' == 'true'">
-    <DefineConstants>$(DefineConstants);WTF_NO_FCS;WTF_NO_PLUGINS;WTF_NO_DESKTOP;WTF_NO_AGENT</DefineConstants>
+    <DefineConstants>$(DefineConstants);WTF_NO_FCS;WTF_NO_PLUGINS;WTF_NO_DESKTOP;WTF_NO_AGENT;WTF_NO_CLIENT</DefineConstants>
     <IsAotCompatible>true</IsAotCompatible>
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- Separate output dir from the JIT flavor so switching builds in place can't
@@ -69,6 +69,10 @@
          what actually keeps FCS / Tmds.DBus / Extensions.AI / Anthropic.SDK out of
          the ILC closure; the matching WTF_NO_* defines no-op their host call sites. -->
     <ProjectReference Include="..\WTF.Config\WTF.Config.fsproj" Condition="'$(WtfAot)' != 'true'" />
+    <!-- WTF.Client: reused IN-PROCESS for the embedded bar render (BarRender +
+         Render.Surface). JIT-only; the AOT host has no embedded bar (WTF_NO_CLIENT
+         no-ops its call sites) and uses the standalone wtf-bar client instead. -->
+    <ProjectReference Include="..\WTF.Client\WTF.Client.fsproj" Condition="'$(WtfAot)' != 'true'" />
     <ProjectReference Include="..\WTF.Plugins\WTF.Plugins.fsproj" Condition="'$(WtfAot)' != 'true'" />
     <ProjectReference Include="..\WTF.Desktop\WTF.Desktop.fsproj" Condition="'$(WtfAot)' != 'true'" />
     <ProjectReference Include="..\WTF.Agent\WTF.Agent.fsproj" Condition="'$(WtfAot)' != 'true'" />

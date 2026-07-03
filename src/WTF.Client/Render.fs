@@ -147,5 +147,19 @@ module Render =
                 with ex -> eprintfn "WTF: panel blit failed: %s" ex.Message
             | _ -> ()
 
+        /// Export the rendered pixels as a fresh managed `byte[]` (w*h*4, Bgra32
+        /// memory order = ARGB8888). For IN-PROCESS consumers (the embedded bar in
+        /// the compositor host) that hand the pixels to a scene buffer instead of
+        /// blitting to an shm pointer. Returns a zeroed buffer if nothing is drawn
+        /// yet or the size mismatches. Never throws.
+        member _.CopyOut(w: int, h: int) : byte[] =
+            let out = Array.zeroCreate (max 0 (w * h * 4))
+            match img with
+            | Some i when i.Width = w && i.Height = h && w > 0 && h > 0 ->
+                try i.CopyPixelDataTo(Span<byte>(out, 0, w * h * 4))
+                with ex -> eprintfn "WTF: panel copyout failed: %s" ex.Message
+            | _ -> ()
+            out
+
         interface IDisposable with
             member _.Dispose() = img |> Option.iter (fun i -> i.Dispose())

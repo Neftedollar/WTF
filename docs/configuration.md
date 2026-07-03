@@ -148,10 +148,21 @@ The bar polls every `refreshMs` (default **300 ms**) but only repaints when its
 visible content actually changed, so a snappy cadence stays cheap — the clock
 digit ticking over is the only idle redraw.
 
+**Embedded vs standalone.** By default (`embedded true`) the WM renders each bar
+**in-process** — no separate `wtf-bar` process, no socket round-trip; the WM
+reserves the bar's strip and paints it directly, reading its state in-process.
+Set `embedded false` to fall back to the standalone `wtf-bar` layer-shell client
+(launch it yourself from `startup`) — useful to run the bar on another compositor
+or to isolate it from the WM. Third-party bars (waybar, etc.) are always
+external and unaffected. `embedded` is a host-only knob (it is not re-read on a
+live reload the way styling is — flipping it takes effect when the bar next
+starts / the WM restarts).
+
 ```fsharp
 bar (barConfig {
     position Bottom               // Top | Bottom | Left | Right
     height 32                     // thickness (bar width for Left/Right)
+    embedded true                 // render in-process (default); false = standalone wtf-bar
     refreshMs 300                 // poll/redraw cadence (ms); repaint only on change
     glass true                    // frost: backdrop-blur behind the bar
     accent "#f38ba8"
@@ -184,15 +195,18 @@ bar (barConfig {
 `Color.toHexA a c` overrides alpha (0..1). Keep backgrounds calm and pull
 accents from the palette — see [Appearance → Bar & omnibox](appearance.md#bar--omnibox).
 
-**Multiple bars** — give each a name and launch one `wtf-bar` process per
-entry (the `--name` flag picks the entry; no flag = the first):
+**Multiple bars** — give each a name; embedded bars all render in-process (no
+startup entries needed). For a `embedded false` bar, launch one `wtf-bar` process
+per entry (the `--name` flag picks the entry; no flag = the first):
 
 ```fsharp
 bars [
-    barConfig { name "top" }
-    barConfig { name "side"; position Left; height 34 }
+    barConfig { name "top" }                                  // embedded (in-process)
+    barConfig { name "side"; position Left; height 34 }       // embedded
+    barConfig { name "ext"; embedded false }                  // standalone wtf-bar
 ]
-// startup [ "wtf-bar"; "wtf-bar --name side"; ... ]
+// only the embedded false bars need a launcher:
+// startup [ "wtf-bar --name ext" ]
 ```
 
 `Left`/`Right` bars render vertically: workspace pills stack top-to-bottom,
@@ -201,8 +215,9 @@ two lines. Long segments (`Player`, `Network`) render compact glyphs there.
 
 Bar segments: `Workspaces`, `Clock "<.NET time format>"`, `Battery`,
 `Network`, `Player` (MPRIS now-playing), `Label "<text>"`, plus two custom
-widgets (below). Bar knobs also include `refreshMs` (int, 50–5000) and `glass`
-(bool). Omnibox knobs: `width`, `height`, `rowHeight`,
+widgets (below). Bar knobs also include `refreshMs` (int, 50–5000), `glass`
+(bool), and `embedded` (bool, default true — in-process vs standalone `wtf-bar`).
+Omnibox knobs: `width`, `height`, `rowHeight`,
 `fontSize`, `background`, `inputBackground`, `foreground`, `dim`, `selection`,
 `prompt`, `promptColor`, `placeholder`, `glass`. Every color knob takes a
 `#rrggbb`/`#rrggbbaa` string **or** a `(fun p -> …)` palette function.

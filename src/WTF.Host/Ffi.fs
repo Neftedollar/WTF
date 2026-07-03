@@ -159,3 +159,14 @@ module Ffi =
     /// Remove any wallpaper (config has none / image failed to load).
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_clear_wallpaper()
+
+    // ---- embedded bars (TOP layer) ----
+    // Same pixel contract as the wallpaper (R,G,B,A, copied synchronously).
+    // `anchor` 0=top 1=bottom 2=left 3=right; `thickness` = px reserved on that
+    // edge (subtracted from the tiling usable area).
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_bar(int id, byte[] rgba, int width, int height, int anchor, int thickness)
+
+    /// Remove embedded bar `id`, returning its strip to the usable area.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_clear_bar(int id)

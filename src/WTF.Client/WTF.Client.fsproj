@@ -18,6 +18,7 @@
     <Compile Include="BarModel.fs" />
     <Compile Include="Panel.fs" />
     <Compile Include="Render.fs" />
+    <Compile Include="BarRender.fs" />
   </ItemGroup>
 
   <!-- Pin all three SixLabors packages explicitly to lock the graph. ImageSharp

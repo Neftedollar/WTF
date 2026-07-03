@@ -20,6 +20,14 @@ LIBWTF="$PREFIX/lib/wtf"
 [ -d "$HOME/.dotnet" ] && { export DOTNET_ROOT="$HOME/.dotnet"; export PATH="$HOME/.dotnet:$PATH"; }
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 LC_ALL=C
 
+# Publish RID for the self-contained host (must match install.sh — a wrong RID
+# "succeeds" then exec-format-fails at runtime).
+case "$(uname -m)" in
+  x86_64)  RID=linux-x64 ;;
+  aarch64) RID=linux-arm64 ;;
+  *) echo "wtf-update: unsupported arch $(uname -m)" >&2; exit 1 ;;
+esac
+
 if [ ! -d "$LIBWTF" ]; then
   echo "wtf-update: $LIBWTF not found — run scripts/install.sh once first." >&2
   exit 1
@@ -51,9 +59,22 @@ else
   bash scripts/build.sh
 fi
 
-# 3. Managed host + wtfctl.
-echo ">> managed (Release)"
-dotnet build WTF.slnx -c Release --nologo -v q
+# 3. Managed host (self-contained publish -> staging) + wtfctl.
+#    We PUBLISH the host self-contained (not just `dotnet build`) so the staging
+#    carries a CORRECT, regenerated deps.json. The prefix runtime resolves the
+#    managed assemblies from the self-contained TPA list in WTF.Host.deps.json —
+#    so a NEW managed dependency (e.g. WTF.Client + ImageSharp.Drawing/Fonts for
+#    the embedded bar) stays INVISIBLE unless deps.json lists it; dropping the
+#    bare .dll next to the others is not enough (the loader never sees it). A
+#    publish regenerates deps.json AND drops every new dll, so ANY future
+#    dependency change installs correctly, not just today's. ~6s incremental.
+echo ">> managed host (self-contained publish, $RID)"
+STAGE_HOST="$(mktemp -d)"
+trap 'rm -rf "$STAGE_HOST"' EXIT
+dotnet publish src/WTF.Host/WTF.Host.fsproj -c Release -r "$RID" --self-contained \
+  -p:PublishSingleFile=false -o "$STAGE_HOST" --nologo -v q
+echo ">> wtfctl"
+dotnet build src/wtfctl/wtfctl.fsproj -c Release --nologo -v q
 
 # --- atomic install with rollback ------------------------------------------
 # NEVER `cp` in place over a file the running compositor has mmap'd (shim,
@@ -88,10 +109,23 @@ if [ -f "$ROOT/compositor/.wlroots/lib/libwlroots-0.19.so" ]; then
   install_atomic "$ROOT/compositor/.wlroots/lib/libwlroots-0.19.so" "$LIBWTF/libwlroots-0.19.so" || { rollback; exit 1; }
 fi
 
-HB="$ROOT/src/WTF.Host/bin/Release/net10.0"
 CB="$ROOT/src/wtfctl/bin/Release/net10.0"
-install_atomic "$HB/WTF.Host.dll" "$LIBWTF/WTF.Host.dll" || { rollback; exit 1; }
-install_atomic "$HB/WTF.Core.dll" "$LIBWTF/WTF.Core.dll" || { rollback; exit 1; }
+# Sync every managed file that CHANGED versus the fresh self-contained publish:
+# managed dlls + the regenerated deps.json/runtimeconfig. `cmp` skips the ~180
+# unchanged bundled-runtime dlls (System.*, coreclr, ...) so rollback stays small
+# and the copy stays fast; the files that DIFFER — changed WTF.*.dll, brand-new
+# deps like WTF.Client.dll/SixLabors.*, and the regenerated WTF.Host.deps.json —
+# install atomically together, keeping deps.json and the dlls it lists consistent.
+# (The apphost binary `WTF.Host` is arch/SDK-generic and unchanged between builds,
+# so it is intentionally NOT resynced here — no exec-bit handling needed.)
+shopt -s nullglob
+for src in "$STAGE_HOST"/*.dll "$STAGE_HOST"/*.json; do
+  dst="$LIBWTF/$(basename "$src")"
+  if [ ! -f "$dst" ] || ! cmp -s "$src" "$dst"; then
+    install_atomic "$src" "$dst" || { rollback; exit 1; }
+  fi
+done
+shopt -u nullglob
 # wtfctl only needs its own dll refreshed: it emits the restart command as a raw
 # JSON string, and the {"cmd":"restart"} PARSE lives host-side in WTF.Core (the
 # copy in $LIBWTF root), so ctl/ carries no WTF.Core of its own.
