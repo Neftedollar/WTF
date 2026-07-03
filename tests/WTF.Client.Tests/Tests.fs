@@ -233,6 +233,30 @@ let ``build tolerates a wrong-typed desktop container`` () =
     Assert.Equal<Segment list>([ Clock "14:05" ], m.Right)
 
 // ---------------------------------------------------------------------------
+// Render.Surface — the canvas is REUSED across frames, so each Draw must reset
+// it to transparent first. Otherwise a translucent (glass) background blends
+// over the previous frame and old content decays instead of clearing — the
+// "fade trail" seen on the embedded bar when switching workspaces.
+// ---------------------------------------------------------------------------
+
+[<Fact>]
+let ``Surface Draw clears the previous frame (no translucent fade trail)`` () =
+    let surface = new Render.Surface()
+    let w, h = 4, 4
+    // Frame 1: paint the whole canvas opaque red.
+    let red = Color.FromRgba(255uy, 0uy, 0uy, 255uy)
+    surface.Draw(w, h, fun ctx -> Render.fillRect ctx red 0.0f 0.0f (float32 w) (float32 h))
+    // Frame 2: paint a HALF-transparent black bg — exactly what a glass bar does.
+    let glass = Color.FromRgba(0uy, 0uy, 0uy, 128uy)
+    surface.Draw(w, h, fun ctx -> Render.fillRect ctx glass 0.0f 0.0f (float32 w) (float32 h))
+    // Bgra32 memory order = B,G,R,A. If frame 1 leaked through, the R byte of
+    // every pixel would be ~127 (red blended under the 50% black); with the
+    // per-frame clear it is fully overwritten to 0.
+    let px = surface.CopyOut(w, h)
+    for i in 0 .. (w * h) - 1 do
+        Assert.Equal(0uy, px[i * 4 + 2]) // R channel: no red residue
+
+// ---------------------------------------------------------------------------
 // BarModel — clock is InvariantCulture (':' is the locale separator placeholder)
 // ---------------------------------------------------------------------------
 

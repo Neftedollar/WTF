@@ -123,7 +123,17 @@ module Render =
             this.Ensure(w, h)
             match img with
             | Some i ->
-                try i.Mutate(fun ctx -> draw ctx)
+                try
+                    i.Mutate(fun ctx ->
+                        // The canvas is REUSED across frames, so reset it to fully
+                        // transparent FIRST. Without this, a translucent background
+                        // (glass bar / omnibox) alpha-blends OVER the previous frame
+                        // instead of replacing it, so old content decays by
+                        // ×(1-alpha) each repaint — a "fade trail" (e.g. stale
+                        // workspace pills lingering after a switch). Clear forces
+                        // AlphaCompositionMode.Src, overwriting to (0,0,0,0).
+                        ctx.Clear(Color.Transparent) |> ignore
+                        draw ctx)
                 with ex -> eprintfn "WTF: panel draw failed: %s" ex.Message
             | None -> ()
 
