@@ -417,11 +417,48 @@ let private toggleOverlay (name: string) : unit = Overlays.toggle name
 let private toggleOverlay (_name: string) : unit = ()   // no in-process overlay under AOT
 #endif
 
+// ---- runtime eye-candy toggles ----
+// The renderer's blur/glass/shadow/glow on-state is not in World, so the host
+// tracks it (seeded by applyConfig) and the Toggle* commands flip it, re-applying
+// with the CONFIGURED parameters (tint, sigma, ...). Mirror the FFI calls in
+// applyConfig — keep the parameter expressions in sync with that block.
+let mutable private fxBlur = false
+let mutable private fxWatercolor = false
+let mutable private fxShadow = false
+let mutable private fxGlow = false
+
+let private applyBlur (on: bool) =
+    fxBlur <- on
+    Ffi.wtf_set_blur ((if on then 1 else 0), 0, 0)
+let private applyWatercolor (on: bool) =
+    fxWatercolor <- on
+    // C ABI symbol stays `wtf_set_glass` (renamed on the F# side only, no shim churn).
+    Ffi.wtf_set_glass ((if on then 1 else 0), cfg.WatercolorTint, cfg.WatercolorRefraction, (if cfg.WatercolorFrost then 1 else 0))
+let private applyShadow (on: bool) =
+    fxShadow <- on
+    let sdx, sdy = cfg.ShadowOffset
+    let sr, sg, sb = Protocol.hexColor cfg.ShadowColor |> Option.defaultValue (0.0, 0.0, 0.0)
+    Ffi.wtf_set_shadow ((if on then 1 else 0), cfg.ShadowSigma, sr, sg, sb, cfg.ShadowOpacity, sdx, sdy)
+let private applyGlow (on: bool) =
+    fxGlow <- on
+    Ffi.wtf_set_glow ((if on then 1 else 0), cfg.GlowSigma, cfg.GlowIntensity)
+
+// Runtime wallpaper switch (shared by SetWallpaper + CycleWallpaper): adopt the
+// image (Fill), re-push at the current output size, and re-derive the palette so
+// palette-driven colors (borders, bar, omnibox) follow on their next snapshot.
+let private applyWallpaperPath (path: string) =
+    activeWallpaper <- Image(path, Fill)
+    Wallpaper.apply activeWallpaper (Px.rawL world.Screen.Width) (Px.rawL world.Screen.Height)
+    activePalette <- Wallpaper.paletteOf activeWallpaper
+// CycleWallpaper's position (advances one step per press; -1 = not yet started).
+let mutable private wallpaperCycleIdx = -1
+
 /// The single choke point for every command. History is recorded here and
 /// nowhere else, so it can never desync. Undo/Redo/Save/LoadSession/ReloadConfig
 /// are intercepted (the pure reducer can't see history/config); everything else
 /// runs through the reducer and records an undo point iff it actually changed World.
-let private dispatch (cmd: Command) : unit =
+/// `rec` so a `Batch` can fold its members back through this same choke point.
+let rec private dispatch (cmd: Command) : unit =
     match cmd with
     | Undo -> History.undo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
     | Redo -> History.redo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
@@ -429,6 +466,18 @@ let private dispatch (cmd: Command) : unit =
     | SaveDefault -> saveDefaultToDisk ()
     | ToggleOmnibox -> toggleOverlay "omnibox"
     | ToggleOverlay name -> toggleOverlay name
+    | SetWallpaper path -> applyWallpaperPath path
+    | CycleWallpaper paths ->
+        match paths with
+        | [] -> ()
+        | _ ->
+            wallpaperCycleIdx <- (wallpaperCycleIdx + 1) % List.length paths
+            applyWallpaperPath (List.item wallpaperCycleIdx paths)
+    | ToggleBlur -> applyBlur (not fxBlur)
+    | ToggleWatercolor -> applyWatercolor (not fxWatercolor)
+    | ToggleShadows -> applyShadow (not fxShadow)
+    | ToggleGlow -> applyGlow (not fxGlow)
+    | Batch cmds -> List.iter dispatch cmds     // run a preset through the same choke point
     | SaveSession -> SessionIO.save world
     | LoadSession ->
         match SessionIO.load () with
@@ -943,10 +992,10 @@ let applyConfig (c: WtfConfig) : unit =
     border false c.InactiveBorder
     Ffi.wtf_set_corner_radius cornerRadius
     Ffi.wtf_set_blur ((if blurOn then 1 else 0), 0, 0)
-    // Frosted-glass frames: the border blurs the backdrop (scenefx). Eye-candy,
-    // so forced off in safe mode with everything else.
-    let glassOn = if safeMode then false else c.Glass
-    Ffi.wtf_set_glass ((if glassOn then 1 else 0), c.GlassTint, c.GlassRefraction, (if c.GlassFrost then 1 else 0))
+    // Watercolor frames: the border blurs+tints the backdrop (scenefx). Eye-candy,
+    // so forced off in safe mode with everything else. (C ABI symbol unchanged.)
+    let watercolorOn = if safeMode then false else c.Watercolor
+    Ffi.wtf_set_glass ((if watercolorOn then 1 else 0), c.WatercolorTint, c.WatercolorRefraction, (if c.WatercolorFrost then 1 else 0))
     // macOS-style drop shadow (scenefx). Forced off in safe mode with the rest
     // of the eye-candy; a bad ShadowColor degrades to black, never fails.
     let shadowOn = if safeMode then false else c.Shadow
@@ -957,6 +1006,11 @@ let applyConfig (c: WtfConfig) : unit =
     // Eye-candy => also forced off in safe mode.
     let glowOn = if safeMode then false else c.Glow
     Ffi.wtf_set_glow ((if glowOn then 1 else 0), c.GlowSigma, c.GlowIntensity)
+    // Seed the runtime toggle state so a later Toggle* flips from the config's value.
+    fxBlur <- blurOn
+    fxWatercolor <- watercolorOn
+    fxShadow <- shadowOn
+    fxGlow <- glowOn
     // Glass (frosted) bar / omnibox: tell the shim to backdrop-blur those layer
     // surfaces by namespace. Per-namespace, so all "wtf-bar" surfaces frost when
     // ANY bar sets glass (one namespace for the fleet); the omnibox is separate.

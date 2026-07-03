@@ -92,6 +92,62 @@ let myKeys =
 Chord syntax and the full command vocabulary: [Keybindings](keybindings.md).
 Remember: `keys myKeys` **replaces** the built-in map.
 
+### Keybinding helpers
+
+A chord binds to a `Command`. Beyond the raw verbs, a few pure helpers (auto-opened
+with `WTF.Core`) build common commands for you:
+
+```fsharp
+keymap {
+    bind "M-b"   (runOrKill "blueman-applet")        // toggle: run if off, kill if on
+    bind "M-w"   (raiseOrRun "firefox" "firefox")    // focus its window if open, else launch
+    bind "M-S-t" (inTerm "kitty" "htop")             // launch a program inside a terminal
+    bind "M-S-w" (setWallpaper "~/pics/city.jpg")    // switch wallpaper live (palette follows)
+    bind "M-p"   ToggleOmnibox                        // the in-process launcher
+}
+```
+
+- `runOrKill name` — kill the process if it's running, else launch it (a scratchpad
+  toggle). `runOrKillCmd name launch` when the launch command differs from the
+  process name.
+- `raiseOrRun app launch` — the classic run-or-raise: focus an existing window of
+  `app` (matched by AppId), otherwise launch it. Resolved against the live layout.
+- `inTerm term cmd` — `Spawn` a program inside a terminal emulator.
+- `setWallpaper path` — swap the wallpaper at runtime (applied Fill); the wallpaper
+  palette re-derives, so palette-driven bar/border/omnibox colors follow.
+
+**Ricing on a key** — flip eye-candy live and apply presets:
+
+```fsharp
+keymap {
+    bind "M-S-b" ToggleBlur                            // flip backdrop blur
+    bind "M-S-g" ToggleWatercolor                      // watercolor frames
+    bind "M-S-s" ToggleShadows                         // drop shadows
+    bind "M-S-o" ToggleGlow                            // focus glow
+    bind "M-S-w" (cycleWallpaper [ "~/a.jpg"; "~/b.jpg" ])   // step the wallpaper ring
+    bind "M-f"   (batch [ SetGaps 0; SetLayout "full" ])     // "focus mode" preset
+    bind "M-S-f" (batch [ SetGaps 8; SetLayout "tall" ])     // back to normal
+}
+```
+
+- `ToggleBlur` / `ToggleGlass` / `ToggleShadows` / `ToggleGlow` — flip the current
+  renderer state (re-applying your configured tint/sigma/… parameters), like
+  `ToggleFloat` does for a window.
+- `cycleWallpaper [paths]` — advance one step per press (the WM remembers the ring
+  position); the palette follows each switch.
+- `batch [c1; c2; …]` — run several commands from one chord: a preset / "mode".
+
+**OS-tool wrappers** — thin `Spawn` sugar over the standard Wayland tools (swap in
+your own with a raw `Spawn` if you use something else):
+
+- `screenshot` — full grab to `~/Pictures/<timestamp>.png` (needs `grim`).
+- `screenshotArea` — region → clipboard (needs `grim`, `slurp`, `wl-copy`).
+- `lockScreen` — `loginctl lock-session` (needs a session lock handler).
+
+These are ordinary functions returning a `Command`, so they compose anywhere a
+command is expected (`bind`, `manage` actions, `wtfctl`). The socket verbs mirror
+them: `{"cmd":"raise","app":"firefox","run":"firefox"}`, `{"cmd":"wallpaper","path":"…"}`.
+
 ## Manage rules — where new windows go
 
 ```fsharp

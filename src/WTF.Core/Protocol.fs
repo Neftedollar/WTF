@@ -186,6 +186,16 @@ module Protocol =
             | Some "sinkall" -> Some SinkAll
             | Some "close" -> Some CloseFocused
             | Some "spawn" -> str o "run" |> Option.map Spawn
+            | Some "raise" ->
+                // run-or-raise: {"cmd":"raise","app":"firefox","run":"firefox"}
+                match str o "app", str o "run" with
+                | Some app, Some run -> Some(FocusOrSpawn(app, run))
+                | _ -> None
+            | Some "wallpaper" -> str o "path" |> Option.map SetWallpaper
+            | Some "toggle-blur" -> Some ToggleBlur
+            | Some "toggle-watercolor" -> Some ToggleWatercolor
+            | Some "toggle-shadows" -> Some ToggleShadows
+            | Some "toggle-glow" -> Some ToggleGlow
             | Some "workspace" ->
                 match str o "switch", str o "move" with
                 | Some t, _ -> Some(SwitchWorkspace t)

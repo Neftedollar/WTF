@@ -299,10 +299,10 @@ type WtfConfig =
       InactiveBorder: string            // appearance: unfocused border color (#hex)
       CornerRadius: int                 // appearance: rounded corners (scenefx)
       Blur: bool                        // appearance: backdrop blur (scenefx)
-      Glass: bool                       // appearance: frosted-glass window frames (border blurs the backdrop)
-      GlassTint: float                  // glass border tint alpha over the blur (0..1; lower = clearer)
-      GlassRefraction: float            // px the glass rim lenses the backdrop (0 = flat frost; ~6-14 = liquid glass)
-      GlassFrost: bool                  // glass lens source: true = frosted (blurred), false = clear water-drop
+      Watercolor: bool                  // appearance: watercolor window frames (border blurs+tints the backdrop)
+      WatercolorTint: float             // watercolor border tint alpha over the blur (0..1; lower = clearer)
+      WatercolorRefraction: float       // px the rim lenses the backdrop (0 = flat frost; ~6-14 = edge bend)
+      WatercolorFrost: bool             // lens source: true = frosted (blurred), false = clear water-drop
       Glow: bool                        // appearance: colored halo around the FOCUSED frame
       GlowSigma: float                  // glow spread in px
       GlowIntensity: float              // glow strength 0..1
@@ -339,10 +339,10 @@ module WtfConfig =
           InactiveBorder = "#45475a"
           CornerRadius = 0
           Blur = false
-          Glass = false
-          GlassTint = 0.35
-          GlassRefraction = 0.0
-          GlassFrost = false
+          Watercolor = false
+          WatercolorTint = 0.35
+          WatercolorRefraction = 0.0
+          WatercolorFrost = false
           Glow = false
           GlowSigma = 20.0
           GlowIntensity = 0.6
@@ -481,21 +481,22 @@ type ConfigBuilder() =
     member _.CornerRadius(c, v) = { c with CornerRadius = v }
     [<CustomOperation "blur">]
     member _.Blur(c, v) = { c with Blur = v }
-    /// Frosted-glass window frames (scenefx): the border blurs the backdrop
-    /// behind it, tinted translucent. Best paired with `cornerRadius`.
-    [<CustomOperation "glass">]
-    member _.Glass(c, v) = { c with Glass = v }
-    /// Glass border tint alpha over the blur (0..1; lower = clearer glass).
-    [<CustomOperation "glassTint">]
-    member _.GlassTint(c, v: float) = { c with GlassTint = v }
-    /// Glass edge refraction: px the rim lenses the backdrop (0 = flat frost;
-    /// ~6-14 = the "liquid glass" edge-bend). Needs `glass` + a `cornerRadius`.
-    [<CustomOperation "glassRefraction">]
-    member _.GlassRefraction(c, v: float) = { c with GlassRefraction = v }
-    /// Glass lens source: false (default) = clear "water-drop" glass that
-    /// refracts the sharp backdrop; true = frosted glass (lens the blur).
-    [<CustomOperation "glassFrost">]
-    member _.GlassFrost(c, v) = { c with GlassFrost = v }
+    /// Watercolor window frames (scenefx): the border blurs the backdrop behind
+    /// it, tinted translucent — a soft wash, not a glass slab. Best paired with
+    /// `cornerRadius`. (The name `glass` is reserved for a future liquid-glass.)
+    [<CustomOperation "watercolor">]
+    member _.Watercolor(c, v) = { c with Watercolor = v }
+    /// Watercolor border tint alpha over the blur (0..1; lower = clearer).
+    [<CustomOperation "watercolorTint">]
+    member _.WatercolorTint(c, v: float) = { c with WatercolorTint = v }
+    /// Watercolor edge refraction: px the rim lenses the backdrop (0 = flat frost;
+    /// ~6-14 = an edge-bend). Needs `watercolor` + a `cornerRadius`.
+    [<CustomOperation "watercolorRefraction">]
+    member _.WatercolorRefraction(c, v: float) = { c with WatercolorRefraction = v }
+    /// Watercolor lens source: false (default) = clear "water-drop" that refracts
+    /// the sharp backdrop; true = frosted (lens the blur).
+    [<CustomOperation "watercolorFrost">]
+    member _.WatercolorFrost(c, v) = { c with WatercolorFrost = v }
     /// Focus glow: a colored halo around the FOCUSED window's frame, in the
     /// frame's own color (`activeBorder` drives the hue). "The frame emits light."
     [<CustomOperation "glow">]

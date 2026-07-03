@@ -21,6 +21,55 @@ let private setCurrentLayout name (w: World) =
             |> List.map (fun ws -> if ws.Tag = w.Current then { ws with Layout = name } else ws) }
 
 [<Fact>]
+let ``FocusOrSpawn raises an existing app window, else spawns`` () =
+    let w = worldWith 3   // windows 1..3 with AppIds app1..app3
+    // an app that IS open -> focus its window, no spawn effect
+    let w1, e1 = Reducer.apply (FocusOrSpawn("app1", "app1")) w
+    Assert.Equal(Some 1, World.focusedWindow w1)
+    Assert.DoesNotContain(SpawnProcess "app1", e1)
+    // an app that is NOT open -> world unchanged, spawn the launch command
+    let w2, e2 = Reducer.apply (FocusOrSpawn("chromium", "chromium --incognito")) w
+    Assert.Equal(w, w2)
+    Assert.Contains(SpawnProcess "chromium --incognito", e2)
+
+[<Fact>]
+let ``keybinding helpers build the expected commands`` () =
+    // run-or-kill toggles by process name via a /bin/sh -c one-liner
+    match runOrKill "firefox" with
+    | Spawn s ->
+        Assert.Contains("pgrep -x 'firefox'", s)
+        Assert.Contains("pkill -x 'firefox'", s)
+        Assert.Contains("setsid -f 'firefox'", s)
+    | other -> failwithf "expected Spawn, got %A" other
+    // explicit launch command variant
+    match runOrKillCmd "kitty" "kitty --class scratch" with
+    | Spawn s -> Assert.Contains("|| setsid -f kitty --class scratch", s)
+    | other -> failwithf "expected Spawn, got %A" other
+    // semantic helpers map to their commands
+    Assert.Equal(FocusOrSpawn("firefox", "firefox"), raiseOrRun "firefox" "firefox")
+    Assert.Equal(Spawn "kitty -e htop", inTerm "kitty" "htop")
+    Assert.Equal(SetWallpaper "/x.jpg", setWallpaper "/x.jpg")
+    // ricing / preset helpers
+    Assert.Equal(CycleWallpaper [ "/a"; "/b" ], cycleWallpaper [ "/a"; "/b" ])
+    Assert.Equal(Batch [ SetGaps 0; SetLayout "full" ], batch [ SetGaps 0; SetLayout "full" ])
+    // OS-tool wrappers are Spawn one-liners over the standard tools
+    match screenshot with Spawn s -> Assert.Contains("grim", s) | o -> failwithf "%A" o
+    match screenshotArea with Spawn s -> Assert.Contains("slurp", s); Assert.Contains("wl-copy", s) | o -> failwithf "%A" o
+    Assert.Equal(Spawn "loginctl lock-session", lockScreen)
+
+[<Fact>]
+let ``ricing toggles + presets are host-handled no-ops in the pure reducer`` () =
+    let w = worldWith 2
+    // Eye-candy toggles, wallpaper cycle, and Batch touch the renderer/host, not
+    // World — the reducer leaves World untouched, emits nothing, records no undo.
+    for cmd in [ ToggleBlur; ToggleWatercolor; ToggleShadows; ToggleGlow
+                 CycleWallpaper [ "/a"; "/b" ]; Batch [ SetGaps 0; ToggleBlur ] ] do
+        let w', effects = Reducer.apply cmd w
+        Assert.Equal(w, w')
+        Assert.Empty(effects)
+        Assert.False(Reducer.isUndoable cmd)
+
+[<Fact>]
 let ``surface toggle commands are pure host-handled no-ops`` () =
     let w = worldWith 3
     // The reducer leaves World untouched and emits no effects (the host owns the
