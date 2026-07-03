@@ -31,29 +31,32 @@ blur true        // backdrop blur behind translucent windows
 Both are rendered by scenefx. Blur only shows through translucent surfaces
 (e.g. a terminal with opacity < 1, or `inactiveOpacity` below 1.0).
 
-## Glass frames (watercolor)
+## Watercolor frames
 
 ```fsharp
-glass true          // turn each window border into tinted glass
-glassTint 0.35      // how strongly the frame colour reads over the glass (0..1)
-glassFrost true     // true = frosted (blurred) backdrop; false = sharp backdrop
-glassRefraction 0.0 // px of edge lensing (subtle; see the honesty note below)
-cornerRadius 10     // pair with rounding for the full glass look
-borderWidth 5       // thin frames read best — the glass is a wash, not a slab
+watercolor true          // turn each window border into a tinted wash
+watercolorTint 0.35      // how strongly the frame colour reads over the wash (0..1)
+watercolorFrost true     // true = frosted (blurred) backdrop; false = sharp backdrop
+watercolorRefraction 0.0 // px of edge lensing (subtle; see the honesty note below)
+cornerRadius 10          // pair with rounding for the full look
+borderWidth 5            // thin frames read best — this is a wash, not a slab
 ```
 
-`glass` turns each window's border into a translucent **watercolor** strip: the
-backdrop (wallpaper, neighbours) shows through the frame, washed with the
-border's own colour. The focused window keeps its `activeBorder` hue, unfocused
-frames go `inactiveBorder` — so focus stays readable *through* the glass.
-Colours come straight from your config; nothing is hardcoded.
+> The name `glass` is **reserved** for a future proper liquid-glass effect
+> (see the port issue). Today's effect — tinted frosted frames — is `watercolor`.
 
-`glassTint` is the wash strength (0..1): `0` = pure see-through backdrop (the
+`watercolor` turns each window's border into a translucent strip: the backdrop
+(wallpaper, neighbours) shows through the frame, washed with the border's own
+colour. The focused window keeps its `activeBorder` hue, unfocused frames go
+`inactiveBorder` — so focus stays readable *through* the wash. Colours come
+straight from your config; nothing is hardcoded.
+
+`watercolorTint` is the wash strength (0..1): `0` = pure see-through backdrop (the
 frame all but disappears), `~0.3–0.5` = watercolor (recommended), high values
-approach a solid painted frame. `glassFrost true` blurs what's behind the frame
-(milky, soft — the classic frost); `false` keeps it sharp.
+approach a solid painted frame. `watercolorFrost true` blurs what's behind the
+frame (milky, soft — the classic frost); `false` keeps it sharp.
 
-**Honesty note on `glassRefraction`:** the rim can *lens* the backdrop (a WTF
+**Honesty note on `watercolorRefraction`:** the rim can *lens* the backdrop (a WTF
 displacement shader inside scenefx bends the edge like a convex bead, and a
 thinner frame bends harder). It works, but at ordinary desktop DPI with thin
 frames the bend is subtle — do not expect the dramatic macOS "liquid glass"
@@ -62,7 +65,7 @@ where there is high-contrast content behind the frame. It costs an extra
 backdrop copy per frame, so leave it off unless you like what it does on your
 screen.
 
-Cost note: the glass backdrop is recomputed around every window each frame via
+Cost note: the watercolor backdrop is recomputed around every window each frame via
 scenefx's per-rect path. WTF logs `Optimized blur buffer not populated; using
 the per-rect blur path` once (INFO) — that is expected and harmless: the frame
 uses the per-rect path rather than the whole-screen optimized-blur buffer
@@ -169,7 +172,7 @@ borderColor (fun ctx ->
     Color.toHex c)
 ```
 
-Change the wallpaper and the frames re-derive themselves; the glass tint and
+Change the wallpaper and the frames re-derive themselves; the watercolor tint and
 the focus glow follow the same color automatically. Deterministic: the same
 wallpaper always produces the same frame color.
 

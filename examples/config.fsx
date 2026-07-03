@@ -118,10 +118,10 @@ let wtfConfig =
         animSpeed 0.30              // window slide/fade speed
         cornerRadius 10             // rounded corners (scenefx)
         blur true                   // backdrop blur behind windows (scenefx)
-        // glass true               // watercolor glass frames: tinted frost, backdrop shows through
-        // glassTint 0.35           // how strongly the frame color reads over the frost (0..1)
-        // glassFrost true          // true = frosted (blurred) backdrop; false = sharp
-        // glassRefraction 0.0      // px of edge lensing (subtle; needs high DPI to shine)
+        // watercolor true          // watercolor frames: tinted frost, backdrop shows through
+        // watercolorTint 0.35      // how strongly the frame color reads over the frost (0..1)
+        // watercolorFrost true     // true = frosted (blurred) backdrop; false = sharp
+        // watercolorRefraction 0.0 // px of edge lensing (subtle; needs high DPI to shine)
 
         // ---- focus glow: the FOCUSED frame emits a halo in its own color ----
         // (activeBorder drives the hue — change it and the glow follows)

@@ -129,30 +129,43 @@ let ``lowercase letters pass through`` () =
     Assert.Equal(Some "a", Chord.format 0u 0x61u)
     Assert.Equal(Some "z", Chord.format 0u 0x7au)
 
-[<Theory>]
-[<InlineData(0x2fu)>]   // '/' just below '0'
-[<InlineData(0x3au)>]   // ':' just above '9'
-let ``digit-range boundaries are unmappable`` (sym: uint32) =
-    // '/' and ':' bracket the digit range and are not nameable -> None.
-    Assert.Equal(None, Chord.format 0u sym)
+[<Fact>]
+let ``slash is named; colon (shifted) falls to the raw form`` () =
+    Assert.Equal(Some "slash", Chord.format 0u 0x2fu)   // '/' is a real key -> named
+    Assert.Equal(Some "0x3a", Chord.format 0u 0x3au)    // ':' (no name) -> raw keysym
 
 // ---------------------------------------------------------------------------
-//  None / graceful path — unmappable keysyms must return None so onKey -> 0.
+//  Only bare modifiers and NoSymbol stay unnameable (so onKey -> 0, key passes
+//  through). EVERYTHING else is now bindable — named where we have a name, and
+//  by raw keysym otherwise.
 // ---------------------------------------------------------------------------
 
 [<Theory>]
-[<InlineData(0xffebu)>]   // Super_L (bare modifier)
-[<InlineData(0xffbeu)>]   // F1
-[<InlineData(0x7eu)>]     // '~'
-[<InlineData(0x60u)>]     // '`'
-[<InlineData(0x5fu)>]     // '_'
-[<InlineData(0x3cu)>]     // '<'
-[<InlineData(0x5bu)>]     // '['  (just above 'Z'+? boundary)
-[<InlineData(0x7bu)>]     // '{'  (just above 'z')
-[<InlineData(0x0u)>]
-[<InlineData(0xffffffffu)>]
-let ``unmappable keysyms return None`` (sym: uint32) =
+[<InlineData(0xffe1u)>]   // Shift_L
+[<InlineData(0xffebu)>]   // Super_L
+[<InlineData(0xffeeu)>]   // Hyper_R (top of the modifier cluster)
+[<InlineData(0x0u)>]      // NoSymbol
+let ``bare modifiers and NoSymbol stay unnameable`` (sym: uint32) =
     Assert.Equal(None, Chord.format 0u sym)
+
+[<Theory>]
+[<InlineData(0xffbeu, "F1")>]
+[<InlineData(0xffc9u, "F12")>]
+[<InlineData(0xff61u, "Print")>]
+[<InlineData(0xff50u, "Home")>]
+[<InlineData(0xff56u, "PageDown")>]
+[<InlineData(0xff08u, "BackSpace")>]
+[<InlineData(0x5bu, "bracketleft")>]
+[<InlineData(0x60u, "grave")>]
+let ``function, navigation and punctuation keys are now named`` (sym: uint32) (expected: string) =
+    Assert.Equal(Some expected, Chord.format 0u sym)
+
+[<Theory>]
+[<InlineData(0x1008ff14u, "M-0x1008ff14")>]   // XF86AudioPlay, by raw keysym
+[<InlineData(0x7eu, "0x7e")>]                  // '~' (no name) -> raw
+let ``exotic keys are bindable by raw keysym`` (sym: uint32) (expected: string) =
+    let mods = if expected.StartsWith "M-" then LOGO else 0u
+    Assert.Equal(Some expected, Chord.format mods sym)
 
 [<Fact>]
 let ``0x40 is the shifted-2, not None, not a boundary miss`` () =

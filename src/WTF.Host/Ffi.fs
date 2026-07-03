@@ -88,7 +88,8 @@ module Ffi =
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_blur(int enabled, int radius, int passes)
 
-    /// Frosted-glass window frames: border blurs the backdrop, tinted translucent.
+    /// Watercolor window frames: border blurs the backdrop, tinted translucent.
+    /// (F#-side effect is `watercolor`; the C ABI symbol stays `wtf_set_glass`.)
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_glass(int enabled, double tintAlpha, double refraction, int frost)
 

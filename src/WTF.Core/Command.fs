@@ -24,6 +24,10 @@ type Command =
     | Spawn of string                // launch a program (effect, run by C side)
     | SpawnOnce of string            // launch only if no live instance of this exact
                                      // command string is already running (singleton)
+    | FocusOrSpawn of app: string * launch: string
+                                     // raise the first window whose AppId matches `app`
+                                     // if one exists; otherwise launch `launch` (the
+                                     // classic WM "run-or-raise")
     | SwitchWorkspace of string      // view another tag
     | MoveToWorkspace of string      // send focused window to a tag
     | NextWorkspace                  // view the next/previous tag in order
@@ -43,6 +47,18 @@ type Command =
     | SetBorderColor of bool * float * float * float  // active?, r, g, b (0..1)
     | SetCornerRadius of int         // rounded corners (scenefx)
     | SetBlur of bool                // backdrop blur (scenefx)
+    | SetWallpaper of string         // switch the wallpaper to an image path at runtime
+                                     // (host-handled; applied Fill, re-derives the palette)
+    | CycleWallpaper of string list  // advance to the next wallpaper in a ring (host tracks
+                                     // the position); each press steps to the next path
+    // runtime eye-candy TOGGLES (host-handled: flip the current renderer state and
+    // re-apply with the configured parameters — the "ricing" chords):
+    | ToggleBlur                     // backdrop blur (scenefx)
+    | ToggleWatercolor               // watercolor window frames
+    | ToggleShadows                  // macOS-style drop shadows
+    | ToggleGlow                     // focus glow halo
+    | Batch of Command list          // run several commands from ONE binding — a preset
+                                     // (e.g. a "focus mode": Batch [SetGaps 0; SetLayout "full"])
     // history / session — first-class in the vocabulary, but carried out by the
     // host (history lives outside the pure World); the reducer treats them as no-ops:
     | Undo                           // revert the last undoable World change
@@ -90,6 +106,65 @@ module CommandHelpers =
         | Spawn s -> SpawnOnce s
         | other -> other
 
+    // ---- keybinding convenience helpers ----
+    // Small pure functions that build a `Command` for common config chords, so a
+    // config.fsx can write `bind "M-b" (runOrKill "firefox")` instead of hand-
+    // rolling a shell one-liner every time. They compose the existing vocabulary
+    // (mostly `Spawn`, which the C side runs via `/bin/sh -c`), so they need no new
+    // machinery — just ergonomics.
+
+    /// Single-quote a token for safe interpolation into a `/bin/sh -c` string.
+    let private shq (s: string) = "'" + s.Replace("'", "'\\''") + "'"
+
+    /// Toggle a program by its PROCESS NAME: if a process named `name` is running,
+    /// kill it; otherwise launch `name`. The run-if-off / kill-if-on scratchpad
+    /// pattern — `bind "M-b" (runOrKill "blueman-applet")`. (For a launch command
+    /// that differs from the process name, use `runOrKillCmd`.)
+    let runOrKill (name: string) : Command =
+        Spawn(sprintf "pgrep -x %s >/dev/null 2>&1 && pkill -x %s || setsid -f %s >/dev/null 2>&1"
+                (shq name) (shq name) (shq name))
+
+    /// Like `runOrKill`, but launch an explicit command when the process is off:
+    /// `runOrKillCmd "kitty" "kitty --class scratch"`.
+    let runOrKillCmd (name: string) (launch: string) : Command =
+        Spawn(sprintf "pgrep -x %s >/dev/null 2>&1 && pkill -x %s || setsid -f %s >/dev/null 2>&1"
+                (shq name) (shq name) launch)
+
+    /// Run-or-raise: focus an already-open window of `app` (by AppId), else launch
+    /// it — `bind "M-w" (raiseOrRun "firefox" "firefox")`. Resolved against the live
+    /// World in the reducer, so it truly raises rather than blindly relaunching.
+    let raiseOrRun (app: string) (launch: string) : Command = FocusOrSpawn(app, launch)
+
+    /// Launch a program inside a terminal emulator: `inTerm "kitty" "htop"`.
+    let inTerm (term: string) (cmd: string) : Command = Spawn(sprintf "%s -e %s" term cmd)
+
+    /// Switch the wallpaper to an image path at runtime (applied Fill; the palette
+    /// re-derives so palette-driven colors follow): `bind "M-S-w" (setWallpaper "~/pics/x.jpg")`.
+    let setWallpaper (path: string) : Command = SetWallpaper path
+
+    /// Cycle through a ring of wallpapers, one step per press (the host remembers
+    /// the position): `bind "M-S-w" (cycleWallpaper [ "~/a.jpg"; "~/b.jpg" ])`.
+    let cycleWallpaper (paths: string list) : Command = CycleWallpaper paths
+
+    /// Run several commands from one chord — a preset. `bind "M-f" (batch [ SetGaps 0; SetLayout "full" ])`.
+    let batch (cmds: Command list) : Command = Batch cmds
+
+    // ---- thin wrappers over standard Wayland desktop tools (Spawn sugar) ----
+    // Convenience for the near-universal WM chords whose one-liners are tedious to
+    // retype. They assume the standard wlroots-ecosystem tools are installed; swap
+    // in your own with a raw `Spawn` if you use something else.
+
+    /// Full-screen screenshot to `~/Pictures/<timestamp>.png` (needs `grim`).
+    let screenshot : Command =
+        Spawn "grim ~/Pictures/$(date +%Y%m%d-%H%M%S).png"
+
+    /// Select a region and copy the shot to the clipboard (needs `grim`, `slurp`, `wl-copy`).
+    let screenshotArea : Command =
+        Spawn "grim -g \"$(slurp)\" - | wl-copy"
+
+    /// Lock the session (needs a lock handler on the logind session, e.g. swaylock).
+    let lockScreen : Command = Spawn "loginctl lock-session"
+
 module Reducer =
 
     /// Re-point the focus of a stack onto a specific id (no-op if absent).
@@ -111,9 +186,10 @@ module Reducer =
         | SetMaster _ | IncMaster | DecMaster
         | SetRatio _
         | SetGaps _ | IncGaps | DecGaps -> true
-        | CloseFocused | Spawn _ | SpawnOnce _
+        | CloseFocused | Spawn _ | SpawnOnce _ | FocusOrSpawn _
         | SetInactiveOpacity _ | SetAnimationSpeed _ | SetBorderWidth _
-        | SetBorderColor _ | SetCornerRadius _ | SetBlur _
+        | SetBorderColor _ | SetCornerRadius _ | SetBlur _ | SetWallpaper _ | CycleWallpaper _
+        | ToggleBlur | ToggleWatercolor | ToggleShadows | ToggleGlow | Batch _
         | Undo | Redo | SaveSession | LoadSession | ReloadConfig | SaveDefault
         | ToggleOmnibox | ToggleOverlay _
         | AddWindow _ | RemoveWindow _ -> false
@@ -231,6 +307,16 @@ module Reducer =
         | Spawn prog -> w, [ SpawnProcess prog ]
         | SpawnOnce prog -> w, [ SpawnProcessOnce prog ]
 
+        | FocusOrSpawn(app, launch) ->
+            // Run-or-raise: if a window of this app is already mapped, focus it;
+            // otherwise launch. Purely a function of the current World, so it lives
+            // in the reducer (unlike Spawn's blind launch).
+            if w.Windows |> Map.exists (fun _ info -> info.AppId = app) then
+                let w' = World.mapStack (resolveSelector w (ByApp app)) w
+                w', arrangeOf w'
+            else
+                w, [ SpawnProcess launch ]
+
         | SwitchWorkspace tag ->
             if List.exists (fun ws -> ws.Tag = tag) w.Workspaces then
                 let w' = { w with Current = tag }
@@ -325,10 +411,13 @@ module Reducer =
         | SetCornerRadius radius -> w, [ RenderCornerRadius(max 0 radius) ]
         | SetBlur on -> w, [ RenderBlur on ]
 
-        // Host-handled (history/session/config/surfaces). Total no-op arm keeps the
-        // reducer pure and exhaustive; the real work happens in the host's dispatch.
+        // Host-handled (history/session/config/surfaces/wallpaper/eye-candy). Total
+        // no-op arm keeps the reducer pure and exhaustive; the real work is in dispatch.
+        // (Batch is folded command-by-command by the host, so the reducer never sees
+        // its members here.)
         | Undo | Redo | SaveSession | LoadSession | ReloadConfig | SaveDefault
-        | ToggleOmnibox | ToggleOverlay _ -> w, []
+        | ToggleOmnibox | ToggleOverlay _ | SetWallpaper _ | CycleWallpaper _
+        | ToggleBlur | ToggleWatercolor | ToggleShadows | ToggleGlow | Batch _ -> w, []
 
         | AddWindow info ->
             // Guard the stack-uniqueness invariant: a re-mapped id must not be

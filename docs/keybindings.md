@@ -17,9 +17,27 @@ Modifiers, always in the order `M C A S`:
 | `A` | Alt |
 | `S` | Shift |
 
-Keys: letters `a`–`z`, digits `0`–`9`, and the named keys `Return`, `space`,
-`Tab`, `Escape`, `comma`, `period`, `minus`, `equal`, `plus`, `Left`, `Right`,
-`Up`, `Down`.
+Keys — you can bind **any** key:
+
+- letters `a`–`z`, digits `0`–`9`;
+- named keys: `Return`, `space`, `Tab`, `Escape`, `BackSpace`, `Delete`, `Insert`,
+  `comma`, `period`, `minus`, `equal`, `plus`, arrows (`Left`/`Right`/`Up`/`Down`),
+  navigation (`Home`, `End`, `PageUp`, `PageDown`, `Print`, `Menu`), function keys
+  `F1`–`F24`, and punctuation (`slash`, `backslash`, `semicolon`, `apostrophe`,
+  `bracketleft`, `bracketright`, `grave`);
+- **anything else by its raw xkb keysym** in lowercase hex — e.g.
+  `bind "0x1008ff14" (Spawn "playerctl play-pause")` for `XF86AudioPlay`. Find a
+  key's name or keysym by running `wev` (or `xev`) and pressing it.
+
+```fsharp
+bind "Print"        screenshotArea
+bind "M-F1"         (Spawn "kitty -e man wtf")
+bind "0x1008ff14"   (Spawn "playerctl play-pause")   // XF86AudioPlay by raw keysym
+```
+
+Only bare modifier presses (Super, Shift, …) and dead keys aren't bindable on
+their own. Note: the volume/mute/brightness `XF86Audio*` keys are already handled
+by the WM (they drive the MPRIS player / `wpctl`), so binding those is redundant.
 
 Bindings are resolved against **xkb group 0** (your first layout), so they keep
 working while you're typing in a second layout — `M-j` is `M-j` even when the

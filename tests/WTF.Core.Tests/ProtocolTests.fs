@@ -47,6 +47,20 @@ let ``scenefx appearance commands parse`` () =
     Assert.Equal(Some(Protocol.Act(SetBlur false)), Protocol.parseRequest """{"cmd":"blur"}""")
 
 [<Fact>]
+let ``run-or-raise and wallpaper commands parse`` () =
+    Assert.Equal(Some(Protocol.Act(FocusOrSpawn("firefox", "firefox"))),
+                 Protocol.parseRequest """{"cmd":"raise","app":"firefox","run":"firefox"}""")
+    Assert.Equal(Some(Protocol.Act(SetWallpaper "/pics/x.jpg")),
+                 Protocol.parseRequest """{"cmd":"wallpaper","path":"/pics/x.jpg"}""")
+    // raise without both fields is rejected
+    Assert.Equal(None, Protocol.parseRequest """{"cmd":"raise","app":"firefox"}""")
+    // eye-candy toggles are socket-addressable too (agent ricing parity)
+    Assert.Equal(Some(Protocol.Act ToggleBlur), Protocol.parseRequest """{"cmd":"toggle-blur"}""")
+    Assert.Equal(Some(Protocol.Act ToggleWatercolor), Protocol.parseRequest """{"cmd":"toggle-watercolor"}""")
+    Assert.Equal(Some(Protocol.Act ToggleShadows), Protocol.parseRequest """{"cmd":"toggle-shadows"}""")
+    Assert.Equal(Some(Protocol.Act ToggleGlow), Protocol.parseRequest """{"cmd":"toggle-glow"}""")
+
+[<Fact>]
 let ``surface toggle commands parse`` () =
     Assert.Equal(Some(Protocol.Act ToggleOmnibox), Protocol.parseRequest """{"cmd":"toggle-omnibox"}""")
     Assert.Equal(Some(Protocol.Act(ToggleOverlay "spotlight")), Protocol.parseRequest """{"cmd":"toggle-overlay","name":"spotlight"}""")
