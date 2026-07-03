@@ -86,6 +86,42 @@ type Wallpaper =
 // snapshot, so a config.fsx hot-reload restyles it live; the omnibox reads
 // its config at launch (it is short-lived by design).
 
+/// A shell-command bar widget: the host polls `Exec` every `IntervalMs` ms on a
+/// background thread and shows its first stdout line (waybar/polybar-style). The
+/// command runs via `/bin/sh -c`; a nonzero exit / missing binary shows empty.
+type ScriptWidget =
+    { Exec: string
+      IntervalMs: int }
+
+/// The read-model a `Custom` bar widget receives — a FLAT snapshot of the live
+/// WM + desktop state in primitives, filled by the host each snapshot. Flat (not
+/// the internal World/DesktopState) so config.fsx, which sees only WTF.Core,
+/// needs no WTF.Desktop reference and gets a stable, documented surface.
+type BarContext =
+    { Windows: WindowInfo list                    // every managed window
+      FocusedTitle: string                        // "" when nothing is focused
+      FocusedApp: string
+      Workspace: string                           // current workspace tag
+      OccupiedTags: string list                   // tags with >= 1 window
+      Battery: (float * string) option            // percent 0..100, state label
+      Network: string option                      // connectivity state label
+      Player: (string * string * string) option   // status, title, artist (first player)
+      Time: System.DateTime }
+
+module BarContext =
+    /// Empty context — the safe default for tests and for a snapshot taken before
+    /// any window/desktop state exists.
+    let empty : BarContext =
+        { Windows = []
+          FocusedTitle = ""
+          FocusedApp = ""
+          Workspace = ""
+          OccupiedTags = []
+          Battery = None
+          Network = None
+          Player = None
+          Time = System.DateTime.MinValue }
+
 /// One bar segment. Order inside Left/Right lists = display order.
 type BarSegment =
     | Workspaces               // workspace pills (current/occupied aware)
@@ -94,6 +130,24 @@ type BarSegment =
     | Network
     | Player                   // MPRIS now-playing
     | Label of string          // static text
+    | Custom of (BarContext -> string)   // user fn, resolved host-side each snapshot
+    | Script of ScriptWidget             // shell command, polled host-side
+
+module BarSegment =
+    /// Set the first time a Custom widget throws, so the diagnostic is emitted
+    /// once per process, not once per snapshot.
+    let mutable private warnedThrow = false
+
+    /// Resolve a `Custom` widget to display text. TOTAL: a throwing widget shows
+    /// empty (never breaks the snapshot) and is logged once.
+    let resolveCustom (ctx: BarContext) (f: BarContext -> string) : string =
+        try
+            f ctx
+        with ex ->
+            if not warnedThrow then
+                warnedThrow <- true
+                eprintfn "WTF.Config: a Custom bar widget threw (%s); it shows empty. Logged once." ex.Message
+            ""
 
 type BarPosition =
     | Top
@@ -651,6 +705,12 @@ module Builders =
     let barConfig = BarConfigBuilder()
     let omniboxConfig = OmniboxConfigBuilder()
 
+    /// A shell-command bar widget: poll `exec` every `intervalMs` ms and show its
+    /// first stdout line. Sugar for `Script { Exec = exec; IntervalMs = intervalMs }`,
+    /// e.g. `right [ script "~/bin/cpu.sh" 2000; Clock "HH:mm" ]`.
+    let script (exec: string) (intervalMs: int) : BarSegment =
+        Script { Exec = exec; IntervalMs = intervalMs }
+
 // =====================  applying the config  =====================
 
 module Keymap =
@@ -690,7 +750,15 @@ module Manage =
 module ClientUi =
     open System.Text.Json.Nodes
 
-    let private segmentJson (s: BarSegment) : JsonNode =
+    // `Custom` and `Script` widgets are resolved HERE, host-side, to plain label
+    // text — so the wire stays data and the bar client needs no knowledge of them
+    // (both arrive as a `{"label": …}` segment). `ctx` is the live read-model;
+    // `resolveScript` reads the host's cached poller output for a Script.
+    let private segmentJson (ctx: BarContext) (resolveScript: ScriptWidget -> string) (s: BarSegment) : JsonNode =
+        let labelNode (text: string) =
+            let o = JsonObject()
+            o["label"] <- JsonValue.Create text
+            o :> JsonNode
         match s with
         | Workspaces -> JsonValue.Create "workspaces" :> JsonNode
         | Battery -> JsonValue.Create "battery" :> JsonNode
@@ -700,12 +768,11 @@ module ClientUi =
             let o = JsonObject()
             o["clock"] <- JsonValue.Create fmt
             o :> JsonNode
-        | Label text ->
-            let o = JsonObject()
-            o["label"] <- JsonValue.Create text
-            o :> JsonNode
+        | Label text -> labelNode text
+        | Custom f -> labelNode (BarSegment.resolveCustom ctx f)
+        | Script sw -> labelNode (resolveScript sw)
 
-    let private barJson (pal: Palette.Palette) (bar: BarConfig) : JsonNode =
+    let private barJson (pal: Palette.Palette) (ctx: BarContext) (resolveScript: ScriptWidget -> string) (bar: BarConfig) : JsonNode =
         let hex (c: ColorSpec) = ColorSpec.resolve pal c
         let b = JsonObject()
         b["name"] <- JsonValue.Create bar.Name
@@ -719,15 +786,15 @@ module ClientUi =
         b["foreground"] <- JsonValue.Create(hex bar.Foreground)
         b["dim"] <- JsonValue.Create(hex bar.Dim)
         b["accent"] <- JsonValue.Create(hex bar.Accent)
-        b["left"] <- JsonArray(bar.Left |> List.map segmentJson |> Array.ofList)
-        b["right"] <- JsonArray(bar.Right |> List.map segmentJson |> Array.ofList)
+        b["left"] <- JsonArray(bar.Left |> List.map (segmentJson ctx resolveScript) |> Array.ofList)
+        b["right"] <- JsonArray(bar.Right |> List.map (segmentJson ctx resolveScript) |> Array.ofList)
         b :> JsonNode
 
     /// The "ui" object for the snapshot: { bars = [...]; omnibox = {...} }. Colors
     /// are resolved against `pal` (the active wallpaper palette) HERE — the wire
     /// stays plain hex, so a `ColorSpec.OfPalette` re-resolves every snapshot and
     /// the bar/omnibox track a dynamic wallpaper without any client change.
-    let json (pal: Palette.Palette) (bars: BarConfig list) (omnibox: OmniboxConfig) : JsonNode =
+    let json (pal: Palette.Palette) (ctx: BarContext) (resolveScript: ScriptWidget -> string) (bars: BarConfig list) (omnibox: OmniboxConfig) : JsonNode =
         let hex (c: ColorSpec) = ColorSpec.resolve pal c
         let o = JsonObject()
         o["width"] <- JsonValue.Create omnibox.Width
@@ -743,6 +810,6 @@ module ClientUi =
         o["promptColor"] <- JsonValue.Create(hex omnibox.PromptColor)
         o["placeholder"] <- JsonValue.Create omnibox.Placeholder
         let ui = JsonObject()
-        ui["bars"] <- JsonArray(bars |> List.map (barJson pal) |> Array.ofList)
+        ui["bars"] <- JsonArray(bars |> List.map (barJson pal ctx resolveScript) |> Array.ofList)
         ui["omnibox"] <- o
         ui :> JsonNode
