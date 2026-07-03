@@ -92,6 +92,18 @@ module Clients =
             | :? uint64 as x -> Some(uint32 x)
             | _ -> None)
 
+    // A D-Bus object path arrives boxed as ObjectPath (o) or, on some proxies, a
+    // plain string. Match those two only — never `.ToString()` an arbitrary variant
+    // (a wrong-typed value would otherwise stringify to a CLR type name and pass the
+    // "not empty, not /" guard as a bogus primary connection).
+    let private asPath d k =
+        prop d k
+        |> Option.bind (fun v ->
+            match v with
+            | :? ObjectPath as p -> Some(p.ToString())
+            | :? string as s -> Some s
+            | _ -> None)
+
     /// PURE: raw UPower DisplayDevice props -> BatteryState. Missing/wrong-typed
     /// fields fall back (present=false, 0%, unknown). Testable without D-Bus.
     let parseBattery (d: IDictionary<string, obj>) : BatteryState =
@@ -102,8 +114,7 @@ module Clients =
     /// PURE: raw NetworkManager props -> NetworkState.
     let parseNetwork (d: IDictionary<string, obj>) : NetworkState =
         let primary =
-            prop d "PrimaryConnection"
-            |> Option.map (fun v -> v.ToString())
+            asPath d "PrimaryConnection"
             |> Option.bind (fun p ->
                 if String.IsNullOrEmpty p || p = "/" then None else Some p)
         { State = nmStateLabel (defaultArg (asUInt d "State") 0u)

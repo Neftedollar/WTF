@@ -102,3 +102,16 @@ let ``parseNetwork treats the root path as no primary connection`` () =
                                  "PrimaryConnection", box (ObjectPath "/") ])
     Assert.Equal("disconnected", n.State)
     Assert.Equal(None, n.Primary)
+
+[<Fact>]
+let ``parseNetwork accepts a primary connection delivered as a plain string`` () =
+    // Some proxies box object paths as strings; both must resolve identically.
+    let n = parseNetwork (dict [ "State", box 70u
+                                 "PrimaryConnection", box "/org/freedesktop/NetworkManager/ActiveConnection/7" ])
+    Assert.Equal(Some "/org/freedesktop/NetworkManager/ActiveConnection/7", n.Primary)
+
+[<Fact>]
+let ``parseNetwork ignores a wrong-typed primary connection instead of stringifying it`` () =
+    // A bogus variant must NOT slip through as a CLR type name (the old .ToString bug).
+    let n = parseNetwork (dict [ "State", box 70u; "PrimaryConnection", box 42u ])
+    Assert.Equal(None, n.Primary)

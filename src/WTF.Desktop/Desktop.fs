@@ -80,42 +80,55 @@ module Desktop =
         }
         :> Task
 
-    /// Connect to the session bus and wire up every service. FIRE-AND-FORGET:
-    /// returns immediately; all work happens on Tmds background threads.
+    // Observability: log every bus state transition so a silent disconnect (the
+    // socket dropping mid-session freezes battery/network/media with no clue why)
+    // is visible in the WM log instead of looking like a hung widget. Tmds
+    // auto-reconnects by default, so a Disconnected is usually followed by a
+    // Connecting/Connected — we just narrate the sequence.
+    let private watchDisconnect (name: string) (c: Connection) : unit =
+        c.StateChanged.Add(fun e ->
+            match e.DisconnectReason with
+            | null -> eprintfn "WTF desktop: %s bus -> %A" name e.State
+            | ex -> eprintfn "WTF desktop: %s bus -> %A (%s)" name e.State ex.Message)
+
+    /// Connect the session and system buses and wire up every service.
+    /// FIRE-AND-FORGET: returns immediately; all work happens on Tmds background
+    /// threads. The two buses are INDEPENDENT best-effort blocks — a down/absent
+    /// session bus must NOT disable battery/network/lock (which live on the system
+    /// bus) and vice-versa; each is wrapped in its own try so one failing never
+    /// blocks `onReady` or the other bus.
     let start () : unit =
         let run =
             task {
+                // Session bus: notifications (we own the daemon) + MPRIS media.
                 try
                     match Address.Session with
-                    | null -> eprintfn "WTF desktop: no DBUS_SESSION_BUS_ADDRESS — desktop shell disabled"
+                    | null -> eprintfn "WTF desktop: no DBUS_SESSION_BUS_ADDRESS — notifications/media disabled"
                     | addr ->
                         let c = new Connection(addr)
                         let! _ = c.ConnectAsync()
                         conn <- c
-                        // Session bus: notifications + MPRIS media live here.
+                        watchDisconnect "session" c
                         do! startNotifications c
                         do! Clients.startMpris c agg mprisRegistry
-                        // System bus: UPower / NetworkManager / logind live here,
-                        // NOT the session bus — connecting them to `c` was why
-                        // battery/network/lock reported ServiceUnknown. Separate,
-                        // best-effort connection so a locked-down system bus still
-                        // leaves notifications/media working.
-                        try
-                            match Address.System with
-                            | null ->
-                                eprintfn "WTF desktop: no system bus address — battery/network/lock disabled"
-                            | saddr ->
-                                let sc = new Connection(saddr)
-                                let! _ = sc.ConnectAsync()
-                                sysConn <- sc
-                                do! Clients.startUPower sc agg
-                                do! Clients.startNetwork sc agg
-                                do! Clients.startLogind sc agg
-                        with ex ->
-                            eprintfn "WTF desktop: system bus unavailable, battery/network/lock disabled (%s)" ex.Message
-                        eprintfn "WTF desktop: D-Bus shell up"
+                        eprintfn "WTF desktop: session-bus shell up"
                 with ex ->
-                    eprintfn "WTF desktop: init failed, continuing without shell (%s)" ex.Message
+                    eprintfn "WTF desktop: session bus unavailable, notifications/media disabled (%s)" ex.Message
+
+                // System bus: UPower / NetworkManager / logind. Connecting these to
+                // the SESSION bus was why battery/network/lock reported
+                // ServiceUnknown. Independent of the session block above.
+                try
+                    let sc = new Connection(Address.System)
+                    let! _ = sc.ConnectAsync()
+                    sysConn <- sc
+                    watchDisconnect "system" sc
+                    do! Clients.startUPower sc agg
+                    do! Clients.startNetwork sc agg
+                    do! Clients.startLogind sc agg
+                    eprintfn "WTF desktop: system-bus shell up"
+                with ex ->
+                    eprintfn "WTF desktop: system bus unavailable, battery/network/lock disabled (%s)" ex.Message
             }
 
         run |> ignore // fire-and-forget; do not await on the loop thread.
