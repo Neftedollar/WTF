@@ -14,9 +14,11 @@ SYS="$DEPS/sysroot"
 ARCH=x86_64-linux-gnu
 mkdir -p "$DEB" "$SYS"
 
-# dev + runtime packages we need (closure resolved below).
+# dev + runtime packages we need (closure resolved below). wlroots itself is NOT
+# here: we vendor + build it (scripts/build-wlroots.sh, pinned 0.19.3) and
+# scenefx builds against that vendored copy — so we only fetch wlroots' own build
+# deps, never a system libwlroots (no distro packages 0.19 uniformly anyway).
 SEED=(
-  libwlroots-0.18-dev libwlroots-0.18
   libwayland-dev libwayland-server0 libwayland-client0 libwayland-egl1 libwayland-cursor0
   libwayland-bin
   wayland-protocols
@@ -64,7 +66,7 @@ echo ">> verifying pkg-config can see the deps"
 # shellcheck disable=SC1090
 source "$DEPS/env.sh"
 ok=1
-for pc in wlroots-0.18 wayland-server wayland-scanner wayland-protocols xkbcommon pixman-1 libdrm gbm libinput; do
+for pc in wayland-server wayland-scanner wayland-protocols xkbcommon pixman-1 libdrm gbm libinput; do
   if pkg-config --exists "$pc" 2>/dev/null; then
     printf "   OK   %-18s %s\n" "$pc" "$(pkg-config --modversion "$pc" 2>/dev/null)"
   else

@@ -25,7 +25,7 @@ fi
 # libs. Catch a missing dependency NOW with package hints — not at first login
 # as a crash-loop with no display.
 if command -v ldd >/dev/null 2>&1; then
-  MISSING="$(LD_LIBRARY_PATH="$LIBWTF" ldd "$LIBWTF"/libwtf_shim.so "$LIBWTF"/libscenefx-0.2.so "$LIBWTF"/libwlroots-0.18.so 2>/dev/null \
+  MISSING="$(LD_LIBRARY_PATH="$LIBWTF" ldd "$LIBWTF"/libwtf_shim.so "$LIBWTF"/libscenefx-0.4.so "$LIBWTF"/libwlroots-0.19.so 2>/dev/null \
                | grep 'not found' | sort -u || true)"
   if [ -n "$MISSING" ]; then
     echo "install-stage.sh: bundled libraries have UNRESOLVED dependencies on this machine:" >&2

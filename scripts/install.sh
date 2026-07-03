@@ -46,21 +46,21 @@ BINWTF="$STAGE$PREFIX/bin"
 SESS="$STAGE/usr/share/wayland-sessions"
 
 echo ">> 1/5  building wlroots (vendored) + scenefx + the C shim"
-# wlroots is VENDORED (pinned 0.18.x, bundled into /usr/local/lib/wtf) so the
+# wlroots is VENDORED (pinned 0.19.x, bundled into /usr/local/lib/wtf) so the
 # install never depends on which wlroots the distro packages. scenefx and the
 # shim both build against the vendored copy.
 bash scripts/build-wlroots.sh
-WLROOTS_PC="$(find "$ROOT/compositor/.wlroots" -name 'wlroots-0.18.pc' -print -quit)"
+WLROOTS_PC="$(find "$ROOT/compositor/.wlroots" -name 'wlroots-0.19.pc' -print -quit)"
 if [ -z "$WLROOTS_PC" ]; then
-  echo "install.sh: wlroots build missing (no wlroots-0.18.pc under compositor/.wlroots)" >&2
+  echo "install.sh: wlroots build missing (no wlroots-0.19.pc under compositor/.wlroots)" >&2
   exit 1
 fi
 export PKG_CONFIG_PATH="$(dirname "$WLROOTS_PC"):${PKG_CONFIG_PATH:-}"
 bash scripts/build-scenefx.sh
 # scenefx's libdir varies by distro (lib/ vs lib/<multiarch>): locate the .pc.
-SCENEFX_PC="$(find "$ROOT/compositor/.scenefx" -name 'scenefx-0.2.pc' -print -quit)"
+SCENEFX_PC="$(find "$ROOT/compositor/.scenefx" -name 'scenefx-0.4.pc' -print -quit)"
 if [ -z "$SCENEFX_PC" ]; then
-  echo "install.sh: scenefx build missing (no scenefx-0.2.pc under compositor/.scenefx)" >&2
+  echo "install.sh: scenefx build missing (no scenefx-0.4.pc under compositor/.scenefx)" >&2
   exit 1
 fi
 export PKG_CONFIG_PATH="$(dirname "$SCENEFX_PC"):$PKG_CONFIG_PATH"
@@ -116,10 +116,10 @@ echo ">> 3/5  assembling the install tree under $STAGE"
 install -Dm644 compositor/build/libwtf_shim.so "$LIBWTF/libwtf_shim.so"
 # scenefx + vendored wlroots runtime libs next to the shim so the launcher's
 # LD_LIBRARY_PATH finds them (libdir varies by distro — resolve, don't hardcode).
-SCENEFX_SO="$(find "$ROOT/compositor/.scenefx" -name 'libscenefx-0.2.so' -print -quit)"
-install -Dm644 "$SCENEFX_SO" "$LIBWTF/libscenefx-0.2.so"
-WLROOTS_SO="$(find "$ROOT/compositor/.wlroots" -name 'libwlroots-0.18.so' -print -quit)"
-install -Dm644 "$WLROOTS_SO" "$LIBWTF/libwlroots-0.18.so"
+SCENEFX_SO="$(find "$ROOT/compositor/.scenefx" -name 'libscenefx-0.4.so' -print -quit)"
+install -Dm644 "$SCENEFX_SO" "$LIBWTF/libscenefx-0.4.so"
+WLROOTS_SO="$(find "$ROOT/compositor/.wlroots" -name 'libwlroots-0.19.so' -print -quit)"
+install -Dm644 "$WLROOTS_SO" "$LIBWTF/libwlroots-0.19.so"
 # If wayland was vendored too (system one predates 1.23 — Ubuntu 24.04),
 # stage its runtime libs alongside; -P keeps the soname symlinks.
 if compgen -G "$ROOT/compositor/.wlroots/lib/libwayland-*.so*" >/dev/null; then

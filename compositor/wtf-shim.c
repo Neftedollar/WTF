@@ -1,7 +1,7 @@
 /*
- * wtf-shim.c — a wlroots 0.18 compositor "body" exposing the flat C ABI in
+ * wtf-shim.c — a wlroots 0.19 compositor "body" exposing the flat C ABI in
  * wtf.h to an F# "brain". Structurally derived from the canonical tinywl.c on
- * the wlroots 0.18 branch (0.18.2), but rewired so that:
+ * the wlroots 0.19 branch (0.19.3), but rewired so that:
  *
  *   - it does NOT auto-tile or auto-focus; instead it reports map/unmap/key/
  *     output-resize events up to the brain via struct wtf_callbacks, and
@@ -10,7 +10,7 @@
  *
  * Single-threaded wl_display event loop, so module-global state is safe.
  *
- * wlroots 0.18 requires WLR_USE_UNSTABLE before any wlr header.
+ * wlroots 0.19 requires WLR_USE_UNSTABLE before any wlr header.
  */
 #define _GNU_SOURCE  /* setenv, setsid, eventfd */
 #define WLR_USE_UNSTABLE
@@ -62,6 +62,7 @@
 #include <wlr/util/box.h>
 #include <wlr/util/log.h>
 #include <wlr/backend/libinput.h>
+#include <wlr/backend/session.h>   /* wlr_session.active: skip wedge logic while VT-switched away */
 #include <libinput.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -135,6 +136,7 @@ struct wtf_server {
 	struct wlr_box grab_geobox;
 	uint32_t resize_edges;
 
+	struct wlr_session *session;   /* NULL on headless; ->active false while VT-switched away */
 	struct wlr_output_layout *output_layout;
 	struct wl_list outputs;
 	struct wl_listener new_output;
@@ -160,6 +162,19 @@ struct wtf_output {
 	struct wl_listener frame;
 	struct wl_listener request_state;
 	struct wl_listener destroy;
+	/* Wedge detection. A stuck DRM page-flip makes every atomic commit fail
+	 * with EBUSY *forever* — a silent, permanent freeze (observed on Intel eDP
+	 * with PSR: 6 minutes of failed commits, only wlr debug spam in the log,
+	 * no recovery). We count consecutive failed scene commits so output_frame
+	 * can log it ONCE, attempt a modeset recovery, and keep a throttled
+	 * heartbeat — instead of hot-looping invisibly. Cleared on any good frame. */
+	unsigned commit_failures;   /* consecutive failed scene commits; 0 = healthy */
+	bool wedged;                /* true once the wedge was logged + recovery tried */
+	/* Retry a wedged output on a ~100ms timer instead of re-scheduling a frame
+	 * immediately: a failed commit + immediate reschedule would busy-spin the
+	 * event loop (each idle frame fails instantly and re-arms). The timer paces
+	 * recovery so the wedge threshold stays time-based, not event-loop-speed. */
+	struct wl_event_source *retry_timer;
 };
 
 struct wtf_toplevel {
@@ -638,7 +653,7 @@ static void arrange_layers(struct wtf_server *srv) {
 /* ------------------------------------------------------------------ */
 
 /* A producer-owned wlr_buffer wrapping a malloc'd copy of RGBA pixels the F#
- * brain decoded/scaled. wlroots 0.18 has no wlr_readonly_data_buffer_create, so
+ * brain decoded/scaled. wlroots 0.19 has no wlr_readonly_data_buffer_create, so
  * we implement the minimal data-ptr buffer interface: the renderer samples the
  * pixels via begin/end_data_ptr_access and uploads them as a texture. */
 struct wtf_wallpaper_buffer {
@@ -1115,8 +1130,9 @@ static void process_cursor_resize(struct wtf_server *srv) {
 		}
 	}
 
-	struct wlr_box geo_box;
-	wlr_xdg_surface_get_geometry(toplevel->xdg_toplevel->base, &geo_box);
+	/* wlroots 0.19 removed wlr_xdg_surface_get_geometry(): the current window
+	 * geometry is now kept live in the ->geometry field of the xdg_surface. */
+	struct wlr_box geo_box = toplevel->xdg_toplevel->base->geometry;
 	wlr_scene_node_set_position(&toplevel->scene_tree->node,
 		new_left - geo_box.x, new_top - geo_box.y);
 	toplevel->x = toplevel->scene_tree->node.x;
@@ -1202,6 +1218,45 @@ static void server_cursor_frame(struct wl_listener *listener, void *data) {
 /* output                                                             */
 /* ------------------------------------------------------------------ */
 
+/* Consecutive failed commits before we declare an output wedged and force a
+ * modeset. Failed commits are retried on a ~100ms timer (WTF_WEDGE_RETRY_MS),
+ * so this is ~3s of a frozen screen — long enough to rule out a transient
+ * (mode change, one dropped flip), short enough to react before a rage-reboot.
+ * A genuinely stuck page-flip never clears on its own, so waiting longer only
+ * prolongs the freeze. */
+#define WTF_WEDGE_THRESHOLD 30
+#define WTF_WEDGE_RETRY_MS  100
+
+/* Paced retry for a wedged output. A failed commit must NOT re-schedule a frame
+ * immediately: on a stuck output every idle frame fails instantly and re-arms,
+ * busy-spinning the event loop at 100% of a core. This timer gives recovery a
+ * fixed cadence instead. Re-arms itself (via output_frame) while still failing. */
+static int output_retry_frame(void *data) {
+	struct wtf_output *output = data;
+	wlr_output_schedule_frame(output->wlr_output);
+	return 0;
+}
+
+/* Attempt to un-wedge a frozen output. Re-committing the current mode as a full
+ * modeset resets any stuck page-flip in the kernel (the usual cure for an eDP
+ * atomic-commit EBUSY loop). Returns true if the modeset committed. */
+static bool output_try_modeset_recovery(struct wtf_output *output) {
+	struct wlr_output *wlr_output = output->wlr_output;
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	wlr_output_state_set_enabled(&state, true);
+	struct wlr_output_mode *mode = wlr_output->current_mode;
+	if (mode == NULL) {
+		mode = wlr_output_preferred_mode(wlr_output);
+	}
+	if (mode != NULL) {
+		wlr_output_state_set_mode(&state, mode);
+	}
+	bool ok = wlr_output_commit_state(wlr_output, &state);
+	wlr_output_state_finish(&state);
+	return ok;
+}
+
 static void output_frame(struct wl_listener *listener, void *data) {
 	struct wtf_output *output = wl_container_of(listener, output, frame);
 	struct wlr_scene *scene = output->server->scene;
@@ -1215,14 +1270,74 @@ static void output_frame(struct wl_listener *listener, void *data) {
 	/* Advance animations before compositing this frame. */
 	bool still_animating = animate_toplevels();
 
-	wlr_scene_output_commit(scene_output, NULL);
+	bool committed = wlr_scene_output_commit(scene_output, NULL);
+
+	if (committed) {
+		/* Healthy frame. If we were wedged, announce the recovery so the log
+		 * shows the freeze had a definite end, then reset the counters. */
+		if (output->wedged) {
+			wlr_log(WLR_INFO,
+				"output %s RECOVERED after %u failed commits",
+				output->wlr_output->name, output->commit_failures);
+		}
+		output->commit_failures = 0;
+		output->wedged = false;
+	} else if (output->server->session != NULL &&
+	           !output->server->session->active) {
+		/* Session inactive (VT-switched away): EVERY commit fails instantly by
+		 * design. That is expected, NOT a wedge — don't count it, don't retry.
+		 * wlroots re-schedules frames itself when the session reactivates, so
+		 * counting/retrying here would only busy-spin and log a false WEDGED. */
+		output->commit_failures = 0;
+		output->wedged = false;
+	} else {
+		/* A failed commit while we own the output means nothing reached the
+		 * screen. One-off failures are normal; a run of them is a wedge. */
+		output->commit_failures++;
+
+		if (!output->wedged && output->commit_failures >= WTF_WEDGE_THRESHOLD) {
+			output->wedged = true;
+			wlr_log(WLR_ERROR,
+				"output %s WEDGED: %u consecutive failed atomic commits "
+				"(stuck page-flip / EBUSY) — attempting modeset recovery",
+				output->wlr_output->name, output->commit_failures);
+			if (output_try_modeset_recovery(output)) {
+				wlr_log(WLR_ERROR,
+					"output %s: modeset recovery committed; resuming frames",
+					output->wlr_output->name);
+			} else {
+				wlr_log(WLR_ERROR,
+					"output %s: modeset recovery FAILED; still wedged "
+					"(retrying every %dms)",
+					output->wlr_output->name, WTF_WEDGE_RETRY_MS);
+			}
+		} else if (output->wedged &&
+		           output->commit_failures % WTF_WEDGE_THRESHOLD == 0) {
+			/* Still wedged after the first attempt: retry a modeset on a throttled
+			 * cadence and keep a heartbeat in the log so the freeze is never
+			 * silent (our observability rule: no invisible hangs). */
+			wlr_log(WLR_ERROR,
+				"output %s still wedged (%u failed commits) — retrying "
+				"modeset recovery",
+				output->wlr_output->name, output->commit_failures);
+			output_try_modeset_recovery(output);
+		}
+
+		/* Keep recovery going on a paced timer — NOT an immediate frame, which
+		 * would busy-spin the event loop on a stuck output. */
+		if (output->retry_timer != NULL) {
+			wl_event_source_timer_update(output->retry_timer, WTF_WEDGE_RETRY_MS);
+		}
+	}
 
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(scene_output, &now);
 
-	/* Keep frames coming until everything has settled. */
-	if (still_animating) {
+	/* Keep frames coming until everything has settled — but not while wedged: the
+	 * retry timer already paces frames, and an immediate animation reschedule on a
+	 * stuck output would tight-loop until the animation settles. */
+	if (still_animating && !output->wedged) {
 		wlr_output_schedule_frame(output->wlr_output);
 	}
 }
@@ -1246,6 +1361,9 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&output->request_state.link);
 	wl_list_remove(&output->destroy.link);
 	wl_list_remove(&output->link);
+	if (output->retry_timer != NULL) {
+		wl_event_source_remove(output->retry_timer);
+	}
 
 	/* Close every layer surface living on the dying output BEFORE promoting a
 	 * new primary. The layer-shell contract makes output teardown the
@@ -1336,6 +1454,9 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	wl_signal_add(&wlr_output->events.request_state, &output->request_state);
 	output->destroy.notify = output_destroy;
 	wl_signal_add(&wlr_output->events.destroy, &output->destroy);
+	/* Paced wedge-recovery retry timer (disarmed until a commit fails). */
+	output->retry_timer = wl_event_loop_add_timer(
+		wl_display_get_event_loop(srv->wl_display), output_retry_frame, output);
 
 	wl_list_insert(&srv->outputs, &output->link);
 
@@ -1464,8 +1585,8 @@ static void begin_interactive(struct wtf_toplevel *toplevel,
 		srv->grab_x = srv->cursor->x - toplevel->scene_tree->node.x;
 		srv->grab_y = srv->cursor->y - toplevel->scene_tree->node.y;
 	} else {
-		struct wlr_box geo_box;
-		wlr_xdg_surface_get_geometry(toplevel->xdg_toplevel->base, &geo_box);
+		/* 0.19: geometry lives in the ->geometry field (get_geometry removed). */
+		struct wlr_box geo_box = toplevel->xdg_toplevel->base->geometry;
 
 		double border_x = (toplevel->scene_tree->node.x + geo_box.x) +
 			((edges & WLR_EDGE_RIGHT) ? geo_box.width : 0);
@@ -1913,19 +2034,43 @@ struct wtf_decoration {
 	struct wlr_xdg_toplevel_decoration_v1 *decoration;
 	struct wl_listener request_mode;
 	struct wl_listener destroy;
+	struct wl_listener surface_commit;  /* one-shot: force mode once initialized */
 };
+
+/* Force SERVER_SIDE, but ONLY once the toplevel surface is initialized: wlroots
+ * 0.19 makes set_mode() schedule a configure, and scheduling one on an
+ * uninitialized xdg_surface is a hard assert (0.18 only warned). Clients like
+ * GTK create the decoration BEFORE their initial commit, so we must defer. */
+static void decoration_force_server_side(struct wtf_decoration *d) {
+	if (d->decoration->toplevel->base->initialized) {
+		wlr_xdg_toplevel_decoration_v1_set_mode(d->decoration,
+			WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+	}
+}
 
 static void decoration_request_mode(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct wtf_decoration *d = wl_container_of(listener, d, request_mode);
-	wlr_xdg_toplevel_decoration_v1_set_mode(d->decoration,
-		WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+	decoration_force_server_side(d);  /* we always impose SSD; ignore the ask */
+}
+
+/* Fires on every commit of the decorated surface until it is initialized; then
+ * we can safely impose the mode and stop listening. */
+static void decoration_surface_commit(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct wtf_decoration *d = wl_container_of(listener, d, surface_commit);
+	if (d->decoration->toplevel->base->initialized) {
+		decoration_force_server_side(d);
+		wl_list_remove(&d->surface_commit.link);
+		wl_list_init(&d->surface_commit.link);  /* make destroy's remove a no-op */
+	}
 }
 
 static void decoration_destroy(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct wtf_decoration *d = wl_container_of(listener, d, destroy);
 	wl_list_remove(&d->request_mode.link);
+	wl_list_remove(&d->surface_commit.link);
 	wl_list_remove(&d->destroy.link);
 	free(d);
 }
@@ -1937,9 +2082,14 @@ static void server_new_toplevel_decoration(struct wl_listener *listener,
 
 	struct wtf_decoration *d = calloc(1, sizeof(*d));
 	if (d == NULL) {
-		/* Still answer the protocol so the client isn't left hanging. */
-		wlr_xdg_toplevel_decoration_v1_set_mode(decoration,
-			WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+		/* OOM: no state to defer with. Answer only if it's already safe — an
+		 * uninitialized surface can't take a scheduled configure (0.19 asserts),
+		 * so this rare OOM + pre-initial-commit case leaves the client to draw
+		 * its own decorations. Acceptable under memory pressure. */
+		if (decoration->toplevel->base->initialized) {
+			wlr_xdg_toplevel_decoration_v1_set_mode(decoration,
+				WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+		}
 		return;
 	}
 	d->decoration = decoration;
@@ -1948,8 +2098,20 @@ static void server_new_toplevel_decoration(struct wl_listener *listener,
 	d->destroy.notify = decoration_destroy;
 	wl_signal_add(&decoration->events.destroy, &d->destroy);
 
-	wlr_xdg_toplevel_decoration_v1_set_mode(decoration,
-		WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+	if (decoration->toplevel->base->initialized) {
+		/* Decoration arrived after the surface was already initialized: impose
+		 * SSD now. Keep surface_commit.link self-referential so decoration_destroy
+		 * can wl_list_remove() it unconditionally. */
+		wl_list_init(&d->surface_commit.link);
+		wlr_xdg_toplevel_decoration_v1_set_mode(decoration,
+			WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+	} else {
+		/* Common case (GTK et al. create the decoration before their initial
+		 * commit): defer SSD to the first initialized commit. */
+		d->surface_commit.notify = decoration_surface_commit;
+		wl_signal_add(&decoration->toplevel->base->surface->events.commit,
+			&d->surface_commit);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -2405,11 +2567,19 @@ void wtf_set_shadow(int enabled, double sigma, double r, double g, double b,
 	schedule_frame();
 }
 
+/* scenefx 0.4 unpacked wlr_scene_set_blur_data() from a struct into scalar
+ * params. Keep g_blur as our single source of truth and splat it in one place
+ * so both call sites (enable + init) stay in lockstep. */
+static void apply_blur_data(void) {
+	wlr_scene_set_blur_data(server.scene, g_blur.num_passes, g_blur.radius,
+		g_blur.noise, g_blur.brightness, g_blur.contrast, g_blur.saturation);
+}
+
 void wtf_set_blur(int enabled, int radius, int passes) {
 	g_blur_enabled = (enabled != 0);
 	if (radius > 0) g_blur.radius = radius;
 	if (passes > 0) g_blur.num_passes = passes;
-	wlr_scene_set_blur_data(server.scene, g_blur);
+	apply_blur_data();
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		style_toplevel(t);
@@ -2666,7 +2836,7 @@ int wtf_run(struct wtf_callbacks cbs) {
 	}
 	g_display = server.wl_display;
 	server.backend = wlr_backend_autocreate(
-		wl_display_get_event_loop(server.wl_display), NULL);
+		wl_display_get_event_loop(server.wl_display), &server.session);
 	if (server.backend == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_backend");
 		return 1;
@@ -2743,7 +2913,7 @@ int wtf_run(struct wtf_callbacks cbs) {
 
 	/* scenefx: seed default blur parameters (off until wtf_set_blur enables). */
 	g_blur = blur_data_get_default();
-	wlr_scene_set_blur_data(server.scene, g_blur);
+	apply_blur_data();
 
 	/* Scene z-order trees, created bottom-to-top so later siblings render above
 	 * earlier ones: BACKGROUND < BOTTOM < toplevels < TOP < OVERLAY. */
@@ -2770,7 +2940,7 @@ int wtf_run(struct wtf_callbacks cbs) {
 	wl_signal_add(&server.layer_shell->events.new_surface,
 		&server.new_layer_surface);
 
-	/* xdg-shell version 3, matching the canonical 0.18 tinywl. */
+	/* xdg-shell version 3, matching the canonical 0.19 tinywl. */
 	wl_list_init(&server.toplevels);
 	server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
 	WTF_REQUIRE(server.xdg_shell, "wlr_xdg_shell_create");
@@ -2891,17 +3061,42 @@ int wtf_run(struct wtf_callbacks cbs) {
 	signal(SIGTERM, SIG_DFL);
 	g_display = NULL;
 
-	/* Teardown. */
+	/* Teardown. wlroots 0.19 hardened every _destroy()/_finish() to ASSERT that
+	 * the object's event listener_lists are empty first (0.18 tolerated dangling
+	 * listeners). So each explicitly-destroyed object below must have OUR
+	 * listeners detached before it — otherwise logout SIGABRTs, which wtf-session
+	 * reads as a crash and restarts instead of returning cleanly to the greeter. */
 	if (server.xwayland != NULL) {
+		wl_list_remove(&server.xwayland_ready.link);
+		wl_list_remove(&server.new_xwayland_surface.link);
 		wlr_xwayland_destroy(server.xwayland);
 	}
 	wl_display_destroy_clients(server.wl_display);
 	wlr_scene_node_destroy(&server.scene->tree.node);
 	wlr_xcursor_manager_destroy(server.cursor_mgr);
+	wl_list_remove(&server.cursor_motion.link);
+	wl_list_remove(&server.cursor_motion_absolute.link);
+	wl_list_remove(&server.cursor_button.link);
+	wl_list_remove(&server.cursor_axis.link);
+	wl_list_remove(&server.cursor_frame.link);
 	wlr_cursor_destroy(server.cursor);
 	wlr_allocator_destroy(server.allocator);
 	wlr_renderer_destroy(server.renderer);
+	/* backend: new_input + new_output live on backend->events (0.19 asserts). */
+	wl_list_remove(&server.new_input.link);
+	wl_list_remove(&server.new_output.link);
 	wlr_backend_destroy(server.backend);
+	/* The remaining globals (xdg-shell, layer-shell, seat, xdg-decoration) are
+	 * freed INSIDE wl_display_destroy(), whose per-global display_destroy
+	 * handlers assert OUR listeners are detached first (0.19). Detach them now. */
+	wl_list_remove(&server.new_xdg_toplevel.link);
+	wl_list_remove(&server.new_xdg_popup.link);
+	wl_list_remove(&server.new_layer_surface.link);
+	wl_list_remove(&server.request_cursor.link);
+	wl_list_remove(&server.request_set_selection.link);
+	if (deco_mgr != NULL) {
+		wl_list_remove(&server.new_toplevel_decoration.link);
+	}
 	wl_display_destroy(server.wl_display);
 	return 0;
 }

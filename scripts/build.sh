@@ -9,9 +9,12 @@ export DOTNET_ROOT="$HOME/.dotnet"
 export PATH="$HOME/.dotnet:$PATH"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 
-echo ">> 0/3  ensuring scenefx (blur/rounded/shadows) is built"
+echo ">> 0/3  ensuring wlroots + scenefx (blur/rounded/shadows) are built"
+bash "$ROOT/scripts/build-wlroots.sh"
 bash "$ROOT/scripts/build-scenefx.sh"
-export PKG_CONFIG_PATH="$ROOT/compositor/.scenefx/lib/x86_64-linux-gnu/pkgconfig:$ROOT/compositor/.scenefx/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+# wlroots 0.19 is VENDORED (no system package), so BOTH pkgconfig dirs must front
+# the search path — scenefx-0.4.pc also Requires wlroots-0.19 transitively.
+export PKG_CONFIG_PATH="$ROOT/compositor/.wlroots/lib/pkgconfig:$ROOT/compositor/.scenefx/lib/x86_64-linux-gnu/pkgconfig:$ROOT/compositor/.scenefx/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 echo ">> 1/3  building C shim (libwtf_shim.so) via meson/ninja"
 cd "$ROOT/compositor"

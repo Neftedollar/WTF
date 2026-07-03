@@ -47,7 +47,7 @@ Mesa's software GL; on a machine without one, `modprobe vgem` first.)
 ## Code layout
 
 ```
-compositor/wtf-shim.c    the C body: wlroots 0.18 + scenefx compositor shim
+compositor/wtf-shim.c    the C body: wlroots 0.19 + scenefx compositor shim
 compositor/wtf.h         the narrow C ABI — flat data only, no wlroots types
 compositor/wtf-panel.c   layer-shell client library used by the bar/omnibox
 src/WTF.Core/            the brain: Rect/Stack/Layout/World, Command/Reducer,
@@ -97,9 +97,6 @@ only translates between them. The full rationale:
   output (outputs attach/detach safely, but workspaces don't span or move
   across monitors). The brain's `World` model needs a per-output dimension and
   the shim needs per-output arrange paths.
-- **wlroots 0.19 migration** — we vendor 0.18; scenefx and the shim both need
-  the bump. Isolated to `compositor/` + `scripts/build-wlroots.sh` /
-  `build-scenefx.sh` by design.
 - **Packaging** — AUR (a `PKGBUILD` draft is in `packaging/arch/`), Fedora
   COPR (`packaging/rpm/wtf-wm.spec`), and anything Nix/openSUSE. The release
   workflow already produces a stage tree that packagers can consume.

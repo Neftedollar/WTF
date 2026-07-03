@@ -84,7 +84,7 @@ bash scripts/install.sh
 Run it as a **regular user** (it refuses root); `sudo` is invoked internally
 for exactly one step — copying the staged tree into `/usr/local`. The script:
 
-1. builds scenefx (pinned 0.2.1) and the C shim,
+1. builds scenefx (pinned 0.4.1) and the C shim,
 2. publishes the self-contained host + `wtfctl` + bar + omnibox for your
    architecture (x86_64 and aarch64 supported),
 3. assembles everything under `build/stage/`,

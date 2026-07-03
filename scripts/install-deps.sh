@@ -15,7 +15,7 @@ APT_PKGS=(
   wayland-protocols libwayland-dev libwayland-bin libxkbcommon-dev
   # libwayland build deps (vendored when the system one is < 1.23):
   libffi-dev libexpat1-dev libxml2-dev
-  # wlroots 0.18 build deps (vendored build):
+  # wlroots 0.19 build deps (vendored build):
   libdrm-dev libgbm-dev libpixman-1-dev
   libinput-dev libseat-dev libudev-dev
   libgles2-mesa-dev libegl1-mesa-dev

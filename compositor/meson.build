@@ -13,8 +13,8 @@ m_dep        = cc.find_library('m', required: false)  # lround/fabs (animations)
 # scenefx provides the effect-capable scene graph (blur/rounded/shadows). It
 # replaces wlroots' wlr_scene, so it must be listed BEFORE wlroots so its
 # symbols win. Built locally into compositor/.scenefx (see scripts).
-scenefx      = dependency('scenefx-0.2')
-wlroots      = dependency('wlroots-0.18')
+scenefx      = dependency('scenefx-0.4')
+wlroots      = dependency('wlroots-0.19')
 wayland_server = dependency('wayland-server')
 xkbcommon    = dependency('xkbcommon')
 pixman       = dependency('pixman-1')

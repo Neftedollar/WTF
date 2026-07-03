@@ -195,7 +195,7 @@ an agent-grade API, that's the niche WTF is built for.
 
 **F# brain, C body.** All window-management logic — layouts, workspaces,
 focus, rules, your config — is a pure, property-tested F# core. A thin C shim
-over wlroots 0.18 + scenefx owns the GPU, input, and Wayland protocol; only
+over wlroots 0.19 + scenefx owns the GPU, input, and Wayland protocol; only
 flat data (ids, rectangles, intents) crosses the boundary. A layout is
 literally `Rect -> Stack<'a> -> ('a * Rect) list`: C calls the brain on
 discrete events, gets rectangles back, and animates windows towards them.

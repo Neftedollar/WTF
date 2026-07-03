@@ -18,7 +18,7 @@ project proved works:
         └──────────────────────────────┘                              └────────────────────────┘
 ```
 
-- The **C side** (`compositor/wtf-shim.c`, wlroots 0.18 + scenefx) owns
+- The **C side** (`compositor/wtf-shim.c`, wlroots 0.19 + scenefx) owns
   everything performance-critical and protocol-heavy, and it is the *only*
   thing that breaks when wlroots bumps its (unstable) ABI.
 - The **F# side** is 100% safe, pure, property-tested code. A layout is
@@ -50,7 +50,7 @@ blur run entirely in C at frame rate.
 
 ```
 compositor/              the C body
-  wtf-shim.c             wlroots 0.18 + scenefx compositor shim → libwtf_shim.so
+  wtf-shim.c             wlroots 0.19 + scenefx compositor shim → libwtf_shim.so
   wtf-panel.c            layer-shell client library for the bar/omnibox
   wtf.h                  the narrow C ABI both sides compile against
 src/

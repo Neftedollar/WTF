@@ -87,9 +87,29 @@ primary. Check the log to see which output was skipped.
 
 **Something is frozen.**
 Config compilation and heavy wallpaper decoding run off the main thread, so
-the session shouldn't freeze; if it does, switch to a TTY
-(`Ctrl+Alt+F3`), check the newest log, and `kill <wtf pid>` — the wrapper
-will restart or fall back cleanly.
+the session shouldn't freeze on the software side.
+
+The one hardware case that *can* freeze it is a **stuck DRM page-flip**: the
+GPU stops accepting frames and every atomic commit fails with
+`Atomic commit failed: Device or resource busy`. WTF now detects this — after
+a run of failed commits it logs
+
+```
+output eDP-1 WEDGED: 30 consecutive failed atomic commits (stuck page-flip / EBUSY) — attempting modeset recovery
+```
+
+and forces a modeset to reset the connector. On success you'll see
+`output eDP-1 RECOVERED after N failed commits`; if it can't recover it keeps
+a throttled `still wedged` heartbeat in the log rather than freezing silently.
+
+If your log shows this on a laptop's built-in **Intel** panel (`eDP-1`), the
+usual root cause is **PSR (Panel Self Refresh)**. Disable it by adding
+`i915.enable_psr=0` to the kernel command line (GRUB: `GRUB_CMDLINE_LINUX_DEFAULT`,
+then `sudo update-grub` and reboot). Slightly higher power draw, no more freeze.
+
+If a freeze ever outlasts recovery, the escape hatch is unchanged: switch to a
+TTY (`Ctrl+Alt+F3`), check the newest log, and `kill <wtf pid>` — the wrapper
+restarts or falls back cleanly.
 
 ## Environment variables
 
