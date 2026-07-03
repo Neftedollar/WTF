@@ -34,7 +34,8 @@ let myKeys =
     keymap {
         // launch & close
         bind "M-Return"  (Spawn "foot")
-        bind "M-p"       (once (Spawn "wtf-omnibox"))  // `once` = singleton launch
+        bind "M-p"       ToggleOmnibox                 // in-process launcher overlay
+        //   (or `once (Spawn "wtf-omnibox")` for the standalone client)
         bind "M-S-c"     CloseFocused
         // focus & stack
         bind "M-j"       (Focus NextWindow)

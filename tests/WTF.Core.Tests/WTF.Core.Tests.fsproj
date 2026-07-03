@@ -26,6 +26,7 @@
     <Compile Include="SessionIOTests.fs" />
     <Compile Include="WallpaperTests.fs" />
     <Compile Include="WallpaperPaletteTests.fs" />
+    <Compile Include="SurfaceTests.fs" />
   </ItemGroup>
 
   <ItemGroup>

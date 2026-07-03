@@ -14,11 +14,13 @@
     <Compile Include="Socket.fs" />
     <Compile Include="DesktopEntry.fs" />
     <Compile Include="Fuzzy.fs" />
+    <Compile Include="OmniboxModel.fs" />
     <Compile Include="ClientConfig.fs" />
     <Compile Include="BarModel.fs" />
     <Compile Include="Panel.fs" />
     <Compile Include="Render.fs" />
     <Compile Include="BarRender.fs" />
+    <Compile Include="OmniboxRender.fs" />
   </ItemGroup>
 
   <!-- Pin all three SixLabors packages explicitly to lock the graph. ImageSharp

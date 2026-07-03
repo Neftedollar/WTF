@@ -23,9 +23,11 @@ struct wtf_callbacks {
     void (*view_map)(int id, const char *app_id, const char *title);
     /* A toplevel was unmapped/destroyed. */
     void (*view_unmap)(int id);
-    /* A key was pressed. mods = wlr modifier mask, sym = xkb keysym.
+    /* A key was pressed. mods = wlr modifier mask, sym = xkb keysym (group 0, so
+     * WM chords survive a layout switch), codepoint = utf32 of the key in the
+     * ACTIVE group (0 if none) for in-process text entry (the omnibox overlay).
      * Return 1 if the brain handled it (compositor swallows it), 0 to forward. */
-    int  (*key)(uint32_t mods, uint32_t sym);
+    int  (*key)(uint32_t mods, uint32_t sym, uint32_t codepoint);
     /* The active output's usable area changed (also fired once at startup).
      * This is the output minus layer-shell exclusive zones; x,y may be non-zero
      * for a top/left bar. */
@@ -134,6 +136,17 @@ void wtf_set_bar(int id, const unsigned char *rgba, int width, int height,
 	int anchor, int thickness);
 /* Remove embedded bar `id`, returning its reserved strip to the usable area. */
 void wtf_clear_bar(int id);
+
+/* ---- in-process overlay (OVERLAY layer, centered; e.g. omnibox/spotlight) ---- */
+/* Set/update the single overlay surface from raw RGBA pixels (same pixel format
+ * as the bar: width*height*4 bytes, R,G,B,A, copied synchronously). It is
+ * centered on the primary output in the ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY tree
+ * and reserves NO area (tiling is untouched). There is no wl client + no
+ * keyboard grab: the brain already receives every key via the `key` callback and
+ * routes them to the overlay itself while it is shown. */
+void wtf_set_overlay(const unsigned char *rgba, int width, int height);
+/* Remove the overlay surface. */
+void wtf_clear_overlay(void);
 
 /* ---- input configuration (keyboard xkb/repeat + libinput pointer/touchpad) ---- */
 

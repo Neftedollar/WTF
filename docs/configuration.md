@@ -82,7 +82,7 @@ With `open WTF.TypeProviders`, three providers turn *your machine* into types:
 let myKeys =
     keymap {
         bind "M-Return" (Spawn "foot")
-        bind "M-p"      (once (Spawn "wtf-omnibox"))   // singleton launch
+        bind "M-p"      ToggleOmnibox                  // in-process launcher (2b)
         bind "M-j"      (Focus NextWindow)
         bind "M-1"      (SwitchWorkspace "1")
         bind "M-S-r"    ReloadConfig
@@ -143,6 +143,12 @@ The status bar and the launcher are styled from the same config — the WM
 serves their config over the agent socket, so **a save restyles a running bar
 live** (colors/segments/font apply on its next poll; position/thickness apply
 when the bar starts). The omnibox reads its styling each time it opens.
+
+**The launcher is in-process too.** Bind `ToggleOmnibox` to open/close the
+built-in launcher as a centered overlay the WM draws itself — no separate
+process, and it picks up its styling from the live config each time it opens.
+`Spawn "wtf-omnibox"` still runs the standalone client if you prefer (or want it
+on another compositor). Both share the exact same look + fuzzy launcher.
 
 The bar polls every `refreshMs` (default **300 ms**) but only repaints when its
 visible content actually changed, so a snappy cadence stays cheap — the clock
@@ -286,6 +292,29 @@ A layout is a function; register one and it becomes a first-class name:
 Registry.register "mytall" (fun nmaster ratio -> Layout.tall nmaster ratio)
 // then: defaultLayout "mytall", bind "M-y" (SetLayout "mytall"), wtfctl layout mytall
 ```
+
+## Custom surfaces — bar & overlay plugins
+
+The same compiled-plugin mechanism that ships custom **layouts** also ships
+custom **surfaces**: drop a .NET assembly implementing one of these interfaces
+into `~/.config/wtf/plugins/` and the WM renders it in-process, exactly like the
+built-in bar/omnibox. (Same loader, same `<Private>false</Private>` WTF.Core
+reference rule as a layout plugin — see `examples/`.)
+
+- **`IWtfBarPlugin`** — a non-interactive strip anchored to a screen edge. It
+  hands back `Name`, `Anchor`, `Thickness`, `RefreshMs`, and
+  `Render: BarContext -> width -> height -> byte[]` (BGRA pixels). The WM
+  reserves its strip from the tiling area and repaints on its cadence. It fills
+  any free bar slot (max 4 total, shared with `bars`).
+- **`IWtfOverlayPlugin`** — an interactive centered panel (a spotlight / command
+  palette). It hands back `Name`, `Width`, `Height`, `Open()`, `OnKey` (mods,
+  keysym, codepoint → `OverlayRedraw` / `OverlayConsumed` / `OverlayClose`), and
+  `Render: width -> height -> byte[]`. While shown it is modal — every key routes
+  to it. Open it by name with `bind "M-o" (ToggleOverlay "myspotlight")`.
+
+Colliding names replace last-wins (logged), so a plugin overlay named `"omnibox"`
+overrides the built-in launcher. Third-party bars/launchers can instead stay
+external layer-shell clients over the agent socket — both paths are supported.
 
 ## Safe mode
 

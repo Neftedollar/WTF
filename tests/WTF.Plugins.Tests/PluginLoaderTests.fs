@@ -231,6 +231,43 @@ let ``fixture assembly registers multiple layouts, overrides a built-in, and ski
         Directory.Delete(dir, true)
 
 [<Fact>]
+let ``fixture assembly registers bar + overlay surfaces (2c) into SurfaceRegistry`` () =
+    // The SAME scan that loads layouts must also discover IWtfBarPlugin /
+    // IWtfOverlayPlugin and feed SurfaceRegistry — and a type that is BOTH a
+    // layout and a bar registers its single instance into both registries.
+    SurfaceRegistry.clear ()
+    let dir = freshDir ()
+    File.Copy(fixtureDllPath (), Path.Combine(dir, "FixturePlugins.dll"))
+    let loader = PluginLoader.createForPath dir
+    try
+        let ex = Record.Exception(fun () -> loader.LoadAll())
+        Assert.Null(ex)
+
+        // 1) The standalone bar + overlay surfaces registered.
+        Assert.Contains("fixture_bar", SurfaceRegistry.barNames ())
+        Assert.Contains("fixture_overlay", SurfaceRegistry.overlayNames ())
+
+        // 2) The dual (layout+bar) type registered into BOTH registries from one
+        //    instance: its layout name AND its bar name are both present.
+        Assert.Contains("fixture_dual", Registry.names ())
+        Assert.Contains("fixture_dual_bar", SurfaceRegistry.barNames ())
+
+        // 3) The registered bar is resolvable and renders a correctly-sized buffer.
+        let bar = SurfaceRegistry.tryBar "fixture_bar"
+        Assert.True(bar.IsSome)
+        let px = bar.Value.Render BarContext.empty 20 10
+        Assert.Equal(20 * 10 * 4, px.Length)
+
+        // 4) The overlay resolves and reports its fixed size; any key closes it.
+        let ov = SurfaceRegistry.tryOverlay "fixture_overlay"
+        Assert.True(ov.IsSome)
+        Assert.Equal(100, ov.Value.Width)
+        Assert.Equal(OverlayClose, ov.Value.OnKey 0u 0xff1bu 0u)
+    finally
+        SurfaceRegistry.clear ()
+        Directory.Delete(dir, true)
+
+[<Fact>]
 let ``PluginPath.resolve honours XDG_CONFIG_HOME and falls back to ~/.config`` () =
     let prev = Environment.GetEnvironmentVariable "XDG_CONFIG_HOME"
     try

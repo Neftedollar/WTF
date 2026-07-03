@@ -21,6 +21,17 @@ let private setCurrentLayout name (w: World) =
             |> List.map (fun ws -> if ws.Tag = w.Current then { ws with Layout = name } else ws) }
 
 [<Fact>]
+let ``surface toggle commands are pure host-handled no-ops`` () =
+    let w = worldWith 3
+    // The reducer leaves World untouched and emits no effects (the host owns the
+    // real overlay surface); and they never record an undo point.
+    for cmd in [ ToggleOmnibox; ToggleOverlay "omnibox"; ToggleOverlay "spotlight" ] do
+        let w', effects = Reducer.apply cmd w
+        Assert.Equal(w, w')
+        Assert.Empty(effects)
+        Assert.False(Reducer.isUndoable cmd)
+
+[<Fact>]
 let ``adding windows populates the current workspace in order`` () =
     let w = worldWith 3
     let ids = (World.currentWorkspace w).Stack |> Option.get |> Stack.toList

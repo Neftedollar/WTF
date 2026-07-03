@@ -61,3 +61,39 @@ type NoDefaultCtorPlugin(unused: int) =
     interface IWtfLayoutPlugin with
         member _.Name = "NoDefaultCtor"
         member _.Layouts = [ "fixture_noctor_should_not_appear", Fixtures.markerFactory ]
+
+// --- surface plugins (2c): the loader must discover IWtfBarPlugin /
+//     IWtfOverlayPlugin in the SAME scan and feed SurfaceRegistry. ------------
+
+/// A minimal in-process BAR surface: a solid strip. Proves IWtfBarPlugin is
+/// discovered + registered into SurfaceRegistry.
+type BarSurfacePlugin() =
+    interface IWtfBarPlugin with
+        member _.Name = "fixture_bar"
+        member _.Anchor = AnchorBottom
+        member _.Thickness = 24
+        member _.RefreshMs = 500
+        member _.Render (_ctx: BarContext) (w: int) (h: int) = Array.zeroCreate (max 0 (w * h * 4))
+
+/// A minimal OVERLAY surface: fixed size, dismisses on any key.
+type OverlaySurfacePlugin() =
+    interface IWtfOverlayPlugin with
+        member _.Name = "fixture_overlay"
+        member _.Width = 100
+        member _.Height = 50
+        member _.Open() = ()
+        member _.OnKey (_mods: uint32) (_sym: uint32) (_cp: uint32) = OverlayClose
+        member _.Render (w: int) (h: int) = Array.zeroCreate (max 0 (w * h * 4))
+
+/// A type that is BOTH a layout AND a bar — the loader registers the SINGLE
+/// instance into both registries.
+type DualLayoutBarPlugin() =
+    interface IWtfLayoutPlugin with
+        member _.Name = "DualLB"
+        member _.Layouts = [ "fixture_dual", Fixtures.markerFactory ]
+    interface IWtfBarPlugin with
+        member _.Name = "fixture_dual_bar"
+        member _.Anchor = AnchorTop
+        member _.Thickness = 10
+        member _.RefreshMs = 1000
+        member _.Render (_ctx: BarContext) (w: int) (h: int) = Array.zeroCreate (max 0 (w * h * 4))

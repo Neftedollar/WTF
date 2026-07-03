@@ -32,6 +32,7 @@
     <Compile Include="Palette.fs" />
     <Compile Include="Session.fs" />
     <Compile Include="Config.fs" />
+    <Compile Include="Surface.fs" />
   </ItemGroup>
 
 </Project>

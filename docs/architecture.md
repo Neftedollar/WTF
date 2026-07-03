@@ -93,9 +93,23 @@ windows. Two paths render them, sharing one pure composition (`WTF.Client`'s
   socket + layer-shell contract is stable, so external surfaces stay first-class
   and portable to other compositors.
 
+The **omnibox** works the same way: `ToggleOmnibox` shows the built-in launcher
+as a centered `wtf_set_overlay` scene buffer in the OVERLAY layer (no strip
+reserved, no wl client). There is no keyboard grab — the compositor already
+delivers every key to the brain via the `key` callback (now carrying the utf32
+codepoint for text entry), so while an overlay is shown the host routes keys to
+it instead of matching keybinds. Esc/Enter dismiss it.
+
+Both surfaces are also the USER extension point (the ".NET as a platform" story,
+generalized from layouts): a plugin implementing `IWtfBarPlugin` or
+`IWtfOverlayPlugin` is discovered by the SAME `PluginLoader` scan and registered
+into `SurfaceRegistry`, which the host reads to drive `wtf_set_bar` /
+`wtf_set_overlay`. The built-in omnibox is itself an `IWtfOverlayPlugin` (name
+`"omnibox"`), so it is just the default surface a user plugin can replace.
+
 The standalone exes are thin layer-shell wrappers around the *same* shared
 render, so both paths look identical. Under NativeAOT the host has no embedded
-surface (it uses the external `wtf-bar`).
+surface (it uses the external `wtf-bar` / `wtf-omnibox`).
 
 ## Builds
 
