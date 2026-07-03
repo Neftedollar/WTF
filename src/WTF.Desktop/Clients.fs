@@ -63,6 +63,53 @@ module Clients =
 
     let private mprisPrefix = "org.mpris.MediaPlayer2."
 
+    // -- raw a{sv} property extraction (Tmds' typed [<Dictionary>] mapping is
+    //    broken in 0.94 — see DBusInterfaces.fs). Variants arrive boxed; convert
+    //    defensively so a wrong-typed value degrades to the default, never throws.
+    let private prop (d: IDictionary<string, obj>) (key: string) : obj option =
+        match d.TryGetValue key with
+        | true, v when not (isNull v) -> Some v
+        | _ -> None
+
+    let private asBool d k =
+        prop d k |> Option.bind (function :? bool as b -> Some b | _ -> None)
+
+    let private asFloat d k =
+        prop d k
+        |> Option.bind (fun v ->
+            match v with
+            | :? double as x -> Some x
+            | :? single as x -> Some(float x)
+            | :? int as x -> Some(float x)
+            | _ -> None)
+
+    let private asUInt d k =
+        prop d k
+        |> Option.bind (fun v ->
+            match v with
+            | :? uint32 as x -> Some x
+            | :? int as x when x >= 0 -> Some(uint32 x)
+            | :? uint64 as x -> Some(uint32 x)
+            | _ -> None)
+
+    /// PURE: raw UPower DisplayDevice props -> BatteryState. Missing/wrong-typed
+    /// fields fall back (present=false, 0%, unknown). Testable without D-Bus.
+    let parseBattery (d: IDictionary<string, obj>) : BatteryState =
+        { Present = defaultArg (asBool d "IsPresent") false
+          Percentage = defaultArg (asFloat d "Percentage") 0.0
+          State = upowerStateLabel (defaultArg (asUInt d "State") 0u) }
+
+    /// PURE: raw NetworkManager props -> NetworkState.
+    let parseNetwork (d: IDictionary<string, obj>) : NetworkState =
+        let primary =
+            prop d "PrimaryConnection"
+            |> Option.map (fun v -> v.ToString())
+            |> Option.bind (fun p ->
+                if String.IsNullOrEmpty p || p = "/" then None else Some p)
+        { State = nmStateLabel (defaultArg (asUInt d "State") 0u)
+          Connectivity = nmConnectivityLabel (defaultArg (asUInt d "Connectivity") 0u)
+          Primary = primary }
+
     // -- UPower (battery) ------------------------------------------------------
     let startUPower (conn: Connection) (agg: Aggregator) : Task =
         task {
@@ -72,12 +119,8 @@ module Clients =
                         "org.freedesktop.UPower",
                         ObjectPath "/org/freedesktop/UPower/devices/DisplayDevice")
 
-                let apply (p: BatteryProps) =
-                    let bs =
-                        { Present = p.IsPresent
-                          Percentage = p.Percentage
-                          State = upowerStateLabel p.State }
-                    agg.Update(fun s -> { s with Battery = Some bs })
+                let apply (d: IDictionary<string, obj>) =
+                    agg.Update(fun s -> { s with Battery = Some(parseBattery d) })
 
                 let! props = dev.GetAllAsync()
                 apply props
@@ -92,7 +135,8 @@ module Clients =
                                 with _ -> ()
                              }) |> ignore))
 
-                eprintfn "WTF desktop: UPower battery present=%b pct=%.0f" props.IsPresent props.Percentage
+                let bs = parseBattery props
+                eprintfn "WTF desktop: UPower battery present=%b pct=%.0f state=%s" bs.Present bs.Percentage bs.State
             with ex ->
                 // No DisplayDevice (e.g. a desktop without a battery) or no service.
                 eprintfn "WTF desktop: UPower unavailable (%s)" ex.Message
@@ -108,15 +152,8 @@ module Clients =
                         "org.freedesktop.NetworkManager",
                         ObjectPath "/org/freedesktop/NetworkManager")
 
-                let apply (p: NetworkProps) =
-                    let primary =
-                        let path = p.PrimaryConnection.ToString()
-                        if String.IsNullOrEmpty path || path = "/" then None else Some path
-                    let ns =
-                        { State = nmStateLabel p.State
-                          Connectivity = nmConnectivityLabel p.Connectivity
-                          Primary = primary }
-                    agg.Update(fun s -> { s with Network = Some ns })
+                let apply (d: IDictionary<string, obj>) =
+                    agg.Update(fun s -> { s with Network = Some(parseNetwork d) })
 
                 let! props = nm.GetAllAsync()
                 apply props
@@ -131,7 +168,7 @@ module Clients =
                                 with _ -> ()
                              }) |> ignore))
 
-                eprintfn "WTF desktop: NetworkManager state=%s" (nmStateLabel props.State)
+                eprintfn "WTF desktop: NetworkManager state=%s" (parseNetwork props).State
             with ex ->
                 eprintfn "WTF desktop: NetworkManager unavailable (%s)" ex.Message
         }

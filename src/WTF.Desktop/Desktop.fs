@@ -30,6 +30,9 @@ module Desktop =
     let private agg = Aggregator()
     let private mprisRegistry = ConcurrentDictionary<string, IMprisPlayer>()
     let mutable private conn: Connection = null
+    // UPower / NetworkManager / logind live on the SYSTEM bus, not the session
+    // bus — kept alive alongside `conn` for the whole process.
+    let mutable private sysConn: Connection = null
     let mutable private daemon: NotificationDaemon option = None
 
     /// The live desktop-shell state for the agent (thread-safe read).
@@ -89,11 +92,27 @@ module Desktop =
                         let c = new Connection(addr)
                         let! _ = c.ConnectAsync()
                         conn <- c
+                        // Session bus: notifications + MPRIS media live here.
                         do! startNotifications c
-                        do! Clients.startUPower c agg
-                        do! Clients.startNetwork c agg
-                        do! Clients.startLogind c agg
                         do! Clients.startMpris c agg mprisRegistry
+                        // System bus: UPower / NetworkManager / logind live here,
+                        // NOT the session bus — connecting them to `c` was why
+                        // battery/network/lock reported ServiceUnknown. Separate,
+                        // best-effort connection so a locked-down system bus still
+                        // leaves notifications/media working.
+                        try
+                            match Address.System with
+                            | null ->
+                                eprintfn "WTF desktop: no system bus address — battery/network/lock disabled"
+                            | saddr ->
+                                let sc = new Connection(saddr)
+                                let! _ = sc.ConnectAsync()
+                                sysConn <- sc
+                                do! Clients.startUPower sc agg
+                                do! Clients.startNetwork sc agg
+                                do! Clients.startLogind sc agg
+                        with ex ->
+                            eprintfn "WTF desktop: system bus unavailable, battery/network/lock disabled (%s)" ex.Message
                         eprintfn "WTF desktop: D-Bus shell up"
                 with ex ->
                     eprintfn "WTF desktop: init failed, continuing without shell (%s)" ex.Message

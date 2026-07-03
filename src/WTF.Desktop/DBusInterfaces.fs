@@ -64,29 +64,21 @@ module DBus =
         abstract member WatchUnlockAsync: handler: Action -> Task<IDisposable>
 
     // -- org.freedesktop.UPower.Device (CLIENT) --------------------------------
-    [<Dictionary>]
-    type BatteryProps() =
-        member val IsPresent = false with get, set
-        member val Percentage = 0.0 with get, set
-        member val State = 0u with get, set
-
+    // NOTE: GetAll returns the RAW a{sv} dictionary, not a typed [<Dictionary>]
+    // record. Tmds.DBus 0.94's typed-dictionary deserialization silently yields
+    // an all-defaults object here (battery would read present=false forever); the
+    // raw IDictionary maps correctly. Fields are parsed in Clients.parseBattery.
     [<DBusInterface("org.freedesktop.UPower.Device")>]
     type IUPowerDevice =
         inherit IDBusObject
-        abstract member GetAllAsync: unit -> Task<BatteryProps>
+        abstract member GetAllAsync: unit -> Task<IDictionary<string, obj>>
         abstract member WatchPropertiesAsync: handler: Action<PropertyChanges> -> Task<IDisposable>
 
     // -- org.freedesktop.NetworkManager (CLIENT) -------------------------------
-    [<Dictionary>]
-    type NetworkProps() =
-        member val State = 0u with get, set
-        member val Connectivity = 0u with get, set
-        member val PrimaryConnection: ObjectPath = ObjectPath("/") with get, set
-
     [<DBusInterface("org.freedesktop.NetworkManager")>]
     type INetworkManager =
         inherit IDBusObject
-        abstract member GetAllAsync: unit -> Task<NetworkProps>
+        abstract member GetAllAsync: unit -> Task<IDictionary<string, obj>>
         abstract member WatchPropertiesAsync: handler: Action<PropertyChanges> -> Task<IDisposable>
 
     // -- org.mpris.MediaPlayer2.* (CLIENT) -------------------------------------
