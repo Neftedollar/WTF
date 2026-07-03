@@ -53,6 +53,11 @@ type Command =
                                      // (host-handled, like the save-triggered hot-reload)
     | SaveDefault                    // bless the current config.fsx as the last-good
                                      // fallback (host-handled; only if it compiles)
+    // in-process surfaces (host-handled; the pure reducer treats them as no-ops):
+    | ToggleOmnibox                  // open/close the built-in in-process launcher
+                                     // overlay (equivalent to ToggleOverlay "omnibox")
+    | ToggleOverlay of string        // open/close a named overlay surface (a built-in
+                                     // or an IWtfOverlayPlugin registered by name)
     // emitted by the compositor, not the agent:
     | AddWindow of WindowInfo        // a surface was mapped
     | RemoveWindow of WindowId       // a surface was unmapped
@@ -110,6 +115,7 @@ module Reducer =
         | SetInactiveOpacity _ | SetAnimationSpeed _ | SetBorderWidth _
         | SetBorderColor _ | SetCornerRadius _ | SetBlur _
         | Undo | Redo | SaveSession | LoadSession | ReloadConfig | SaveDefault
+        | ToggleOmnibox | ToggleOverlay _
         | AddWindow _ | RemoveWindow _ -> false
 
     let private resolveSelector (w: World) sel (st: Stack<WindowId>) =
@@ -319,9 +325,10 @@ module Reducer =
         | SetCornerRadius radius -> w, [ RenderCornerRadius(max 0 radius) ]
         | SetBlur on -> w, [ RenderBlur on ]
 
-        // Host-handled (history/session/config). Total no-op arm keeps the reducer
-        // pure and exhaustive; the real work happens in the host's dispatch.
-        | Undo | Redo | SaveSession | LoadSession | ReloadConfig | SaveDefault -> w, []
+        // Host-handled (history/session/config/surfaces). Total no-op arm keeps the
+        // reducer pure and exhaustive; the real work happens in the host's dispatch.
+        | Undo | Redo | SaveSession | LoadSession | ReloadConfig | SaveDefault
+        | ToggleOmnibox | ToggleOverlay _ -> w, []
 
         | AddWindow info ->
             // Guard the stack-uniqueness invariant: a re-mapped id must not be

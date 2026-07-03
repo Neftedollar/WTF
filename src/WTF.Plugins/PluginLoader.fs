@@ -117,6 +117,24 @@ type ReflectionPluginLoader(pluginDir: string) =
             log (sprintf "loaded layout \"%s\" from %s (plugin: %s)"
                     name (Path.GetFileName file) plugin.Name)
 
+    /// Register an in-process SURFACE plugin (2c): a bar or an overlay. Same
+    /// last-wins-with-warning discipline as layouts, but the collision key is the
+    /// surface Name and the sink is SurfaceRegistry (which the host reads to drive
+    /// wtf_set_bar / wtf_set_overlay).
+    let registerBar (file: string) (p: IWtfBarPlugin) =
+        if SurfaceRegistry.hasBar p.Name then
+            log (sprintf "WARNING: bar surface \"%s\" from %s overrides an existing bar (last wins)"
+                    p.Name (Path.GetFileName file))
+        SurfaceRegistry.registerBar p
+        log (sprintf "loaded bar surface \"%s\" from %s" p.Name (Path.GetFileName file))
+
+    let registerOverlay (file: string) (p: IWtfOverlayPlugin) =
+        if SurfaceRegistry.hasOverlay p.Name then
+            log (sprintf "WARNING: overlay surface \"%s\" from %s overrides an existing overlay (last wins)"
+                    p.Name (Path.GetFileName file))
+        SurfaceRegistry.registerOverlay p
+        log (sprintf "loaded overlay surface \"%s\" from %s" p.Name (Path.GetFileName file))
+
     /// Load + register every plugin in ONE assembly. Per-type try/with so one bad
     /// type (e.g. a throwing ctor) does not abort the rest of the assembly.
     let loadAssembly (file: string) =
@@ -130,20 +148,28 @@ type ReflectionPluginLoader(pluginDir: string) =
                     ex.Types |> Array.filter (fun t -> not (isNull t))
             for t in types do
                 try
-                    if typeof<IWtfLayoutPlugin>.IsAssignableFrom t
+                    // A type may implement ANY of the extension interfaces (even
+                    // several at once — a layout that is also a bar); discover all
+                    // three in the SAME scan and register the ONE instance into
+                    // every registry it satisfies.
+                    let isLayout = typeof<IWtfLayoutPlugin>.IsAssignableFrom t
+                    let isBar = typeof<IWtfBarPlugin>.IsAssignableFrom t
+                    let isOverlay = typeof<IWtfOverlayPlugin>.IsAssignableFrom t
+                    if (isLayout || isBar || isOverlay)
                        && not t.IsAbstract
                        && not t.IsInterface then
                         // A plugin type with NO public parameterless ctor can't be
                         // reflectively instantiated — skip it, but LOG so the user
-                        // gets a diagnostic (otherwise their layout silently never
-                        // appears with no clue why).
+                        // gets a diagnostic (otherwise their extension silently
+                        // never appears with no clue why).
                         if t.GetConstructor(Type.EmptyTypes) = null then
                             log (sprintf "skipped type %s in %s: no public parameterless constructor (plugin types need one)"
                                     t.FullName (Path.GetFileName file))
                         else
-                            match Activator.CreateInstance t with
-                            | :? IWtfLayoutPlugin as plugin -> registerPlugin file plugin
-                            | _ -> ()
+                            let instance = Activator.CreateInstance t
+                            match instance with :? IWtfLayoutPlugin as p -> registerPlugin file p | _ -> ()
+                            match instance with :? IWtfBarPlugin as p -> registerBar file p | _ -> ()
+                            match instance with :? IWtfOverlayPlugin as p -> registerOverlay file p | _ -> ()
                 with ex ->
                     log (sprintf "skipped type %s in %s: %s" t.FullName (Path.GetFileName file) ex.Message)
         with ex ->

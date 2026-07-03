@@ -786,3 +786,64 @@ let ``Surface.CopyOut returns a zeroed buffer before anything is drawn`` () =
     let bytes = surface.CopyOut(10, 4)
     Assert.Equal(10 * 4 * 4, bytes.Length)
     Assert.True(Array.forall (fun b -> b = 0uy) bytes)
+
+// ---- OmniboxModel: the pure launcher state (query / ranked / selection) ----
+
+let private omniEntries =
+    [ entry "Firefox"; entry "Files"; entry "Terminal"; entry "Text Editor" ]
+
+[<Fact>]
+let ``OmniboxModel.init ranks all entries with an empty query`` () =
+    let m = OmniboxModel.init omniEntries
+    Assert.Equal("", m.Query)
+    Assert.Equal(omniEntries.Length, m.Ranked.Length)
+    Assert.Equal(0, m.Selected)
+
+[<Fact>]
+let ``OmniboxModel.typeText filters and re-ranks`` () =
+    let m = OmniboxModel.init omniEntries |> OmniboxModel.typeText "fi"
+    Assert.Equal("fi", m.Query)
+    // "Firefox" and "Files" both subsequence-match "fi"; "Terminal" does not.
+    Assert.All(m.Ranked, fun e -> Assert.Contains("fi", e.Name.ToLowerInvariant()))
+    Assert.DoesNotContain(entry "Terminal", m.Ranked)
+
+[<Fact>]
+let ``OmniboxModel.backspace is a no-op on an empty query`` () =
+    let m = OmniboxModel.init omniEntries
+    Assert.Equal(m, OmniboxModel.backspace m)
+
+[<Fact>]
+let ``OmniboxModel.backspace deletes the last character and re-ranks`` () =
+    let m = OmniboxModel.init omniEntries |> OmniboxModel.typeText "fir" |> OmniboxModel.backspace
+    Assert.Equal("fi", m.Query)
+
+[<Fact>]
+let ``OmniboxModel up and down clamp to the ranked range`` () =
+    let m = OmniboxModel.init omniEntries
+    // up at the top stays at 0
+    Assert.Equal(0, (OmniboxModel.up m).Selected)
+    // down walks to the last index and clamps there
+    let atEnd = List.replicate 10 OmniboxModel.down |> List.fold (fun s f -> f s) m
+    Assert.Equal(m.Ranked.Length - 1, atEnd.Selected)
+    // and back up one
+    Assert.Equal(m.Ranked.Length - 2, (OmniboxModel.up atEnd).Selected)
+
+[<Fact>]
+let ``OmniboxModel.selected returns the highlighted entry, None when empty`` () =
+    let m = OmniboxModel.init omniEntries
+    Assert.Equal(Some(List.head m.Ranked), OmniboxModel.selected m)
+    // a query matching nothing empties the list -> no selection
+    let none = OmniboxModel.typeText "zzzzzz" m
+    Assert.Empty(none.Ranked)
+    Assert.Equal(None, OmniboxModel.selected none)
+
+[<Fact>]
+let ``OmniboxRender.draw fills a full-size pixel buffer`` () =
+    let ui = WTF.Client.ClientConfig.omniboxOfSnapshot ""
+    let model = OmniboxModel.init omniEntries
+    use surface = new WTF.Client.Render.Surface()
+    let w, h = 320, 240
+    WTF.Client.OmniboxRender.draw surface ui model w h
+    let bytes = surface.CopyOut(w, h)
+    Assert.Equal(w * h * 4, bytes.Length)
+    Assert.True(Array.exists (fun b -> b <> 0uy) bytes, "omnibox render produced only zero pixels")

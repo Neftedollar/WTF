@@ -21,7 +21,8 @@ module Ffi =
     // Delegate types for the callbacks the C side invokes (C -> F#).
     type ViewMapDelegate = delegate of int * nativeint * nativeint -> unit
     type ViewUnmapDelegate = delegate of int -> unit
-    type KeyDelegate = delegate of uint32 * uint32 -> int
+    // mods, xkb keysym (group 0), utf32 codepoint (active group; 0 = no char).
+    type KeyDelegate = delegate of uint32 * uint32 * uint32 -> int
     type OutputResizeDelegate = delegate of int * int * int * int -> unit
     type ReadyDelegate = delegate of unit -> unit
     type DrainDelegate = delegate of unit -> unit
@@ -170,3 +171,14 @@ module Ffi =
     /// Remove embedded bar `id`, returning its strip to the usable area.
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_clear_bar(int id)
+
+    // ---- in-process overlay (OVERLAY layer, centered) ----
+    // Same pixel contract as the bar (R,G,B,A, copied synchronously). Centered on
+    // the primary output; reserves no area (tiling untouched). No wl client / no
+    // keyboard grab — the host routes keys to the overlay itself.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_overlay(byte[] rgba, int width, int height)
+
+    /// Remove the overlay surface.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_clear_overlay()

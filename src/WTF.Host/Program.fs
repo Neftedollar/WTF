@@ -361,6 +361,62 @@ let mutable private reloadConfigFromDisk : unit -> unit = ignore
 /// reports the outcome as a desktop notification. Wired at module init below.
 let mutable private saveDefaultToDisk : unit -> unit = ignore
 
+// ---- in-process overlay surfaces (omnibox/spotlight) ----
+// A centered OVERLAY scene buffer the host draws + routes keys to itself (no wl
+// client, no keyboard grab — the compositor already delivers every key via
+// onKey). At most one overlay is shown at a time. Registered surfaces live in
+// SurfaceRegistry (the built-in omnibox + any IWtfOverlayPlugin from a plugin);
+// `toggle name` opens/closes by name. ALL entry points run on the loop thread
+// (dispatch / onKey), so the direct Ffi calls are safe. AOT (WTF_NO_CLIENT): no
+// in-process overlay — ToggleOmnibox/ToggleOverlay no-op; use the standalone exe.
+#if !WTF_NO_CLIENT
+module private Overlays =
+    let mutable private activeName : string option = None
+    let mutable private current : IWtfOverlayPlugin option = None
+
+    /// True while an overlay is shown (onKey routes every key to it then).
+    let active () : bool = Option.isSome current
+
+    let private renderPush (p: IWtfOverlayPlugin) =
+        let w, h = p.Width, p.Height
+        if w > 0 && h > 0 then
+            let bytes = p.Render w h
+            if bytes.Length = w * h * 4 then Ffi.wtf_set_overlay (bytes, w, h)
+
+    let private closeCurrent () =
+        current <- None
+        activeName <- None
+        Ffi.wtf_clear_overlay ()
+
+    /// Open the named overlay, or close it if it is already the shown one.
+    let toggle (name: string) : unit =
+        match activeName with
+        | Some n when n = name -> closeCurrent ()
+        | _ ->
+            match SurfaceRegistry.tryOverlay name with
+            | Some p ->
+                if Option.isSome current then Ffi.wtf_clear_overlay ()  // swap overlays
+                p.Open()
+                current <- Some p
+                activeName <- Some name
+                renderPush p
+            | None -> eprintfn "WTF: no overlay surface named '%s'" name
+
+    /// Feed one key to the shown overlay and act on its verdict.
+    let handleKey (mods: uint32) (sym: uint32) (cp: uint32) : unit =
+        match current with
+        | Some p ->
+            match p.OnKey mods sym cp with
+            | OverlayRedraw -> renderPush p
+            | OverlayConsumed -> ()
+            | OverlayClose -> closeCurrent ()
+        | None -> ()
+
+let private toggleOverlay (name: string) : unit = Overlays.toggle name
+#else
+let private toggleOverlay (_name: string) : unit = ()   // no in-process overlay under AOT
+#endif
+
 /// The single choke point for every command. History is recorded here and
 /// nowhere else, so it can never desync. Undo/Redo/Save/LoadSession/ReloadConfig
 /// are intercepted (the pure reducer can't see history/config); everything else
@@ -371,6 +427,8 @@ let private dispatch (cmd: Command) : unit =
     | Redo -> History.redo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
     | ReloadConfig -> reloadConfigFromDisk ()
     | SaveDefault -> saveDefaultToDisk ()
+    | ToggleOmnibox -> toggleOverlay "omnibox"
+    | ToggleOverlay name -> toggleOverlay name
     | SaveSession -> SessionIO.save world
     | LoadSession ->
         match SessionIO.load () with
@@ -443,7 +501,18 @@ let onViewFocus (id: int) : unit =
 let private wtfDebugKeys =
     not (System.String.IsNullOrEmpty(System.Environment.GetEnvironmentVariable "WTF_DEBUG_KEYS"))
 
-let onKey (mods: uint32) (sym: uint32) : int =
+let onKey (mods: uint32) (sym: uint32) (cp: uint32) : int =
+    // An open in-process overlay (omnibox/spotlight) is MODAL: every key goes to
+    // it (typed text uses the utf32 `cp`), swallowed from the focused window.
+    // Esc/Enter dismiss it (OnKey -> OverlayClose). Checked FIRST so a launcher
+    // captures keys a keybind would otherwise match. No overlay => byte-identical
+    // to before. AOT: compiled out (no in-process overlay).
+#if !WTF_NO_CLIENT
+    if Overlays.active () then
+        Overlays.handleKey mods sym cp
+        1
+    else
+#endif
     // Media keys are the one INPUT->DBus flow. Recognize XF86Audio* keysyms
     // BEFORE the Chord path (Chord can't name them so they'd fall through to 0
     // anyway): transport keys drive the active MPRIS player, volume/mute shell
@@ -616,6 +685,59 @@ let private snapshotNow () : string =
     Protocol.snapshotLineWithNodes extras world
 
 #if !WTF_NO_CLIENT
+/// The built-in omnibox launcher, as an `IWtfOverlayPlugin` (name "omnibox") —
+/// the reference in-process overlay. Reuses WTF.Client's PURE OmniboxModel +
+/// OmniboxRender (shared with the standalone `wtf-omnibox` exe): Open() re-reads
+/// the live styling from the snapshot and rescans .desktop apps; OnKey drives the
+/// model; Render paints the surface; Enter spawns the selected app via the shim.
+/// Registered into SurfaceRegistry at startup, so a user overlay plugin named
+/// "omnibox" can override it (last-registered wins). Runs on the loop thread.
+type private BuiltinOmnibox(snapshot: unit -> string) =
+    let surface = new WTF.Client.Render.Surface()
+    let mutable ui = WTF.Client.ClientConfig.omniboxOfSnapshot ""
+    let mutable model = WTF.Client.OmniboxModel.init []
+
+    let isPrintable (c: uint32) =
+        c >= 0x20u && c <> 0x7fu && c < 0x110000u && not (c >= 0xD800u && c <= 0xDFFFu)
+
+    let launch (e: WTF.Client.DesktopEntry.Entry) =
+        let cmd = WTF.Client.DesktopEntry.stripFieldCodes e.Exec
+        if not (System.String.IsNullOrWhiteSpace cmd) then
+            let full =
+                if e.Terminal then
+                    let term =
+                        match System.Environment.GetEnvironmentVariable "TERMINAL" with
+                        | null | "" -> cfg.Terminal
+                        | t -> t
+                    sprintf "%s -e %s" term cmd
+                else cmd
+            Ffi.wtf_spawn full   // C side runs /bin/sh -c, detached
+
+    interface IWtfOverlayPlugin with
+        member _.Name = "omnibox"
+        member _.Width = ui.Width
+        member _.Height = ui.Height
+        member _.Open() =
+            ui <- WTF.Client.ClientConfig.omniboxOfSnapshot (snapshot ())
+            model <- WTF.Client.OmniboxModel.init (WTF.Client.DesktopEntry.scan (WTF.Client.DesktopEntry.defaultDirs ()))
+        member _.OnKey (_mods: uint32) (sym: uint32) (cp: uint32) =
+            match sym with
+            | 0xff1bu -> OverlayClose                                   // Escape
+            | 0xff0du | 0xff8du ->                                      // Return / KP_Enter
+                WTF.Client.OmniboxModel.selected model |> Option.iter launch
+                OverlayClose
+            | 0xff08u -> model <- WTF.Client.OmniboxModel.backspace model; OverlayRedraw   // BackSpace
+            | 0xff52u -> model <- WTF.Client.OmniboxModel.up model; OverlayRedraw          // Up
+            | 0xff54u | 0xff09u -> model <- WTF.Client.OmniboxModel.down model; OverlayRedraw // Down / Tab
+            | _ ->
+                if isPrintable cp then
+                    model <- WTF.Client.OmniboxModel.typeText (System.Char.ConvertFromUtf32(int cp)) model
+                    OverlayRedraw
+                else OverlayConsumed
+        member _.Render (w: int) (h: int) =
+            WTF.Client.OmniboxRender.draw surface ui model w h
+            surface.CopyOut(w, h)
+
 /// In-process embedded bars: render WTF.Client's BarRender pipeline into a scene
 /// buffer via `wtf_set_bar`, reading the LIVE in-process snapshot — the exact
 /// pipeline the standalone `wtf-bar` runs, minus the process/poll. The heavy
@@ -633,13 +755,26 @@ module private EmbeddedBars =
     let private anchorOf =
         function Top -> 0 | Bottom -> 1 | Left -> 2 | Right -> 3
 
-    /// One render pass, OFF the loop thread. `bars`/`json`/`sw`/`sh` were read on
-    /// the loop thread; `push`/`clear` marshal the scene mutation back onto it.
-    let private pass (bars: BarConfig list) (json: string) (sw: int) (sh: int)
+    let private pluginAnchor =
+        function AnchorTop -> 0 | AnchorBottom -> 1 | AnchorLeft -> 2 | AnchorRight -> 3
+
+    /// One render pass, OFF the loop thread. `bars`/`json`/`ctx`/`sw`/`sh` were
+    /// read on the loop thread; `push`/`clear` marshal the scene mutation back.
+    /// Config bars take their config index as the bar id (0..3, embedded only);
+    /// registered `IWtfBarPlugin` surfaces (2c) fill any FREE slot up to
+    /// WTF_MAX_BARS. Config bars are change-detected; plugin bars re-render every
+    /// pass (the plugin owns its cadence via RefreshMs, folded into the interval).
+    let private pass (bars: BarConfig list) (json: string) (ctx: BarContext) (sw: int) (sh: int)
                      (push: int -> byte[] -> int -> int -> int -> int -> unit)
                      (clear: int -> unit) : unit =
         let embedded = bars |> List.indexed |> List.filter (fun (i, b) -> b.Embedded && i < 4)
-        let nowActive = embedded |> List.map fst |> Set.ofList
+        let usedIds = embedded |> List.map fst |> Set.ofList
+        let freeIds = [ 0 .. 3 ] |> List.filter (fun i -> not (Set.contains i usedIds))
+        let pluginBars =
+            SurfaceRegistry.allBars ()
+            |> List.truncate (List.length freeIds)
+            |> List.mapi (fun k p -> List.item k freeIds, p)
+        let nowActive = (List.map fst embedded) @ (List.map fst pluginBars) |> Set.ofList
         for id in Set.difference active nowActive do
             clear id
             surfaces.Remove id |> ignore
@@ -667,6 +802,18 @@ module private EmbeddedBars =
                     BarRender.draw surface ui model w h
                     let bytes = surface.CopyOut(w, h)
                     push id bytes w h (anchorOf bar.Position) bar.Height
+        for (id, p) in pluginBars do
+            let anchor = pluginAnchor p.Anchor
+            let vertical = anchor >= 2
+            let th = max 1 p.Thickness
+            let w = if vertical then th else sw
+            let h = if vertical then sh else th
+            if w > 0 && h > 0 then
+                // The plugin renders its own pixels (may throw arbitrary user code
+                // — caught by the loop's try/with, one bad pass logged, not fatal).
+                let bytes = p.Render ctx w h
+                if bytes.Length = w * h * 4 then
+                    push id bytes w h anchor th
 
     /// Start the background render loop. `snapshotNow`, `cfg`, and `world` are all
     /// READ-ONLY here and read atomically (a mutable ref to an immutable value +
@@ -686,12 +833,15 @@ module private EmbeddedBars =
                         let bars = cfg.Bars
                         let wld = world                       // one atomic ref read
                         let json = snapshotNow ()
+                        let ctx = barContextNow ()
                         let sw = Px.rawL wld.Screen.Width
                         let sh = Px.rawL wld.Screen.Height
-                        match bars |> List.filter (fun b -> b.Embedded) |> List.map (fun b -> b.RefreshMs) with
+                        let cfgRefresh = bars |> List.filter (fun b -> b.Embedded) |> List.map (fun b -> b.RefreshMs)
+                        let plugRefresh = SurfaceRegistry.allBars () |> List.map (fun p -> p.RefreshMs)
+                        match cfgRefresh @ plugRefresh with
                         | [] -> ()
                         | ms -> interval <- max 50 (List.min ms)
-                        pass bars json sw sh push clear
+                        pass bars json ctx sw sh push clear
                     with ex ->
                         eprintfn "WTF: embedded bar render failed: %s" ex.Message
                     System.Threading.Thread.Sleep interval)
@@ -1095,6 +1245,15 @@ let main _argv =
     // GRACEFUL: LoadAll never throws — a bad/incompatible plugin logs + is skipped.
     // The factory no-ops under WTF_SAFE_MODE (built-in layouts only) and WTF_NO_PLUGINS
     // (the AOT build), so this single call is correct in every build/mode.
+    //
+    // Register the built-in omnibox as the "omnibox" overlay surface BEFORE the
+    // plugin scan, so a user IWtfOverlayPlugin also named "omnibox" overrides it
+    // (last-registered wins). loadPlugins ALSO discovers IWtfBarPlugin /
+    // IWtfOverlayPlugin surfaces (2c) and registers them into SurfaceRegistry.
+#if !WTF_NO_CLIENT
+    if System.Environment.GetEnvironmentVariable "WTF_SAFE_MODE" <> "1" then
+        SurfaceRegistry.registerOverlay (BuiltinOmnibox(fun () -> snapshotNow ()))
+#endif
     loadPlugins ()
 
     // Root the delegates for the whole run so the GC can't collect them while
@@ -1130,7 +1289,7 @@ let main _argv =
         try f () with ex -> safeLog (fun () -> sprintf "WTF: onKey callback threw (ignored): %O" ex); 0
     let dMap = Ffi.ViewMapDelegate(fun id app title -> guard "onViewMap" (fun () -> onViewMap id app title))
     let dUnmap = Ffi.ViewUnmapDelegate(fun id -> guard "onViewUnmap" (fun () -> onViewUnmap id))
-    let dKey = Ffi.KeyDelegate(fun m s -> guardKey (fun () -> onKey m s))
+    let dKey = Ffi.KeyDelegate(fun m s cp -> guardKey (fun () -> onKey m s cp))
     let dResize = Ffi.OutputResizeDelegate(fun x y w h -> guard "onOutputResize" (fun () -> onOutputResize x y w h))
     let dReady = Ffi.ReadyDelegate(fun () -> guard "onReady" onReady)
     let dDrain = Ffi.DrainDelegate(fun () -> guard "onDrain" onDrain)

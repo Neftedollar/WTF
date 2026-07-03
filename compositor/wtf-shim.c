@@ -799,6 +799,14 @@ struct wtf_bar {
 static struct wtf_bar g_bars[WTF_MAX_BARS];
 static void bar_layout(struct wtf_server *srv);
 
+/* The single in-process overlay (omnibox/spotlight): a centered scene buffer in
+ * the OVERLAY layer tree. Like a bar it is NOT a wtf_layer_surface (no wl client,
+ * no keyboard grab) — the brain receives keys via g_cb.key and routes them. It
+ * reserves no area, so arrange_layers ignores it. */
+static struct wlr_scene_buffer *g_overlay_node;
+static struct wlr_buffer *g_overlay_buffer;
+static void overlay_layout(struct wtf_server *srv);
+
 /* Arrange every layer surface on the primary output, letting wlroots' scene
  * helper apply anchors/margins/exclusive zones and shrink the usable area; then
  * report the resulting usable rectangle to the brain so tiling reflows. */
@@ -1022,12 +1030,18 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 	bool handled = false;
 	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
 
+	/* utf32 codepoint in the ACTIVE group (0 if the key produces no character).
+	 * The brain needs this to type into the in-process omnibox overlay: the
+	 * binding-resolution syms above are group-0 (US), but text entry must honor
+	 * whatever layout the user is actually typing in. */
+	uint32_t codepoint = xkb_state_key_get_utf32(xkb_state, keycode);
+
 	/* Only offer presses to the brain; releases of swallowed presses would
 	 * otherwise leak to clients, but compositor-level bindings are edge
 	 * actions and tinywl-style consumers expect press-only here. */
 	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED && g_cb.key) {
 		for (int i = 0; i < nsyms; i++) {
-			if (g_cb.key(modifiers, syms[i])) {
+			if (g_cb.key(modifiers, syms[i], codepoint)) {
 				handled = true;
 			}
 		}
@@ -3100,6 +3114,69 @@ void wtf_clear_bar(int id) {
 	b->thickness = 0;
 	if (was_enabled) {
 		arrange_layers(&server); /* return the strip to the usable area */
+	}
+	schedule_frame();
+}
+
+/* ------------------------------------------------------------------ */
+/* in-process overlay (OVERLAY layer): centered scene buffer.         */
+/* ------------------------------------------------------------------ */
+
+/* Center the overlay node on the primary output. The buffer is sized by the
+ * brain; we only position it (re-run on output resize via wtf_set_overlay). */
+static void overlay_layout(struct wtf_server *srv) {
+	if (g_overlay_node == NULL || srv->primary_output == NULL) {
+		return;
+	}
+	struct wlr_box full;
+	wlr_output_layout_get_box(srv->output_layout, srv->primary_output, &full);
+	if (full.width == 0 && full.height == 0) {
+		full.x = 0;
+		full.y = 0;
+		wlr_output_effective_resolution(srv->primary_output, &full.width, &full.height);
+	}
+	int w = 0, h = 0;
+	if (g_overlay_buffer != NULL) {
+		w = g_overlay_buffer->width;
+		h = g_overlay_buffer->height;
+	}
+	int x = full.x + (full.width - w) / 2;
+	int y = full.y + (full.height - h) / 2;
+	wlr_scene_node_set_position(&g_overlay_node->node, x, y);
+	wlr_scene_node_raise_to_top(&g_overlay_node->node);
+}
+
+void wtf_set_overlay(const unsigned char *rgba, int width, int height) {
+	struct wlr_buffer *buf = wtf_pixbuf_create(rgba, width, height, DRM_FORMAT_ARGB8888);
+	if (buf == NULL) {
+		return; /* bad args / OOM: leave any existing overlay untouched */
+	}
+	if (g_overlay_node == NULL) {
+		g_overlay_node = wlr_scene_buffer_create(
+			server.layer_tree[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], buf);
+	} else {
+		wlr_scene_buffer_set_buffer(g_overlay_node, buf);
+	}
+	if (g_overlay_node != NULL) {
+		wlr_scene_buffer_set_dest_size(g_overlay_node, width, height);
+	}
+	/* Scene took its own lock; drop the old producer ref, keep the new one. */
+	if (g_overlay_buffer != NULL) {
+		wlr_buffer_drop(g_overlay_buffer);
+	}
+	g_overlay_buffer = buf;
+	overlay_layout(&server);
+	schedule_frame();
+}
+
+void wtf_clear_overlay(void) {
+	if (g_overlay_node != NULL) {
+		wlr_scene_node_destroy(&g_overlay_node->node);
+		g_overlay_node = NULL;
+	}
+	if (g_overlay_buffer != NULL) {
+		wlr_buffer_drop(g_overlay_buffer);
+		g_overlay_buffer = NULL;
 	}
 	schedule_frame();
 }

@@ -232,6 +232,13 @@ module Protocol =
                 else None
             | Some "reload" -> Some ReloadConfig
             | Some "save-default" -> Some SaveDefault
+            | Some "toggle-omnibox" -> Some ToggleOmnibox
+            | Some "toggle-overlay" ->
+                // {"cmd":"toggle-overlay","name":"omnibox"} — a bare toggle-overlay
+                // with no name falls back to the built-in omnibox.
+                match str o "name" with
+                | Some n -> Some(ToggleOverlay n)
+                | None -> Some ToggleOmnibox
             | _ -> None
         with _ -> None
 

@@ -47,6 +47,13 @@ let ``scenefx appearance commands parse`` () =
     Assert.Equal(Some(Protocol.Act(SetBlur false)), Protocol.parseRequest """{"cmd":"blur"}""")
 
 [<Fact>]
+let ``surface toggle commands parse`` () =
+    Assert.Equal(Some(Protocol.Act ToggleOmnibox), Protocol.parseRequest """{"cmd":"toggle-omnibox"}""")
+    Assert.Equal(Some(Protocol.Act(ToggleOverlay "spotlight")), Protocol.parseRequest """{"cmd":"toggle-overlay","name":"spotlight"}""")
+    // A bare toggle-overlay with no name falls back to the built-in omnibox.
+    Assert.Equal(Some(Protocol.Act ToggleOmnibox), Protocol.parseRequest """{"cmd":"toggle-overlay"}""")
+
+[<Fact>]
 let ``parseRequest distinguishes queries from actions`` () =
     Assert.Equal(Some Protocol.Query, Protocol.parseRequest "state")
     Assert.Equal(Some Protocol.Query, Protocol.parseRequest "")
