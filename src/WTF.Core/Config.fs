@@ -143,6 +143,9 @@ type BarConfig =
       Position: BarPosition
       Height: int              // thickness: bar height (Top/Bottom) or width (Left/Right)
       FontSize: float
+      RefreshMs: int           // poll/redraw cadence; the bar only repaints when the
+                               // visible content actually changed, so a small value
+                               // buys responsiveness without a busy idle redraw
       Background: ColorSpec     // supports alpha (#rrggbbaa) for translucency
       Foreground: ColorSpec
       Dim: ColorSpec            // idle workspace / secondary text
@@ -158,6 +161,7 @@ module BarConfig =
           Position = Top
           Height = 28
           FontSize = 14.0
+          RefreshMs = 300
           Background = Fixed "#1e1e2eeb"
           Foreground = Fixed "#cdd6f4"
           Dim = Fixed "#6c7086"
@@ -541,6 +545,8 @@ type BarConfigBuilder() =
     member _.Height(c: BarConfig, v) = { c with Height = v }
     [<CustomOperation "fontSize">]
     member _.FontSize(c: BarConfig, v) = { c with FontSize = v }
+    [<CustomOperation "refreshMs">]
+    member _.RefreshMs(c: BarConfig, v: int) = { c with RefreshMs = v }
     // Each color knob takes EITHER a fixed hex string OR a palette function
     // `(fun p -> Color.toHexA 0.5 p.Base)` — overloaded so both read naturally.
     [<CustomOperation "background">]
@@ -708,6 +714,7 @@ module ClientUi =
             | Top -> "top" | Bottom -> "bottom" | Left -> "left" | Right -> "right")
         b["height"] <- JsonValue.Create bar.Height
         b["fontSize"] <- JsonValue.Create bar.FontSize
+        b["refreshMs"] <- JsonValue.Create bar.RefreshMs
         b["background"] <- JsonValue.Create(hex bar.Background)
         b["foreground"] <- JsonValue.Create(hex bar.Foreground)
         b["dim"] <- JsonValue.Create(hex bar.Dim)

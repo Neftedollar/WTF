@@ -224,9 +224,14 @@ let main argv =
         eprintfn "wtf-bar: cannot start (no Wayland display / missing wl_shm / missing layer-shell). rc=%d" rc
         2
     | _ ->
-        // Poll the WM for a fresh snapshot + LIVE styling on a timer; redraw on
-        // every tick so the clock advances even when the WM state is unchanged.
-        // Background thread so the wl dispatch loop owns the main thread.
+        // Poll the WM for a fresh snapshot + LIVE styling on a timer (cadence from
+        // ui.RefreshMs, configured per bar). Redraw ONLY when the visible content
+        // actually changed — the built model (segments + formatted clock) plus the
+        // live styling. So a fast poll stays cheap: we notice a change within
+        // RefreshMs but only pay an ImageSharp repaint when something differs
+        // (the clock digit rolling over is the sole idle redraw, e.g. once/min for
+        // "HH:mm"). Background thread so the wl dispatch loop owns the main thread.
+        let mutable lastKey = ""
         let poll =
             Thread(fun () ->
                 while true do
@@ -235,8 +240,13 @@ let main argv =
                          latestSnapshot <- s
                          ui <- { barOfSnapshot barName s with Side = ui.Side; Height = ui.Height }
                      | None -> ())
-                    h.RequestRedraw()
-                    Thread.Sleep 1000)
+                    let u = ui
+                    let key =
+                        sprintf "%A" (u, BarModel.buildWith u.Left u.Right DateTime.Now latestSnapshot)
+                    if key <> lastKey then
+                        lastKey <- key
+                        h.RequestRedraw()
+                    Thread.Sleep(max 50 u.RefreshMs))
         poll.IsBackground <- true
         poll.Start()
 

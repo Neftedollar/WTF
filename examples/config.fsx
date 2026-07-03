@@ -157,6 +157,7 @@ let wtfConfig =
         // panel (backdrop blur); translucency is just the alpha in `background`.
         // bar (barConfig {
         //     position Top
+        //     refreshMs 300                                           // poll/redraw cadence; repaints only on change
         //     glass true
         //     background (fun p -> Color.toHexA 0.45 p.Base)          // translucent, from wallpaper
         //     foreground (fun p -> Color.toHex p.Text)

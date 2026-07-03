@@ -133,13 +133,18 @@ keyboard. Mouse/touchpad knobs are libinput: `accelSpeed` (-1..1),
 
 The status bar and the launcher are styled from the same config — the WM
 serves their config over the agent socket, so **a save restyles a running bar
-live** (colors/segments/font apply on its next poll, ~1 s; position/thickness
-apply when the bar starts). The omnibox reads its styling each time it opens.
+live** (colors/segments/font apply on its next poll; position/thickness apply
+when the bar starts). The omnibox reads its styling each time it opens.
+
+The bar polls every `refreshMs` (default **300 ms**) but only repaints when its
+visible content actually changed, so a snappy cadence stays cheap — the clock
+digit ticking over is the only idle redraw.
 
 ```fsharp
 bar (barConfig {
     position Bottom               // Top | Bottom | Left | Right
     height 32                     // thickness (bar width for Left/Right)
+    refreshMs 300                 // poll/redraw cadence (ms); repaint only on change
     glass true                    // frost: backdrop-blur behind the bar
     accent "#f38ba8"
     background "#11111bcc"        // #rrggbbaa — translucent
@@ -188,7 +193,7 @@ two lines. Long segments (`Player`, `Network`) render compact glyphs there.
 
 Bar segments: `Workspaces`, `Clock "<.NET time format>"`, `Battery`,
 `Network`, `Player` (MPRIS now-playing), `Label "<text>"`. Bar knobs also
-include `glass` (bool). Omnibox knobs: `width`, `height`, `rowHeight`,
+include `refreshMs` (int, 50–5000) and `glass` (bool). Omnibox knobs: `width`, `height`, `rowHeight`,
 `fontSize`, `background`, `inputBackground`, `foreground`, `dim`, `selection`,
 `prompt`, `promptColor`, `placeholder`, `glass`. Every color knob takes a
 `#rrggbb`/`#rrggbbaa` string **or** a `(fun p -> …)` palette function.

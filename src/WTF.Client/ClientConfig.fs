@@ -30,6 +30,7 @@ module ClientConfig =
     type BarUi =
         { Side: Side
           Height: int              // thickness (height for top/bottom, width for left/right)
+          RefreshMs: int           // poll/redraw cadence (ms); repaint only on change
           FontSize: float32
           Bg: Color
           Fg: Color
@@ -75,6 +76,7 @@ module ClientConfig =
     let barDefaults =
         { Side = SideTop
           Height = 28
+          RefreshMs = 300
           FontSize = 14.0f
           Bg = Color.FromRgba(30uy, 30uy, 46uy, 235uy)
           Fg = Color.FromRgba(205uy, 214uy, 244uy, 255uy)
@@ -170,6 +172,7 @@ module ClientConfig =
                     | Some "right" -> SideRight
                     | _ -> SideTop
                   Height = defaultArg (getInt b "height") d.Height |> max 12 |> min 128
+                  RefreshMs = defaultArg (getInt b "refreshMs") d.RefreshMs |> max 50 |> min 5000
                   FontSize = defaultArg (getFloat b "fontSize") d.FontSize |> max 6.0f |> min 64.0f
                   Bg = getColor b "background" d.Bg
                   Fg = getColor b "foreground" d.Fg
