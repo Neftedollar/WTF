@@ -125,6 +125,11 @@ install -Dm644 "$WLROOTS_SO" "$LIBWTF/libwlroots-0.19.so"
 if compgen -G "$ROOT/compositor/.wlroots/lib/libwayland-*.so*" >/dev/null; then
   cp -P "$ROOT/compositor/.wlroots/lib/"libwayland-*.so* "$LIBWTF/"
 fi
+# Likewise pixman, vendored when the system one predates 0.43 (Ubuntu 24.04):
+# wlroots 0.19 links it, so the runtime copy must sit next to the shim.
+if compgen -G "$ROOT/compositor/.wlroots/lib/libpixman-*.so*" >/dev/null; then
+  cp -P "$ROOT/compositor/.wlroots/lib/"libpixman-*.so* "$LIBWTF/"
+fi
 # libwtf_panel.so next to BOTH client binaries so their DllImport("wtf_panel") resolves.
 install -Dm644 compositor/build/libwtf_panel.so "$LIBWTF/bar/libwtf_panel.so"
 install -Dm644 compositor/build/libwtf_panel.so "$LIBWTF/omnibox/libwtf_panel.so"

@@ -48,6 +48,31 @@ if ! pkg-config --atleast-version=1.23 wayland-server 2>/dev/null; then
   ninja -C "$WSRC/build"
   ninja -C "$WSRC/build" install >/dev/null
 fi
+
+# wlroots 0.19 needs pixman >= 0.43; Ubuntu 24.04 LTS ships 0.42.2. Same story as
+# wayland above: vendor it into the prefix when the system one is too old (its
+# meson wrap fallback is disabled in our offline-style build, so it can't self-
+# download). scenefx + the shim also resolve it via the fronted pkgconfig dir,
+# and install.sh stages libpixman next to the shim when it was vendored.
+if ! pkg-config --atleast-version=0.43.0 pixman-1 2>/dev/null; then
+  PIXMAN_TAG=pixman-0.44.0
+  echo ">> system pixman too old — vendoring $PIXMAN_TAG"
+  PSRC="$ROOT/build/pixman-src"
+  rm -rf "$PSRC"
+  git clone --depth 1 --branch "$PIXMAN_TAG" \
+    https://gitlab.freedesktop.org/pixman/pixman.git "$PSRC"
+  PSETUP_LOG="$PSRC/meson-setup.log"
+  if ! meson setup "$PSRC/build" "$PSRC" \
+      --prefix="$PREFIX" --libdir=lib \
+      -Dtests=disabled -Ddemos=disabled \
+      >"$PSETUP_LOG" 2>&1; then
+    echo "build-wlroots.sh: pixman meson setup FAILED — full log:" >&2
+    cat "$PSETUP_LOG" >&2
+    exit 1
+  fi
+  ninja -C "$PSRC/build"
+  ninja -C "$PSRC/build" install >/dev/null
+fi
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 echo ">> fetching wlroots $TAG"
