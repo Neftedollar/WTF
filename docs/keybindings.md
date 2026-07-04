@@ -94,6 +94,14 @@ move a **highlighted selection** across the layout; **Return** swaps source↔se
 **Escape** cancels. While the mode is active every key is captured. (You can also
 enter it over the socket: `wtfctl swap-mode`.)
 
+**Mouse: drag a tile to swap** — hold `Super` (the default mod) and left-drag a
+**tiled** window. It follows the pointer as a ghost; drop it on another tile and
+the two **swap** (dropping on empty space or itself does nothing). The layout is
+untouched until you release — no window collapses mid-drag. This is the pointer
+equivalent of swap mode: same `SwapWith` under the hood, the target sourced from
+where you drop instead of the arrow keys. (Floating windows are moved the normal
+way, by their own title bar / client drag — that path is unchanged.)
+
 ### Layouts
 
 | Chord | Command |

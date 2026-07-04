@@ -629,6 +629,18 @@ let onViewFocus (id: int) : unit =
     if World.focusedWindow world <> Some id then
         dispatch (Focus(ById id))
 
+/// A tiled window was dragged (mod+left) and dropped on another tile (#10). The C
+/// side already focused the dragged window on the press that began the drag, so
+/// SwapWith (source = focused) swaps the two. Defensive: if focus drifted, focus
+/// the dragged window first so the swap is still source=dragged. `target = 0`
+/// (dropped on empty space / itself) → SwapWith is a reducer no-op. Reuses the
+/// SAME SwapWith primitive as keyboard swap mode — pointer just sources the target.
+let onTileDrop (dragged: int) (target: int) : unit =
+    if target <> 0 && target <> dragged then
+        if World.focusedWindow world <> Some dragged then
+            dispatch (Focus(ById dragged))
+        dispatch (SwapWith target)
+
 // SECURITY: per-key logging of UNBOUND chords records every typed character
 // (incl. text typed into password fields / 1Password) into the session log — a
 // de-facto keylogger. Bound WM hotkeys (Super+...) are safe + useful to log; raw
@@ -1449,6 +1461,7 @@ let main _argv =
     let dReady = Ffi.ReadyDelegate(fun () -> guard "onReady" onReady)
     let dDrain = Ffi.DrainDelegate(fun () -> guard "onDrain" onDrain)
     let dFocus = Ffi.ViewFocusDelegate(fun id -> guard "onViewFocus" (fun () -> onViewFocus id))
+    let dTileDrop = Ffi.TileDropDelegate(fun d t -> guard "onTileDrop" (fun () -> onTileDrop d t))
 
     let mutable cbs = Ffi.Callbacks()
     cbs.ViewMap <- Marshal.GetFunctionPointerForDelegate dMap
@@ -1458,6 +1471,7 @@ let main _argv =
     cbs.Ready <- Marshal.GetFunctionPointerForDelegate dReady
     cbs.Drain <- Marshal.GetFunctionPointerForDelegate dDrain
     cbs.ViewFocus <- Marshal.GetFunctionPointerForDelegate dFocus
+    cbs.TileDrop <- Marshal.GetFunctionPointerForDelegate dTileDrop
 
     eprintfn "WTF: starting compositor (mod=%s, %d keybinds)" cfg.ModKey cfg.Keys.Length
     let rc = Ffi.wtf_run cbs
@@ -1469,6 +1483,7 @@ let main _argv =
     GC.KeepAlive dReady
     GC.KeepAlive dDrain
     GC.KeepAlive dFocus
+    GC.KeepAlive dTileDrop
 #if !WTF_NO_FCS
     GC.KeepAlive configEngine
 #endif

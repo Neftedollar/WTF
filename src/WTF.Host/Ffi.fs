@@ -16,6 +16,7 @@ module Ffi =
             val mutable Ready: nativeint
             val mutable Drain: nativeint
             val mutable ViewFocus: nativeint
+            val mutable TileDrop: nativeint
         end
 
     // Delegate types for the callbacks the C side invokes (C -> F#).
@@ -27,6 +28,9 @@ module Ffi =
     type ReadyDelegate = delegate of unit -> unit
     type DrainDelegate = delegate of unit -> unit
     type ViewFocusDelegate = delegate of int -> unit
+    // A tiled window was dragged (mod+left) and dropped on another: (draggedId, targetId).
+    // targetId = 0 means dropped on empty space / itself (reducer no-op).
+    type TileDropDelegate = delegate of int * int -> unit
 
     [<Literal>]
     let private Lib = "wtf_shim"
