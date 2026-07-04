@@ -2995,8 +2995,9 @@ void wtf_set_shadow(int enabled, double sigma, double r, double g, double b,
 	 * same way): border_restack's raise_to_top also lifts each toplevel above its
 	 * siblings, so after this loop cross-window stacking momentarily follows list
 	 * order. Invisible for non-overlapping tiles; for overlapping floating/
-	 * fullscreen it self-corrects on the next focus/arrange (focus_toplevel /
-	 * wtf_configure re-raise in the authoritative order). */
+	 * fullscreen the host re-imposes the authoritative order by re-issuing an
+	 * Arrange right after the toggle (applyShadow, mirroring the glass toggles) —
+	 * wtf_configure then restacks each window in ascending-z order. */
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		sync_shadow(t);

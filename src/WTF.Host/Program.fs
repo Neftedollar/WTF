@@ -616,6 +616,12 @@ let private applyShadow (on: bool) =
     let sdx, sdy = cfg.ShadowOffset
     let sr, sg, sb = Protocol.hexColor cfg.ShadowColor |> Option.defaultValue (0.0, 0.0, 0.0)
     Ffi.wtf_set_shadow ((if on then 1 else 0), cfg.ShadowSigma, sr, sg, sb, cfg.ShadowOpacity, sdx, sdy)
+    // wtf_set_shadow now border_restacks each toplevel (a fresh shadow node must be
+    // re-anchored below the window under glass), which — like the ring toggles —
+    // lifts every toplevel in wl_list order and so disturbs overlapping floating/
+    // fullscreen z-order. Re-issue an Arrange to re-impose the authoritative
+    // stacking, exactly as applyWatercolor/applyGlass do.
+    rearrangeForRingToggle ()
 let private applyGlow (on: bool) =
     fxGlow <- on
     Ffi.wtf_set_glow ((if on then 1 else 0), cfg.GlowSigma, cfg.GlowIntensity)
