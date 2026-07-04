@@ -286,7 +286,17 @@ let private restyleWindows (w: World) : unit =
             Ffi.wtf_set_floating (id, (if isFloating then 1 else 0))
     let pushBorder = cfg.BorderColorOf.IsSome
     let pushOpac = cfg.OpacityOf.IsSome
-    if pushBorder || pushOpac then
+    // The pluggable effect strategy (#6): resolve the config's chosen name to a
+    // strategy fn. "none" (the default + guaranteed fallback) is the identity — so
+    // `stratActive` is false and this whole path stays byte-for-byte today's
+    // behavior. When ACTIVE, the strategy can override border/opacity per window,
+    // layered ON TOP of the static appearance. It drives BOTH primitives (even if
+    // the user set no borderColor/windowOpacity fn) so a window that STOPS matching
+    // the strategy reverts to the static style — which equals the C global path,
+    // since `resolveWindowStyle` mirrors focused?active:inactive / focused?1:Inactive.
+    let strat = EffectRegistry.resolve cfg.EffectStrategy
+    let stratActive = cfg.EffectStrategy <> "none"
+    if pushBorder || pushOpac || stratActive then
         let focused = World.focusedWindow w
         for id in ids do
             match Map.tryFind id w.Windows with
@@ -294,23 +304,39 @@ let private restyleWindows (w: World) : unit =
             | Some info ->
                 let ctx = { Window = info; Workspace = w.Current; Focused = (focused = Some id); Palette = activePalette }
                 let style = Appearance.resolveWindowStyle cfg ctx
-                if pushBorder then
+                // Fold the strategy's effects over the static style. TOTAL: a
+                // throwing user strategy contributes no effects rather than crashing
+                // the restyle path (like the appearance fns in Appearance.resolve*).
+                let effects = if stratActive then (try strat ctx with _ -> []) else []
+                let mutable border = style.BorderColor
+                let mutable opac = style.Opacity
+                for e in effects do
+                    match e with
+                    | WindowEffect.SetOpacity o ->
+                        // Same clamp as Appearance.resolveOpacity: NaN -> opaque.
+                        opac <- (if System.Double.IsNaN o then 1.0 else min 1.0 (max 0.0 o))
+                    | WindowEffect.SetBorderColor hex ->
+                        // Bad hex is IGNORED (keeps the static color) — never throws.
+                        match Protocol.hexColor hex with Some rgb -> border <- rgb | None -> ()
+                // When the strategy is active it drives both primitives (see above);
+                // otherwise fall back to the per-knob gating (unchanged behavior).
+                if pushBorder || stratActive then
                     let changed =
                         match lastBorder.TryGetValue id with
-                        | true, v -> v <> style.BorderColor
+                        | true, v -> v <> border
                         | _ -> true
                     if changed then
-                        lastBorder[id] <- style.BorderColor
-                        let (r, g, b) = style.BorderColor
+                        lastBorder[id] <- border
+                        let (r, g, b) = border
                         Ffi.wtf_set_window_border_color (id, r, g, b, 1.0)
-                if pushOpac then
+                if pushOpac || stratActive then
                     let changed =
                         match lastOpacity.TryGetValue id with
-                        | true, v -> v <> style.Opacity
+                        | true, v -> v <> opac
                         | _ -> true
                     if changed then
-                        lastOpacity[id] <- style.Opacity
-                        Ffi.wtf_set_window_opacity (id, style.Opacity)
+                        lastOpacity[id] <- opac
+                        Ffi.wtf_set_window_opacity (id, opac)
 
 /// Drop the de-dup cache entry for a window that is gone (its C toplevel is
 /// destroyed, so no FFI clear is needed — this just prevents a stale-id match if

@@ -97,3 +97,25 @@ type DualLayoutBarPlugin() =
         member _.Thickness = 10
         member _.RefreshMs = 1000
         member _.Render (_ctx: BarContext) (w: int) (h: int) = Array.zeroCreate (max 0 (w * h * 4))
+
+// --- effect plugins (#6): the loader must discover IWtfEffectPlugin in the SAME
+//     scan and feed its strategies into EffectRegistry. ------------------------
+
+/// A plugin exposing MULTIPLE named strategies — both must register. Strategies
+/// are distinctive: one dims unfocused windows, one colors by app id.
+type EffectPlugin() =
+    interface IWtfEffectPlugin with
+        member _.Name = "FixtureEffects"
+        member _.Strategies =
+            [ "fixture_dim", (fun ctx -> if ctx.Focused then [] else [ SetOpacity 0.5 ])
+              "fixture_paint",
+                (fun ctx ->
+                    if ctx.Window.AppId = "firefox" then [ WindowEffect.SetBorderColor "#ff8800" ] else []) ]
+
+/// A plugin whose strategy name COLLIDES with the built-in "none" — last wins, so
+/// after load EffectRegistry.resolve "none" yields THIS strategy (marks every
+/// window opaque-red), proving the override + warning path.
+type OverrideNoneEffectPlugin() =
+    interface IWtfEffectPlugin with
+        member _.Name = "OverrideNone"
+        member _.Strategies = [ "none", (fun _ -> [ WindowEffect.SetBorderColor "#ff0000" ]) ]

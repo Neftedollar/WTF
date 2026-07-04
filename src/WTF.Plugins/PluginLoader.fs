@@ -135,6 +135,19 @@ type ReflectionPluginLoader(pluginDir: string) =
         SurfaceRegistry.registerOverlay p
         log (sprintf "loaded overlay surface \"%s\" from %s" p.Name (Path.GetFileName file))
 
+    /// Register an in-process EFFECT plugin (#6): its named strategies flow into
+    /// EffectRegistry (which the host resolves by the config's `effectStrategy`
+    /// name). Same last-wins-with-warning discipline; collision key is the strategy
+    /// name. NOTE: "none" is a built-in and overriding it warns like any other.
+    let registerEffect (file: string) (p: IWtfEffectPlugin) =
+        for (name, strategy) in p.Strategies do
+            if EffectRegistry.has name then
+                log (sprintf "WARNING: effect strategy \"%s\" from %s overrides an existing strategy (last wins)"
+                        name (Path.GetFileName file))
+            EffectRegistry.register name strategy
+            log (sprintf "loaded effect strategy \"%s\" from %s (plugin: %s)"
+                    name (Path.GetFileName file) p.Name)
+
     /// Load + register every plugin in ONE assembly. Per-type try/with so one bad
     /// type (e.g. a throwing ctor) does not abort the rest of the assembly.
     let loadAssembly (file: string) =
@@ -155,7 +168,8 @@ type ReflectionPluginLoader(pluginDir: string) =
                     let isLayout = typeof<IWtfLayoutPlugin>.IsAssignableFrom t
                     let isBar = typeof<IWtfBarPlugin>.IsAssignableFrom t
                     let isOverlay = typeof<IWtfOverlayPlugin>.IsAssignableFrom t
-                    if (isLayout || isBar || isOverlay)
+                    let isEffect = typeof<IWtfEffectPlugin>.IsAssignableFrom t
+                    if (isLayout || isBar || isOverlay || isEffect)
                        && not t.IsAbstract
                        && not t.IsInterface then
                         // A plugin type with NO public parameterless ctor can't be
@@ -170,6 +184,7 @@ type ReflectionPluginLoader(pluginDir: string) =
                             match instance with :? IWtfLayoutPlugin as p -> registerPlugin file p | _ -> ()
                             match instance with :? IWtfBarPlugin as p -> registerBar file p | _ -> ()
                             match instance with :? IWtfOverlayPlugin as p -> registerOverlay file p | _ -> ()
+                            match instance with :? IWtfEffectPlugin as p -> registerEffect file p | _ -> ()
                 with ex ->
                     log (sprintf "skipped type %s in %s: %s" t.FullName (Path.GetFileName file) ex.Message)
         with ex ->

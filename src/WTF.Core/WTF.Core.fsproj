@@ -32,6 +32,9 @@
     <Compile Include="Palette.fs" />
     <Compile Include="Session.fs" />
     <Compile Include="Config.fs" />
+    <!-- Effect.fs AFTER Config.fs: `EffectStrategy = RenderContext -> _`, and
+         RenderContext is defined in Config.fs. Just types + a pure registry. -->
+    <Compile Include="Effect.fs" />
     <Compile Include="Surface.fs" />
   </ItemGroup>
 

@@ -268,6 +268,45 @@ let ``fixture assembly registers bar + overlay surfaces (2c) into SurfaceRegistr
         Directory.Delete(dir, true)
 
 [<Fact>]
+let ``fixture assembly registers effect strategies (#6) into EffectRegistry`` () =
+    // The SAME scan must discover IWtfEffectPlugin and feed EffectRegistry, with
+    // the last-wins override discipline (including over the built-in "none").
+    EffectRegistry.clear ()
+    let dir = freshDir ()
+    File.Copy(fixtureDllPath (), Path.Combine(dir, "FixturePlugins.dll"))
+    let loader = PluginLoader.createForPath dir
+    try
+        let ex = Record.Exception(fun () -> loader.LoadAll())
+        Assert.Null(ex)
+
+        // 1) BOTH named strategies of the multi-strategy plugin registered.
+        Assert.Contains("fixture_dim", EffectRegistry.names ())
+        Assert.Contains("fixture_paint", EffectRegistry.names ())
+
+        // 2) They resolve and behave: "fixture_dim" dims only unfocused windows.
+        let dim = EffectRegistry.resolve "fixture_dim"
+        let ctxOf focused appId : RenderContext =
+            { Window = { Id = 1; AppId = appId; Title = ""; Floating = false }
+              Workspace = "1"; Focused = focused; Palette = Palette.defaultPalette }
+        Assert.Equal<WindowEffect list>([], dim (ctxOf true "foot"))
+        Assert.Equal<WindowEffect list>([ SetOpacity 0.5 ], dim (ctxOf false "foot"))
+
+        // 3) "fixture_paint" colors only firefox borders.
+        let paint = EffectRegistry.resolve "fixture_paint"
+        Assert.Equal<WindowEffect list>([ WindowEffect.SetBorderColor "#ff8800" ], paint (ctxOf true "firefox"))
+        Assert.Equal<WindowEffect list>([], paint (ctxOf true "foot"))
+
+        // 4) The "none" collision: last-registered (the plugin's) wins, proving the
+        //    override reached the LIVE EffectRegistry, not a separate identity.
+        let none = EffectRegistry.resolve "none"
+        Assert.Equal<WindowEffect list>([ WindowEffect.SetBorderColor "#ff0000" ], none (ctxOf true "foot"))
+    finally
+        // RESTORE the built-in "none" identity so the override doesn't leak into
+        // other tests (clear() re-seeds "none" to the built-in no-op strategy).
+        EffectRegistry.clear ()
+        Directory.Delete(dir, true)
+
+[<Fact>]
 let ``PluginPath.resolve honours XDG_CONFIG_HOME and falls back to ~/.config`` () =
     let prev = Environment.GetEnvironmentVariable "XDG_CONFIG_HOME"
     try

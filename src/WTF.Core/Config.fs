@@ -320,7 +320,12 @@ type WtfConfig =
       // --- E1 dynamic appearance overrides (None => fall through to the static
       // ActiveBorder/InactiveBorder/InactiveOpacity fields, i.e. today's behavior) ---
       BorderColorOf: Dyn<string> option // per-window border color (returns a #hex)
-      OpacityOf: Dyn<float> option }    // per-window opacity (0..1, clamped on resolve)
+      OpacityOf: Dyn<float> option      // per-window opacity (0..1, clamped on resolve)
+      // --- E2 pluggable effect strategy (the name of a registered strategy in the
+      // host's EffectRegistry; "none" => no extra per-window effects, byte-identical
+      // to today). Resolution name -> strategy happens in the host, keeping this
+      // field a plain string so Config.fs stays free of the Effect types. ---
+      EffectStrategy: string }          // registered effect-strategy name (default "none")
 
 module WtfConfig =
     let defaults =
@@ -367,7 +372,8 @@ module WtfConfig =
           Bars = [ BarConfig.defaults ]
           Omnibox = OmniboxConfig.defaults
           BorderColorOf = None
-          OpacityOf = None }
+          OpacityOf = None
+          EffectStrategy = "none" }
 
 // --- E1 appearance resolution (pure + total; the host calls this per window) ---
 
@@ -477,6 +483,11 @@ type ConfigBuilder() =
     /// Result is clamped to [0,1] on resolve.
     [<CustomOperation "windowOpacity">]
     member _.WindowOpacity(c, f: RenderContext -> float) = { c with OpacityOf = Some f }
+    /// Select a pluggable effect strategy by name: `effectStrategy "dim-unfocused"`.
+    /// The name is resolved against the host's EffectRegistry (built-in "none" plus
+    /// any IWtfEffectPlugin strategies). Unknown names fall back to "none" at resolve.
+    [<CustomOperation "effectStrategy">]
+    member _.EffectStrategy(c, name: string) = { c with EffectStrategy = name }
     [<CustomOperation "cornerRadius">]
     member _.CornerRadius(c, v) = { c with CornerRadius = v }
     [<CustomOperation "blur">]
