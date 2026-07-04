@@ -143,6 +143,7 @@ let ``parse maps every action verb to the right Command`` () =
     eq (Some(Focus(InDir DirDown))) """{"cmd":"focus","dir":"down"}"""
     eq (Some(SwapWith 5)) """{"cmd":"swap","with":5}"""
     eq (Some(SwapDir DirRight)) """{"cmd":"swap","toward":"right"}"""
+    eq (Some SwapMode) """{"cmd":"swap-mode"}"""
     eq (Some FocusMaster) """{"cmd":"focusmaster"}"""
     eq (Some ToggleFloat) """{"cmd":"float"}"""
     eq (Some ToggleFullscreen) """{"cmd":"fullscreen"}"""
