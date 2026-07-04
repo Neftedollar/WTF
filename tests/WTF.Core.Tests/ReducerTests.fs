@@ -130,7 +130,7 @@ let ``ricing toggles + presets are host-handled no-ops in the pure reducer`` () 
     let w = worldWith 2
     // Eye-candy toggles, wallpaper cycle, and Batch touch the renderer/host, not
     // World — the reducer leaves World untouched, emits nothing, records no undo.
-    for cmd in [ ToggleBlur; ToggleWatercolor; ToggleShadows; ToggleGlow
+    for cmd in [ ToggleBlur; ToggleWatercolor; ToggleGlass; ToggleShadows; ToggleGlow
                  CycleWallpaper [ "/a"; "/b" ]; Batch [ SetGaps 0; ToggleBlur ] ] do
         let w', effects = Reducer.apply cmd w
         Assert.Equal(w, w')
