@@ -103,3 +103,29 @@ let ``SetWorkspaceState stores the per-type data and re-arranges`` () =
 let ``SetWorkspaceType and SetWorkspaceState are undoable`` () =
     Assert.True(Reducer.isUndoable (SetWorkspaceType "x"))
     Assert.True(Reducer.isUndoable (SetWorkspaceState "y"))
+
+[<Fact>]
+let ``a throwing workspace-type arranger falls back to stack, not a blank workspace`` () =
+    // A plugin arranger that throws must NOT collapse to [] — the host reads that as
+    // "hide every window" and blanks the screen. arrange falls back to built-in stack.
+    WorkspaceRegistry.register "boom" (fun _ -> failwith "arranger boom")
+    try
+        let w = World.setTypeOf "1" "boom" (worldWith 3)
+        Assert.Equal(3, (World.arrange w).Length)   // stack placed all three, not zero
+    finally
+        WorkspaceRegistry.clear ()
+        WorkspaceRegistry.register "stack" World.stackArranger
+
+[<Fact>]
+let ``re-asserting the SAME workspace type keeps its State; a real switch clears it`` () =
+    WorkspaceRegistry.register "keep_t" (fun _ -> [])
+    try
+        let w1 = Reducer.apply (SetWorkspaceType "keep_t") (worldWith 1) |> fst
+        let w2 = Reducer.apply (SetWorkspaceState "viewport:5") w1 |> fst
+        let same = Reducer.apply (SetWorkspaceType "keep_t") w2 |> fst   // re-issue same type
+        Assert.Equal("viewport:5", (World.currentWorkspace same).State)  // State survives
+        let switched = Reducer.apply (SetWorkspaceType "stack") w2 |> fst // real switch
+        Assert.Equal("", (World.currentWorkspace switched).State)        // State cleared
+    finally
+        WorkspaceRegistry.clear ()
+        WorkspaceRegistry.register "stack" World.stackArranger

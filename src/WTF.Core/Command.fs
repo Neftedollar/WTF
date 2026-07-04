@@ -235,7 +235,7 @@ module Reducer =
     /// offset) so it favours the tile directly in line. `None` if nothing lies
     /// that way (edge of the layout) — callers then no-op. Pure: reads geometry
     /// the reducer already computes, no float drift (ints throughout).
-    let nearestInDirection (w: World) (dir: Dir) (fromId: WindowId) : WindowId option =
+    let nearestInDirectionWhere (w: World) (dir: Dir) (fromId: WindowId) (keep: WindowId -> bool) : WindowId option =
         let rects = World.arrange w
         let centre (r: Rect) = int (r.X + r.Width / 2), int (r.Y + r.Height / 2)
         match rects |> List.tryFind (fun (id, _) -> id = fromId) with
@@ -244,7 +244,7 @@ module Reducer =
             let fx, fy = centre fr
             rects
             |> List.choose (fun (id, r) ->
-                if id = fromId then None
+                if id = fromId || not (keep id) then None
                 else
                     let cx, cy = centre r
                     let inDir =
@@ -263,6 +263,18 @@ module Reducer =
             |> List.sortBy snd
             |> List.tryHead
             |> Option.map fst
+
+    /// The nearest window in `dir` regardless of tiled/floating — for FOCUS moves
+    /// (`InDir`), where raising a floating neighbour is valid.
+    let nearestInDirection (w: World) (dir: Dir) (fromId: WindowId) : WindowId option =
+        nearestInDirectionWhere w dir fromId (fun _ -> true)
+
+    /// True when `id` is TILED on the current workspace (not in the floating set).
+    /// Swaps are only meaningful between tiled windows: a floating window keeps its
+    /// own float rect, so swapping stack slots would leave it put and silently
+    /// reshuffle unrelated tiles.
+    let isTiledCurrent (w: World) (id: WindowId) : bool =
+        not (Map.containsKey id (World.currentWorkspace w).Floating)
 
     let private resolveSelector (w: World) sel (st: Stack<WindowId>) =
         match sel with
@@ -328,18 +340,25 @@ module Reducer =
             let w' = World.mapStack Stack.swapUp w
             w', arrangeOf w'
         | SwapWith target ->
-            let w' = World.mapStack (Stack.swapWith target) w
-            w', arrangeOf w'
+            // Only swap TILED windows. A floating source/target keeps its float rect,
+            // so swapping stack slots would leave it put and silently reshuffle the
+            // other tiles — a confusing wrong-result rather than a swap. No-op then.
+            match World.focusedWindow w with
+            | Some focused when isTiledCurrent w focused && isTiledCurrent w target ->
+                let w' = World.mapStack (Stack.swapWith target) w
+                w', arrangeOf w'
+            | _ -> w, []
         | SwapDir dir ->
-            // swap the focused window with the nearest tile in `dir`; no-op at the
-            // edge of the layout. Geometry via the same spatial primitive as InDir.
+            // swap the focused window with the nearest TILED tile in `dir`; no-op at
+            // the edge of the layout. Geometry via the same spatial primitive as InDir,
+            // but restricted to tiled candidates (floating windows aren't swap targets).
             let w' =
                 match World.focusedWindow w with
-                | Some focused ->
-                    match nearestInDirection w dir focused with
+                | Some focused when isTiledCurrent w focused ->
+                    match nearestInDirectionWhere w dir focused (isTiledCurrent w) with
                     | Some target -> World.mapStack (Stack.swapWith target) w
                     | None -> w
-                | None -> w
+                | _ -> w
             w', arrangeOf w'
 
         | ToggleFloat ->

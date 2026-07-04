@@ -295,7 +295,14 @@ let private restyleWindows (w: World) : unit =
     // the strategy reverts to the static style — which equals the C global path,
     // since `resolveWindowStyle` mirrors focused?active:inactive / focused?1:Inactive.
     let strat = EffectRegistry.resolve cfg.EffectStrategy
-    let stratActive = cfg.EffectStrategy <> "none"
+    // ACTIVE iff resolution landed on something OTHER than the built-in `none`
+    // identity. Gating on the resolved value (not the config NAME) is what keeps
+    // the two promises the docs make: an unknown/typo'd/failed-to-load name resolves
+    // to `none` -> inactive -> byte-for-byte today's behaviour (a name check would
+    // wrongly treat "typo" as active and take over per-window overrides); and a
+    // plugin that overrides "none" resolves to a different fn -> active (a name
+    // check would leave it dead on arrival at the default `effectStrategy "none"`).
+    let stratActive = not (System.Object.ReferenceEquals(strat, EffectRegistry.none))
     if pushBorder || pushOpac || stratActive then
         let focused = World.focusedWindow w
         for id in ids do
@@ -460,10 +467,21 @@ module private SwapModeUI =
 
     let active () : bool = on
     let private highlight id = Ffi.wtf_set_window_border_color (id, hlR, hlG, hlB, 1.0)
-    let private unhighlight id = Ffi.wtf_clear_window_style id
-    let private leave () =
-        if on then unhighlight sel
-        on <- false
+    // Clearing the highlight must ALSO drop the restyle cache for `id`: the raw
+    // highlight bypassed `lastBorder`, so a dynamic-border / effect-strategy config
+    // would otherwise find the cache unchanged and never re-push the window's
+    // configured colour after the mode exits — it would stay stuck on the C global
+    // border. Mirrors the wtf_clear_window_style contract in applyConfig.
+    let private unhighlight id =
+        Ffi.wtf_clear_window_style id
+        forgetStyle id
+    let private leave (w: World) =
+        if on then
+            unhighlight sel
+            on <- false
+            // Restore configured per-window styling for the window we highlighted
+            // (a no-op in the default config, which uses the global border path).
+            restyleWindows w
 
     /// Enter swap mode with the focused window as the source (no-op if none).
     let start (w: World) : unit =
@@ -482,7 +500,9 @@ module private SwapModeUI =
             None
         else
             let move dir =
-                match Reducer.nearestInDirection w dir sel with
+                // The selection only lands on TILED tiles — a floating neighbour is
+                // not a valid swap target (Return would no-op on it, feeling dead).
+                match Reducer.nearestInDirectionWhere w dir sel (Reducer.isTiledCurrent w) with
                 | Some t when t <> sel ->
                     unhighlight sel
                     sel <- t
@@ -495,11 +515,19 @@ module private SwapModeUI =
             | 0xff52u | 0x6bu -> move DirUp // Up / k
             | 0xff54u | 0x6au -> move DirDown // Down / j
             | 0xff0du -> // Return: commit
-                let target = sel
-                leave ()
-                if target <> src then Some(SwapWith target) else None
+                let s, t = src, sel
+                leave w
+                // Swap src <-> sel EXPLICITLY, re-anchoring focus to src: an
+                // out-of-band focus change (pointer click-to-focus / a window
+                // mapping / the source closing / an IPC command) must not turn this
+                // into a swap of the WRONG window. Commit only when both endpoints
+                // are still live tiled windows on the current workspace — else the
+                // mode just cancels. Batch => one atomic undo step.
+                let live id = World.isOnCurrent w id && Reducer.isTiledCurrent w id
+                if t <> s && live s && live t then Some(Batch [ Focus(ById s); SwapWith t ])
+                else None
             | 0xff1bu -> // Escape: cancel
-                leave ()
+                leave w
                 None
             | _ -> None // swallow every other key while modal
 
@@ -566,6 +594,12 @@ let mutable private wallpaperCycleIdx = -1
 /// are intercepted (the pure reducer can't see history/config); everything else
 /// runs through the reducer and records an undo point iff it actually changed World.
 /// `rec` so a `Batch` can fold its members back through this same choke point.
+// A Batch records ONE undo step for the whole group, not one per member: while
+// draining a Batch we suppress the per-command history push and push a single
+// snapshot at the end. This makes a drag (Focus + SwapWith) or a swap-mode commit
+// undo in one step, and lets those paths safely re-anchor focus before swapping.
+let mutable private inBatch = false
+
 let rec private dispatch (cmd: Command) : unit =
     match cmd with
     | Undo -> History.undo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
@@ -587,7 +621,17 @@ let rec private dispatch (cmd: Command) : unit =
     | ToggleGlass -> applyGlass (not fxGlass)
     | ToggleShadows -> applyShadow (not fxShadow)
     | ToggleGlow -> applyGlow (not fxGlow)
-    | Batch cmds -> List.iter dispatch cmds     // run a preset through the same choke point
+    | Batch cmds ->
+        // Atomic history: drain every member with per-command pushes suppressed,
+        // then push a single snapshot if the World actually moved. Nested batches
+        // collapse into the outermost one (the flag is restored, not blindly cleared).
+        let before = world
+        let outer = not inBatch
+        inBatch <- true
+        List.iter dispatch cmds
+        if outer then
+            inBatch <- false
+            if world <> before then history <- History.push world history
     | SaveSession -> SessionIO.save world
     | LoadSession ->
         match SessionIO.load () with
@@ -599,7 +643,9 @@ let rec private dispatch (cmd: Command) : unit =
     | _ ->
         let prevFocus = World.focusedWindow world
         let w', effects = Reducer.apply cmd world
-        if Reducer.isUndoable cmd && w' <> world then
+        // Inside a Batch the push is deferred to the Batch arm (one entry for the
+        // whole group); a lone command still records its own step.
+        if Reducer.isUndoable cmd && w' <> world && not inBatch then
             history <- History.push w' history
         world <- w'
         applyEffects effects
@@ -652,17 +698,18 @@ let onViewFocus (id: int) : unit =
     if World.focusedWindow world <> Some id then
         dispatch (Focus(ById id))
 
-/// A tiled window was dragged (mod+left) and dropped on another tile (#10). The C
-/// side already focused the dragged window on the press that began the drag, so
-/// SwapWith (source = focused) swaps the two. Defensive: if focus drifted, focus
-/// the dragged window first so the swap is still source=dragged. `target = 0`
-/// (dropped on empty space / itself) → SwapWith is a reducer no-op. Reuses the
-/// SAME SwapWith primitive as keyboard swap mode — pointer just sources the target.
+/// A tiled window was dragged (mod+left) and dropped on another tile (#10). Swap
+/// the two, re-anchoring focus to the dragged window first (focus may have drifted)
+/// as ONE atomic undo step. Guard: BOTH endpoints must still be live windows on the
+/// CURRENT workspace — a workspace switch mid-drag can leave `dragged` on another
+/// tag, and without this check `SwapWith` would swap two unrelated windows on the
+/// new workspace. `target = 0` (empty space / itself) and floating targets are
+/// rejected here / by the reducer. Reuses the SAME SwapWith primitive as keyboard
+/// swap mode — the pointer just sources the target.
 let onTileDrop (dragged: int) (target: int) : unit =
-    if target <> 0 && target <> dragged then
-        if World.focusedWindow world <> Some dragged then
-            dispatch (Focus(ById dragged))
-        dispatch (SwapWith target)
+    if target <> 0 && target <> dragged
+       && World.isOnCurrent world dragged && World.isOnCurrent world target then
+        dispatch (Batch [ Focus(ById dragged); SwapWith target ])
 
 // SECURITY: per-key logging of UNBOUND chords records every typed character
 // (incl. text typed into password fields / 1Password) into the session log — a
