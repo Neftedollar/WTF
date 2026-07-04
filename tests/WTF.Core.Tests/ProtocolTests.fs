@@ -138,6 +138,11 @@ let ``parse maps every action verb to the right Command`` () =
     eq (Some SwapMaster) """{"cmd":"swap","dir":"master"}"""
     eq (Some SwapNext) """{"cmd":"swap","dir":"garbage"}"""   // unknown dir -> next
     eq (Some SwapMaster) """{"cmd":"swapmaster"}"""
+    // spatial foundation: directional focus + pick/directional swap
+    eq (Some(Focus(InDir DirLeft))) """{"cmd":"focus","dir":"left"}"""
+    eq (Some(Focus(InDir DirDown))) """{"cmd":"focus","dir":"down"}"""
+    eq (Some(SwapWith 5)) """{"cmd":"swap","with":5}"""
+    eq (Some(SwapDir DirRight)) """{"cmd":"swap","toward":"right"}"""
     eq (Some FocusMaster) """{"cmd":"focusmaster"}"""
     eq (Some ToggleFloat) """{"cmd":"float"}"""
     eq (Some ToggleFullscreen) """{"cmd":"fullscreen"}"""

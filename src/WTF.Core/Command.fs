@@ -1,5 +1,14 @@
 namespace WTF.Core
 
+/// A screen direction, for SPATIAL (geometry-aware) navigation — the nearest
+/// tile to the left/right/above/below, computed from the arrange rects. Prefixed
+/// (`Dir*`) to avoid clashing with the bar-side `Left`/`Right` cases in Config.
+type Dir =
+    | DirLeft
+    | DirRight
+    | DirUp
+    | DirDown
+
 /// How the agent (or a keybind) points at a window without knowing pixels.
 type Selector =
     | Focused
@@ -7,6 +16,7 @@ type Selector =
     | NextWindow
     | PrevWindow
     | ByApp of string          // first window whose AppId matches
+    | InDir of Dir             // the nearest tile in a screen direction (spatial)
 
 /// Semantic intents — the agent-first vocabulary. Note these are *what to do*,
 /// never *which key to press*: an LLM issues `Focus (ByApp "firefox")`, not a
@@ -17,6 +27,8 @@ type Command =
     | SwapNext                       // move focused window down the stack
     | SwapPrev
     | SwapMaster                     // promote the focused window to master
+    | SwapWith of WindowId           // swap focused with an arbitrary window (pick-a-tile)
+    | SwapDir of Dir                 // swap focused with the nearest tile in a direction
     | ToggleFloat                    // float/sink the focused window (toggle)
     | ToggleFullscreen               // fullscreen/restore the focused window (toggle)
     | SinkAll                        // clear all floating on the current workspace
@@ -135,6 +147,18 @@ module CommandHelpers =
     /// World in the reducer, so it truly raises rather than blindly relaunching.
     let raiseOrRun (app: string) (launch: string) : Command = FocusOrSpawn(app, launch)
 
+    // SPATIAL navigation helpers — focus/move the window in a screen direction,
+    // e.g. `bind "M-Left" focusLeft` / `bind "M-S-Left" swapLeft`. Focus uses the
+    // nearest tile in that direction; swap moves the focused window there.
+    let focusLeft : Command = Focus(InDir DirLeft)
+    let focusRight : Command = Focus(InDir DirRight)
+    let focusUp : Command = Focus(InDir DirUp)
+    let focusDown : Command = Focus(InDir DirDown)
+    let swapLeft : Command = SwapDir DirLeft
+    let swapRight : Command = SwapDir DirRight
+    let swapUp : Command = SwapDir DirUp
+    let swapDown : Command = SwapDir DirDown
+
     /// Launch a program inside a terminal emulator: `inTerm "kitty" "htop"`.
     let inTerm (term: string) (cmd: string) : Command = Spawn(sprintf "%s -e %s" term cmd)
 
@@ -179,7 +203,7 @@ module Reducer =
     let isUndoable (cmd: Command) : bool =
         match cmd with
         | Focus _ | FocusMaster
-        | SwapNext | SwapPrev | SwapMaster
+        | SwapNext | SwapPrev | SwapMaster | SwapWith _ | SwapDir _
         | ToggleFloat | ToggleFullscreen | SinkAll
         | SwitchWorkspace _ | MoveToWorkspace _ | NextWorkspace | PrevWorkspace
         | SetLayout _ | NextLayout
@@ -194,12 +218,52 @@ module Reducer =
         | ToggleOmnibox | ToggleOverlay _
         | AddWindow _ | RemoveWindow _ -> false
 
+    /// SPATIAL targeting: the window nearest to `fromId` in screen direction
+    /// `dir`, computed from the current workspace's arrange rects. Candidates must
+    /// lie strictly in the direction (their centre beyond `fromId`'s on that axis);
+    /// among those, pick the smallest (primary-axis distance + 2x cross-axis
+    /// offset) so it favours the tile directly in line. `None` if nothing lies
+    /// that way (edge of the layout) — callers then no-op. Pure: reads geometry
+    /// the reducer already computes, no float drift (ints throughout).
+    let internal nearestInDirection (w: World) (dir: Dir) (fromId: WindowId) : WindowId option =
+        let rects = World.arrange w
+        let centre (r: Rect) = int (r.X + r.Width / 2), int (r.Y + r.Height / 2)
+        match rects |> List.tryFind (fun (id, _) -> id = fromId) with
+        | None -> None
+        | Some(_, fr) ->
+            let fx, fy = centre fr
+            rects
+            |> List.choose (fun (id, r) ->
+                if id = fromId then None
+                else
+                    let cx, cy = centre r
+                    let inDir =
+                        match dir with
+                        | DirLeft -> cx < fx
+                        | DirRight -> cx > fx
+                        | DirUp -> cy < fy
+                        | DirDown -> cy > fy
+                    if not inDir then None
+                    else
+                        let primary, cross =
+                            match dir with
+                            | DirLeft | DirRight -> abs (cx - fx), abs (cy - fy)
+                            | DirUp | DirDown -> abs (cy - fy), abs (cx - fx)
+                        Some(id, primary + 2 * cross))
+            |> List.sortBy snd
+            |> List.tryHead
+            |> Option.map fst
+
     let private resolveSelector (w: World) sel (st: Stack<WindowId>) =
         match sel with
         | Focused -> st
         | NextWindow -> Stack.focusDown st
         | PrevWindow -> Stack.focusUp st
         | ById id -> focusId id st
+        | InDir dir ->
+            match nearestInDirection w dir st.Focus with
+            | Some target -> focusId target st
+            | None -> st
         | ByApp app ->
             match
                 Stack.toList st
@@ -252,6 +316,20 @@ module Reducer =
             w', arrangeOf w'
         | SwapPrev ->
             let w' = World.mapStack Stack.swapUp w
+            w', arrangeOf w'
+        | SwapWith target ->
+            let w' = World.mapStack (Stack.swapWith target) w
+            w', arrangeOf w'
+        | SwapDir dir ->
+            // swap the focused window with the nearest tile in `dir`; no-op at the
+            // edge of the layout. Geometry via the same spatial primitive as InDir.
+            let w' =
+                match World.focusedWindow w with
+                | Some focused ->
+                    match nearestInDirection w dir focused with
+                    | Some target -> World.mapStack (Stack.swapWith target) w
+                    | None -> w
+                | None -> w
             w', arrangeOf w'
 
         | ToggleFloat ->

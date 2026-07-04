@@ -87,3 +87,20 @@ module Stack =
         match s.Up with
         | y :: ys -> { s with Up = ys; Down = y :: s.Down }
         | [] -> s
+
+    /// Swap the focused element with an ARBITRARY member `target` (by value),
+    /// keeping focus on the (now relocated) focused element. No-op if `target`
+    /// is the focus itself or not present. Generalises swapDown/swapUp to any
+    /// slot — the primitive behind pick-a-window swapping (keyboard swap mode /
+    /// mouse drag-to-rearrange).
+    let swapWith target s =
+        if target = s.Focus || not (List.contains target (toList s)) then s
+        else
+            toList s
+            |> List.map (fun x ->
+                if x = s.Focus then target
+                elif x = target then s.Focus
+                else x)
+            |> ofList
+            |> Option.map (focus s.Focus)
+            |> Option.defaultValue s
