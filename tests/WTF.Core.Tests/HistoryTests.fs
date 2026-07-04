@@ -114,3 +114,77 @@ let ``Past stays within Limit across arbitrary push undo redo interleavings`` (o
         (h', i + 1)
     let h, _ = (List.fold step (History.create limit 0, 1) ops)
     List.length h.Past <= limit
+
+// =====================================================================
+//  History.map — folds an out-of-band delta into EVERY snapshot so the
+//  undo timeline stays consistent with the live window set (the host
+//  uses it on surface map/unmap and monitor resize). See the map doc.
+// =====================================================================
+
+[<Fact>]
+let ``map applies the transform to past, present and future`` () =
+    // present=2, undo once -> present=1, future=[2]; past holds 0.
+    let h = pushAll 0 [ 1; 2 ]
+    let h1, _ = History.undo h |> Option.get
+    Assert.Equal<int list>([ 0 ], h1.Past)
+    Assert.Equal(1, h1.Present)
+    Assert.Equal<int list>([ 2 ], h1.Future)
+    let m = History.map (fun x -> x + 100) h1
+    Assert.Equal<int list>([ 100 ], m.Past)
+    Assert.Equal(101, m.Present)
+    Assert.Equal<int list>([ 102 ], m.Future)
+    Assert.Equal(h1.Limit, m.Limit) // structure/limit preserved
+
+[<Property>]
+let ``map with identity is a no-op`` (xs: int list) =
+    let h = pushAll 0 xs
+    let m = History.map id h
+    m.Present = h.Present && m.Past = h.Past && m.Future = h.Future
+
+// ---- the regression this whole change exists for: undo must never rewind
+// ---- the live WINDOW SET, only the user's layout deltas over it. ----
+
+let private screen = Rect.create 0 0 1920 1080
+let private win id = { Id = id; AppId = sprintf "app%d" id; Title = ""; Floating = false }
+let private addWin info w = Reducer.apply (AddWindow info) w |> fst
+let private removeWin id w = Reducer.apply (RemoveWindow id) w |> fst
+
+[<Fact>]
+let ``undo after an out-of-band map keeps the window (no orphan)`` () =
+    // Model the host: history is created BEFORE any window maps; a map is not an
+    // undo point, so it's folded into every snapshot via History.map, with Present
+    // re-anchored on the live world. A later undoable command pushes a real step.
+    let w0 = World.empty screen
+    let h0 = History.create 64 w0
+    // window 1 maps out-of-band
+    let w1 = addWin (win 1) w0
+    let h1 = History.map (addWin (win 1)) h0 |> fun h -> { h with Present = w1 }
+    // window 2 maps out-of-band
+    let w2 = addWin (win 2) w1
+    let h2 = History.map (addWin (win 2)) h1 |> fun h -> { h with Present = w2 }
+    // user issues an undoable command (a swap) -> push a real step
+    let w3 = Reducer.apply (Focus(ById 1)) w2 |> fst |> Reducer.apply (SwapWith 2) |> fst
+    let h3 = History.push w3 h2
+    // undo -> the restored world must still contain BOTH mapped windows
+    match History.undo h3 with
+    | Some(_, restored) ->
+        Assert.True(Map.containsKey 1 restored.Windows, "window 1 orphaned by undo")
+        Assert.True(Map.containsKey 2 restored.Windows, "window 2 orphaned by undo")
+    | None -> failwith "expected an undo point"
+
+[<Fact>]
+let ``undo after an out-of-band unmap does not resurrect a ghost`` () =
+    let w0 = World.empty screen |> addWin (win 1) |> addWin (win 2)
+    let h0 = History.create 64 w0
+    // an undoable command records a step while BOTH windows are live
+    let w1 = Reducer.apply (Focus(ById 1)) w0 |> fst |> Reducer.apply (SwapWith 2) |> fst
+    let h1 = History.push w1 h0
+    // window 2 closes out-of-band -> purge it from every snapshot
+    let w2 = removeWin 2 w1
+    let h2 = History.map (removeWin 2) h1 |> fun h -> { h with Present = w2 }
+    // undo -> the restored world must NOT contain the dead window
+    match History.undo h2 with
+    | Some(_, restored) ->
+        Assert.False(Map.containsKey 2 restored.Windows, "dead window 2 resurrected by undo")
+        Assert.True(Map.containsKey 1 restored.Windows)
+    | None -> failwith "expected an undo point"

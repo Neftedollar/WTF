@@ -27,6 +27,21 @@ module History =
             Present = present
             Future = [] }
 
+    /// Map a pure transform over EVERY snapshot (Past, Present, Future). The host
+    /// uses this to fold an out-of-band World change that is NOT itself an undo
+    /// point — a window mapping/unmapping, a monitor resize — into the whole undo
+    /// timeline, so Undo/Redo rewind only the user's layout deltas and never the
+    /// live window set or physical screen. Without it, a snapshot taken before a
+    /// window existed would, on Undo, restore a World that has lost that window
+    /// (the host's arrange/hide loop only manages ids present in `world.Windows`,
+    /// so the surface is orphaned); the mirror case resurrects a closed window as
+    /// a ghost. Total: `f` is applied uniformly, order and Limit are preserved.
+    let map (f: 'a -> 'a) (h: History<'a>) : History<'a> =
+        { h with
+            Past = List.map f h.Past
+            Present = f h.Present
+            Future = List.map f h.Future }
+
     let canUndo h = not (List.isEmpty h.Past)
     let canRedo h = not (List.isEmpty h.Future)
 
