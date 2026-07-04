@@ -271,6 +271,12 @@ let private lastBorder = System.Collections.Generic.Dictionary<int, float * floa
 let private lastOpacity = System.Collections.Generic.Dictionary<int, float>()
 let private lastFloating = System.Collections.Generic.Dictionary<int, bool>()
 
+/// Coalesce a NULL list returned by an arbitrary reflectively-loaded plugin fn
+/// (a .NET plugin can return `null` where F# expects an empty list) to []. The
+/// effect-strategy seam already catches a THROW; a null RETURN is the other half.
+let private orEmpty (xs: 'a list) : 'a list =
+    if System.Object.ReferenceEquals(xs, null) then [] else xs
+
 /// Re-evaluate the dynamic appearance functions for every window visible on the
 /// current workspace and push the per-window border-color / opacity overrides
 /// (de-duped). GATED: if neither borderColor nor windowOpacity is configured this
@@ -326,9 +332,10 @@ let private restyleWindows (w: World) : unit =
                 let ctx = { Window = info; Workspace = w.Current; Focused = (focused = Some id); Palette = activePalette }
                 let style = Appearance.resolveWindowStyle cfg ctx
                 // Fold the strategy's effects over the static style. TOTAL: a
-                // throwing user strategy contributes no effects rather than crashing
-                // the restyle path (like the appearance fns in Appearance.resolve*).
-                let effects = if stratActive then (try strat ctx with _ -> []) else []
+                // throwing OR null-returning user strategy contributes no effects
+                // rather than crashing the restyle path (like the appearance fns in
+                // Appearance.resolve*).
+                let effects = if stratActive then orEmpty (try strat ctx with _ -> []) else []
                 let mutable border = style.BorderColor
                 let mutable opac = style.Opacity
                 for e in effects do
