@@ -76,32 +76,43 @@ mode with the rest of the eye-candy.
 ## Liquid Glass (`glass`)
 
 ```fsharp
-glass true                  // enable the Liquid Glass rim (layers on watercolor)
+watercolor true             // Liquid Glass layers ON the watercolor refraction
+glass true                  // enable the Liquid Glass rim
 glassRefractionIndex 1.4    // refraction strength ×; 1.0 = watercolor baseline
-glassChromaticAberration 2.0 // px the R/B channels split at the rim (Part 2)
-glassNoise 0.3              // frosted micro-noise 0..1 (Part 2)
-glassSpecular true         // glossy specular crown highlight (Part 2)
-glassSurface "convex_circle" // bead profile: convex_circle | convex_squircle | concave | lip (Part 2)
+glassChromaticAberration 2.0 // px the R/B channels split at the rim
+glassNoise 0.3              // frosted micro-noise 0..1
+glassSpecular true         // glossy specular crown highlight
+glassSurface "convex_circle" // bead profile: convex_circle | convex_squircle | concave | lip
 cornerRadius 12            // Liquid Glass wants rounded corners
 ```
 
-`glass` is the richer rim effect layered on the `watercolor` refraction shader.
-It is a **superset**: with `glass true` and everything at its default, the rim is
+`glass` is the richer rim effect layered on the `watercolor` refraction shader
+(so it needs `watercolor true` + a `cornerRadius` to be visible). It is a
+**superset**: with `glass true` and everything at its default, the rim is
 byte-identical to `watercolor` — turning it on changes nothing until you push a
-knob. `glassRefractionIndex` scales the edge bend: `1.0` = the watercolor
-baseline, `>1` lenses the backdrop harder at the rim (`1.3–1.6` is a good start
-with a thin frame + `cornerRadius`). Toggle it live with a `ToggleGlass` binding
-or `wtfctl` `{"cmd":"toggle-glass"}`.
+knob. Toggle it live with a `ToggleGlass` binding or `wtfctl`
+`{"cmd":"toggle-glass"}`. The knobs:
 
-**Honesty note — Part 1 vs Part 2.** What ships today (**Part 1**) is the
-index-scaled refraction: `glass` + `glassRefractionIndex` bend the rim on the
-already-shipped scenefx displacement shader, so they take visible effect now. The
-advanced knobs — `glassChromaticAberration`, `glassNoise`, `glassSpecular`,
-`glassSurface` — are **Part 2**: they are wired all the way through the config,
-the F# host, and the C ABI (the shim stores and logs them), but they stay inert
-until the scenefx GLSL patch grows the shader that reads them. Set them now and
-they persist, cost nothing, and light up when Part 2 lands — no config change
-needed. Off in safe mode with the rest of the eye-candy.
+- **`glassRefractionIndex`** — scales the edge bend: `1.0` = the watercolor
+  baseline, `>1` lenses the backdrop harder at the rim (`1.3–1.6` is a good start
+  with a thin frame).
+- **`glassChromaticAberration`** — splits the red/blue channels by N px along the
+  rim normal, strongest where the bead bends hardest and fading to nothing at the
+  crown (`~1–4` for a visible prismatic fringe; `0` = off).
+- **`glassNoise`** — frosted micro-grain across the glass, `0..1`.
+- **`glassSpecular`** — the glossy crown highlight (`true` = lit bead, the
+  default; `false` = matte).
+- **`glassSurface`** — the bead cross-section profile: `convex_circle` (default
+  rounded bead), `convex_squircle` (fuller, flatter crown), `concave` (a cavity
+  that bends the opposite way), `lip` (an asymmetric rolled outer edge).
+
+**Honesty note — what's verified.** The full shader (Part 1 index-scaled
+refraction **and** Part 2 aberration/noise/specular/surface) is implemented in the
+WTF scenefx patch (`packaging/patches/scenefx-glass-refraction.patch`) and builds
++ links cleanly. GLSL programs only compile at **runtime**, on your GPU, so the
+exact *look* of each knob is best judged live on your hardware — the code path,
+ABI, and buffers are all in place; dial the knobs and see what reads well on your
+screen. Off in safe mode with the rest of the eye-candy.
 
 ## Focus glow
 
