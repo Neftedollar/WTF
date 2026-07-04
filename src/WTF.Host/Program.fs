@@ -510,8 +510,18 @@ module private SwapModeUI =
 // applyConfig — keep the parameter expressions in sync with that block.
 let mutable private fxBlur = false
 let mutable private fxWatercolor = false
+let mutable private fxGlass = false
 let mutable private fxShadow = false
 let mutable private fxGlow = false
+
+/// Bead surface profile name -> the shim's small int enum (0 convex_circle |
+/// 1 convex_squircle | 2 concave | 3 lip). Unknown names fall back to circle.
+let private glassSurfaceCode (s: string) =
+    match s.ToLowerInvariant() with
+    | "convex_squircle" -> 1
+    | "concave" -> 2
+    | "lip" -> 3
+    | _ -> 0
 
 let private applyBlur (on: bool) =
     fxBlur <- on
@@ -520,6 +530,18 @@ let private applyWatercolor (on: bool) =
     fxWatercolor <- on
     // C ABI symbol stays `wtf_set_glass` (renamed on the F# side only, no shim churn).
     Ffi.wtf_set_glass ((if on then 1 else 0), cfg.WatercolorTint, cfg.WatercolorRefraction, (if cfg.WatercolorFrost then 1 else 0))
+let private applyGlass (on: bool) =
+    fxGlass <- on
+    // Liquid Glass (#7): index-scaled refraction layered on the watercolor rim.
+    // The advanced knobs (aberration/noise/specular/surface) reach the shim now
+    // but only light up once the scenefx GLSL patch grows them (Part 2).
+    Ffi.wtf_set_liquid_glass (
+        (if on then 1 else 0),
+        cfg.GlassRefractionIndex,
+        cfg.GlassChromaticAberration,
+        cfg.GlassNoise,
+        (if cfg.GlassSpecular then 1 else 0),
+        glassSurfaceCode cfg.GlassSurface)
 let private applyShadow (on: bool) =
     fxShadow <- on
     let sdx, sdy = cfg.ShadowOffset
@@ -562,6 +584,7 @@ let rec private dispatch (cmd: Command) : unit =
             applyWallpaperPath (List.item wallpaperCycleIdx paths)
     | ToggleBlur -> applyBlur (not fxBlur)
     | ToggleWatercolor -> applyWatercolor (not fxWatercolor)
+    | ToggleGlass -> applyGlass (not fxGlass)
     | ToggleShadows -> applyShadow (not fxShadow)
     | ToggleGlow -> applyGlow (not fxGlow)
     | Batch cmds -> List.iter dispatch cmds     // run a preset through the same choke point
@@ -1109,6 +1132,13 @@ let applyConfig (c: WtfConfig) : unit =
     // so forced off in safe mode with everything else. (C ABI symbol unchanged.)
     let watercolorOn = if safeMode then false else c.Watercolor
     Ffi.wtf_set_glass ((if watercolorOn then 1 else 0), c.WatercolorTint, c.WatercolorRefraction, (if c.WatercolorFrost then 1 else 0))
+    // Liquid Glass (#7): index-scaled refraction + (Part 2) advanced rim knobs,
+    // layered on the watercolor shader. Eye-candy => forced off in safe mode.
+    let glassOn = if safeMode then false else c.Glass
+    Ffi.wtf_set_liquid_glass (
+        (if glassOn then 1 else 0),
+        c.GlassRefractionIndex, c.GlassChromaticAberration, c.GlassNoise,
+        (if c.GlassSpecular then 1 else 0), glassSurfaceCode c.GlassSurface)
     // macOS-style drop shadow (scenefx). Forced off in safe mode with the rest
     // of the eye-candy; a bad ShadowColor degrades to black, never fails.
     let shadowOn = if safeMode then false else c.Shadow
@@ -1122,6 +1152,7 @@ let applyConfig (c: WtfConfig) : unit =
     // Seed the runtime toggle state so a later Toggle* flips from the config's value.
     fxBlur <- blurOn
     fxWatercolor <- watercolorOn
+    fxGlass <- glassOn
     fxShadow <- shadowOn
     fxGlow <- glowOn
     // Glass (frosted) bar / omnibox: tell the shim to backdrop-blur those layer

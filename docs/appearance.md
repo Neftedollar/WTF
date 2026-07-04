@@ -42,8 +42,8 @@ cornerRadius 10          // pair with rounding for the full look
 borderWidth 5            // thin frames read best — this is a wash, not a slab
 ```
 
-> The name `glass` is **reserved** for a future proper liquid-glass effect
-> (see the port issue). Today's effect — tinted frosted frames — is `watercolor`.
+> `watercolor` is the tinted-frosted-frame effect. The richer, index-scaled
+> **Liquid Glass** rim (`glass`) layers on top of it — see the next section.
 
 `watercolor` turns each window's border into a translucent strip: the backdrop
 (wallpaper, neighbours) shows through the frame, washed with the border's own
@@ -72,6 +72,36 @@ uses the per-rect path rather than the whole-screen optimized-blur buffer
 (which WTF does not set up), and it appears on every GPU, not just Intel. Keep
 `borderWidth` modest on weaker GPUs to bound the per-frame cost. Off in safe
 mode with the rest of the eye-candy.
+
+## Liquid Glass (`glass`)
+
+```fsharp
+glass true                  // enable the Liquid Glass rim (layers on watercolor)
+glassRefractionIndex 1.4    // refraction strength ×; 1.0 = watercolor baseline
+glassChromaticAberration 2.0 // px the R/B channels split at the rim (Part 2)
+glassNoise 0.3              // frosted micro-noise 0..1 (Part 2)
+glassSpecular true         // glossy specular crown highlight (Part 2)
+glassSurface "convex_circle" // bead profile: convex_circle | convex_squircle | concave | lip (Part 2)
+cornerRadius 12            // Liquid Glass wants rounded corners
+```
+
+`glass` is the richer rim effect layered on the `watercolor` refraction shader.
+It is a **superset**: with `glass true` and everything at its default, the rim is
+byte-identical to `watercolor` — turning it on changes nothing until you push a
+knob. `glassRefractionIndex` scales the edge bend: `1.0` = the watercolor
+baseline, `>1` lenses the backdrop harder at the rim (`1.3–1.6` is a good start
+with a thin frame + `cornerRadius`). Toggle it live with a `ToggleGlass` binding
+or `wtfctl` `{"cmd":"toggle-glass"}`.
+
+**Honesty note — Part 1 vs Part 2.** What ships today (**Part 1**) is the
+index-scaled refraction: `glass` + `glassRefractionIndex` bend the rim on the
+already-shipped scenefx displacement shader, so they take visible effect now. The
+advanced knobs — `glassChromaticAberration`, `glassNoise`, `glassSpecular`,
+`glassSurface` — are **Part 2**: they are wired all the way through the config,
+the F# host, and the C ABI (the shim stores and logs them), but they stay inert
+until the scenefx GLSL patch grows the shader that reads them. Set them now and
+they persist, cost nothing, and light up when Part 2 lands — no config change
+needed. Off in safe mode with the rest of the eye-candy.
 
 ## Focus glow
 

@@ -47,6 +47,37 @@ let ``static inactiveOpacity CE still drives resolve`` () =
     Assert.True(cfg.OpacityOf.IsNone)
     Assert.Equal(0.5, Appearance.resolveOpacity cfg (ctx "x" false false), 6)
 
+// ---- Liquid Glass (#7) config surface: off by default (byte-identical to
+//      today), and each CE knob writes its field. The advanced knobs are inert
+//      until the scenefx GLSL patch grows them, but the config must carry them. ----
+
+[<Fact>]
+let ``Liquid Glass defaults to off with an identity refraction index`` () =
+    Assert.False(cfg0.Glass)
+    Assert.Equal(1.0, cfg0.GlassRefractionIndex, 6)
+    Assert.Equal(0.0, cfg0.GlassChromaticAberration, 6)
+    Assert.Equal(0.0, cfg0.GlassNoise, 6)
+    Assert.True(cfg0.GlassSpecular)
+    Assert.Equal("convex_circle", cfg0.GlassSurface)
+
+[<Fact>]
+let ``glass CE ops write their fields`` () =
+    let cfg =
+        config {
+            glass true
+            glassRefractionIndex 1.4
+            glassChromaticAberration 2.0
+            glassNoise 0.3
+            glassSpecular false
+            glassSurface "lip"
+        }
+    Assert.True(cfg.Glass)
+    Assert.Equal(1.4, cfg.GlassRefractionIndex, 6)
+    Assert.Equal(2.0, cfg.GlassChromaticAberration, 6)
+    Assert.Equal(0.3, cfg.GlassNoise, 6)
+    Assert.False(cfg.GlassSpecular)
+    Assert.Equal("lip", cfg.GlassSurface)
+
 // ---- (2) the function form resolves per context ----
 
 [<Fact>]

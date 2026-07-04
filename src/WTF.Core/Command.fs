@@ -69,6 +69,7 @@ type Command =
     // re-apply with the configured parameters — the "ricing" chords):
     | ToggleBlur                     // backdrop blur (scenefx)
     | ToggleWatercolor               // watercolor window frames
+    | ToggleGlass                    // Liquid Glass rim effect (#7)
     | ToggleShadows                  // macOS-style drop shadows
     | ToggleGlow                     // focus glow halo
     | Batch of Command list          // run several commands from ONE binding — a preset
@@ -222,7 +223,7 @@ module Reducer =
         | CloseFocused | Spawn _ | SpawnOnce _ | FocusOrSpawn _
         | SetInactiveOpacity _ | SetAnimationSpeed _ | SetBorderWidth _
         | SetBorderColor _ | SetCornerRadius _ | SetBlur _ | SetWallpaper _ | CycleWallpaper _
-        | ToggleBlur | ToggleWatercolor | ToggleShadows | ToggleGlow | Batch _
+        | ToggleBlur | ToggleWatercolor | ToggleGlass | ToggleShadows | ToggleGlow | Batch _
         | Undo | Redo | SaveSession | LoadSession | ReloadConfig | SaveDefault
         | ToggleOmnibox | ToggleOverlay _ | SwapMode
         | AddWindow _ | RemoveWindow _ -> false
@@ -538,7 +539,7 @@ module Reducer =
         // its members here.)
         | Undo | Redo | SaveSession | LoadSession | ReloadConfig | SaveDefault
         | ToggleOmnibox | ToggleOverlay _ | SwapMode | SetWallpaper _ | CycleWallpaper _
-        | ToggleBlur | ToggleWatercolor | ToggleShadows | ToggleGlow | Batch _ -> w, []
+        | ToggleBlur | ToggleWatercolor | ToggleGlass | ToggleShadows | ToggleGlow | Batch _ -> w, []
 
         | AddWindow info ->
             // Guard the stack-uniqueness invariant: a re-mapped id must not be

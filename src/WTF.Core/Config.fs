@@ -303,6 +303,14 @@ type WtfConfig =
       WatercolorTint: float             // watercolor border tint alpha over the blur (0..1; lower = clearer)
       WatercolorRefraction: float       // px the rim lenses the backdrop (0 = flat frost; ~6-14 = edge bend)
       WatercolorFrost: bool             // lens source: true = frosted (blurred), false = clear water-drop
+      // --- Liquid Glass (#7): the richer rim effect layered on the watercolor
+      // refraction shader. Off (Glass=false) => byte-identical to today. ---
+      Glass: bool                       // appearance: enable the Liquid Glass rim effect
+      GlassRefractionIndex: float       // refraction strength multiplier (1.0 = watercolor baseline; >1 bends more)
+      GlassChromaticAberration: float   // rim colour fringing: px the R/B channels split along the normal (0 = off)
+      GlassNoise: float                 // frosted micro-noise intensity 0..1 (0 = smooth)
+      GlassSpecular: bool               // glossy specular crown highlight on the bead
+      GlassSurface: string              // bead profile: convex_circle | convex_squircle | concave | lip
       Glow: bool                        // appearance: colored halo around the FOCUSED frame
       GlowSigma: float                  // glow spread in px
       GlowIntensity: float              // glow strength 0..1
@@ -348,6 +356,12 @@ module WtfConfig =
           WatercolorTint = 0.35
           WatercolorRefraction = 0.0
           WatercolorFrost = false
+          Glass = false
+          GlassRefractionIndex = 1.0
+          GlassChromaticAberration = 0.0
+          GlassNoise = 0.0
+          GlassSpecular = true
+          GlassSurface = "convex_circle"
           Glow = false
           GlowSigma = 20.0
           GlowIntensity = 0.6
@@ -508,6 +522,28 @@ type ConfigBuilder() =
     /// the sharp backdrop; true = frosted (lens the blur).
     [<CustomOperation "watercolorFrost">]
     member _.WatercolorFrost(c, v) = { c with WatercolorFrost = v }
+    /// Liquid Glass (#7): the richer rim effect over the refraction shader —
+    /// index-scaled bend, chromatic aberration, noise, specular, surface profile.
+    /// `glass true` turns it on; the knobs below tune it. Needs a `cornerRadius`.
+    [<CustomOperation "glass">]
+    member _.Glass(c, v) = { c with Glass = v }
+    /// Refraction strength multiplier over the watercolor baseline (1.0 = same;
+    /// >1 bends the backdrop harder at the rim).
+    [<CustomOperation "glassRefractionIndex">]
+    member _.GlassRefractionIndex(c, v: float) = { c with GlassRefractionIndex = v }
+    /// Rim chromatic aberration: px the red/blue channels split along the edge
+    /// normal (0 = off; ~1-4 = a visible colour fringe).
+    [<CustomOperation "glassChromaticAberration">]
+    member _.GlassChromaticAberration(c, v: float) = { c with GlassChromaticAberration = v }
+    /// Frosted micro-noise intensity 0..1 (0 = smooth glass; higher = grainier).
+    [<CustomOperation "glassNoise">]
+    member _.GlassNoise(c, v: float) = { c with GlassNoise = v }
+    /// Glossy specular crown highlight on the bead (true = lit, false = matte).
+    [<CustomOperation "glassSpecular">]
+    member _.GlassSpecular(c, v) = { c with GlassSpecular = v }
+    /// Bead surface profile: "convex_circle" | "convex_squircle" | "concave" | "lip".
+    [<CustomOperation "glassSurface">]
+    member _.GlassSurface(c, v: string) = { c with GlassSurface = v }
     /// Focus glow: a colored halo around the FOCUSED window's frame, in the
     /// frame's own color (`activeBorder` drives the hue). "The frame emits light."
     [<CustomOperation "glow">]
