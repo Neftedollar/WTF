@@ -145,12 +145,22 @@ module Protocol =
             | _ -> None
         with _ -> None
 
+    /// "left"/"right"/"up"/"down" -> a screen `Dir` (for spatial focus/swap).
+    let private dirOf (s: string) : Dir option =
+        match s with
+        | "left" -> Some DirLeft
+        | "right" -> Some DirRight
+        | "up" -> Some DirUp
+        | "down" -> Some DirDown
+        | _ -> None
+
     let private selectorOf (o: JsonNode) =
-        match str o "by", o["id"], str o "app" with
-        | Some "next", _, _ -> NextWindow
-        | Some "prev", _, _ -> PrevWindow
-        | _, id, _ when not (isNull id) -> ById(id.GetValue<int>())
-        | _, _, Some app -> ByApp app
+        match str o "by", o["id"], str o "app", str o "dir" |> Option.bind dirOf with
+        | Some "next", _, _, _ -> NextWindow
+        | Some "prev", _, _, _ -> PrevWindow
+        | _, id, _, _ when not (isNull id) -> ById(id.GetValue<int>())
+        | _, _, Some app, _ -> ByApp app
+        | _, _, _, Some d -> InDir d           // {"cmd":"focus","dir":"left"} -> spatial
         | _ -> Focused
 
     /// A request over the control socket: a read-only state query, an action, or
@@ -176,10 +186,17 @@ module Protocol =
             | Some "focus" -> Some(Focus(selectorOf o))
             | Some "focusmaster" -> Some FocusMaster
             | Some "swap" ->
-                match str o "dir" with
-                | Some "prev" -> Some SwapPrev
-                | Some "master" -> Some SwapMaster
-                | _ -> Some SwapNext
+                // {"cmd":"swap","with":5} -> swap with a specific window id;
+                // {"cmd":"swap","toward":"left"} -> swap with the nearest tile there;
+                // else the legacy dir=prev/master/next stack swap.
+                match o["with"], str o "toward" |> Option.bind dirOf with
+                | wid, _ when not (isNull wid) -> Some(SwapWith(wid.GetValue<int>()))
+                | _, Some d -> Some(SwapDir d)
+                | _ ->
+                    match str o "dir" with
+                    | Some "prev" -> Some SwapPrev
+                    | Some "master" -> Some SwapMaster
+                    | _ -> Some SwapNext
             | Some "swapmaster" -> Some SwapMaster
             | Some "float" -> Some ToggleFloat
             | Some "fullscreen" -> Some ToggleFullscreen

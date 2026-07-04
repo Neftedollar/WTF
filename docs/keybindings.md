@@ -66,6 +66,22 @@ These are the built-in defaults (also active in safe mode). Your
 | `M-S-Return` | `SwapMaster` — promote focused window to master |
 | `M-S-j` / `M-S-k` | `SwapNext` / `SwapPrev` |
 
+**Spatial (directional) navigation** — focus or move by *screen direction* (the
+nearest tile left/right/up/down, computed from the live layout geometry), not by
+stack order. Handy on arrow keys:
+
+```fsharp
+bind "M-Left"  focusLeft    // = Focus (InDir DirLeft)
+bind "M-Right" focusRight
+bind "M-Up"    focusUp
+bind "M-Down"  focusDown
+bind "M-S-Left"  swapLeft   // = SwapDir DirLeft — move the focused window there
+bind "M-S-Right" swapRight
+```
+
+`SwapWith n` swaps the focused window with window `n` directly (the primitive
+behind pick-a-tile swapping); `SwapDir` is `SwapWith` aimed by direction.
+
 ### Layouts
 
 | Chord | Command |
@@ -107,8 +123,9 @@ bind "M-p" (once (Spawn "wtf-omnibox"))
 
 Anything bindable is also scriptable via [wtfctl](wtfctl.md). Commands:
 
-`Focus (NextWindow|PrevWindow|ByApp "x"|ById n|Focused)` · `FocusMaster` ·
-`SwapNext` · `SwapPrev` · `SwapMaster` · `ToggleFloat` · `ToggleFullscreen` ·
+`Focus (NextWindow|PrevWindow|ByApp "x"|ById n|InDir DirLeft|…|Focused)` ·
+`FocusMaster` · `SwapNext` · `SwapPrev` · `SwapMaster` · `SwapWith n` ·
+`SwapDir (DirLeft|DirRight|DirUp|DirDown)` · `ToggleFloat` · `ToggleFullscreen` ·
 `SinkAll` · `CloseFocused` · `Spawn cmd` · `SpawnOnce cmd` ·
 `SwitchWorkspace tag` · `MoveToWorkspace tag` · `NextWorkspace` ·
 `PrevWorkspace` · `SetLayout name` · `NextLayout` · `SetMaster n` ·

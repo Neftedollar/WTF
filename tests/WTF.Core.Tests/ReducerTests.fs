@@ -45,6 +45,61 @@ let ``FocusOrSpawn jumps to another workspace to raise the app (no spurious spaw
     Assert.Equal(Some 1, World.focusedWindow w')
     Assert.DoesNotContain(SpawnProcess "app1", e)
 
+// ---------------------------------------------------------------------------
+// Spatial foundation: directional focus (InDir), SwapWith (pick-a-window),
+// SwapDir (directional move). Geometry is deterministic: default tall layout,
+// nmaster=1, so 2 windows tile left|right on the same row.
+// ---------------------------------------------------------------------------
+
+let private order (w: World) =
+    World.currentWorkspace w |> fun ws -> ws.Stack |> Option.map Stack.toList |> Option.defaultValue []
+
+let private swapIn a b = List.map (fun x -> if x = a then b elif x = b then a else x)
+
+// which ids tile left / right on the current row (derived from real geometry, so
+// the test doesn't depend on the stack's master-ordering).
+let private leftRight (w: World) =
+    let rects = World.arrange w
+    (rects |> List.minBy (fun (_, r) -> int r.X) |> fst),
+    (rects |> List.maxBy (fun (_, r) -> int r.X) |> fst)
+
+[<Fact>]
+let ``directional focus picks the spatial neighbour, no-op at the edge`` () =
+    let w = worldWith 2                                   // two tiles, same row: left | right
+    let leftId, rightId = leftRight w
+    let focusOn id w = Reducer.apply (Focus(ById id)) w |> fst
+    // from the left window, right -> the right window
+    Assert.Equal(Some rightId, focusOn leftId w |> Reducer.apply (Focus(InDir DirRight)) |> fst |> World.focusedWindow)
+    // from the right window, left -> the left window
+    Assert.Equal(Some leftId, focusOn rightId w |> Reducer.apply (Focus(InDir DirLeft)) |> fst |> World.focusedWindow)
+    // same row -> nothing above/below -> focus unchanged
+    Assert.Equal(Some leftId, focusOn leftId w |> Reducer.apply (Focus(InDir DirUp)) |> fst |> World.focusedWindow)
+    // no tile to the left of the left window -> no-op
+    Assert.Equal(Some leftId, focusOn leftId w |> Reducer.apply (Focus(InDir DirLeft)) |> fst |> World.focusedWindow)
+
+[<Fact>]
+let ``SwapWith swaps the focused window with an arbitrary one, keeping focus`` () =
+    let w = worldWith 3 |> fun w -> Reducer.apply (Focus(ById 1)) w |> fst
+    let before = order w
+    let r = Reducer.apply (SwapWith 3) w |> fst
+    Assert.Equal(Some 1, World.focusedWindow r)          // focus follows the window
+    Assert.Equal<int list>(before |> swapIn 1 3, order r) // 1 and 3 traded slots, rest fixed
+    // swapping with the focus itself, or an absent id, is a no-op
+    Assert.Equal<int list>(before, order (Reducer.apply (SwapWith 1) w |> fst))
+    Assert.Equal<int list>(before, order (Reducer.apply (SwapWith 99) w |> fst))
+
+[<Fact>]
+let ``SwapDir moves the focused window to its directional neighbour, no-op at edge`` () =
+    let w0 = worldWith 2
+    let leftId, rightId = leftRight w0
+    let w = Reducer.apply (Focus(ById leftId)) w0 |> fst  // focus the LEFT window
+    let before = order w
+    let r = Reducer.apply (SwapDir DirRight) w |> fst
+    Assert.Equal(Some leftId, World.focusedWindow r)      // focus stays on the moved window
+    Assert.Equal<int list>(before |> swapIn leftId rightId, order r)
+    // no tile to the left of the left window -> unchanged
+    Assert.Equal<int list>(before, order (Reducer.apply (SwapDir DirLeft) w |> fst))
+
 [<Fact>]
 let ``keybinding helpers build the expected commands`` () =
     // run-or-kill toggles by process name via a /bin/sh -c one-liner
