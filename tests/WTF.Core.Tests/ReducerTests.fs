@@ -101,6 +101,19 @@ let ``SwapDir moves the focused window to its directional neighbour, no-op at ed
     Assert.Equal<int list>(before, order (Reducer.apply (SwapDir DirLeft) w |> fst))
 
 [<Fact>]
+let ``SwapWith only swaps TILED windows — a floating source or target is a no-op`` () =
+    // Float window 2; swapping ONTO it (or FROM it) must not reshuffle the stack —
+    // a floating window keeps its own float rect, so a stack-slot swap would move
+    // the wrong tiles and leave the float put.
+    let w1 = worldWith 3 |> fun w -> Reducer.apply (Focus(ById 2)) w |> fst
+    let w1 = Reducer.apply ToggleFloat w1 |> fst          // window 2 is now floating
+    let w = Reducer.apply (Focus(ById 1)) w1 |> fst       // focus a TILED window
+    let before = order w
+    Assert.Equal<int list>(before, order (Reducer.apply (SwapWith 2) w |> fst)) // target floating -> no-op
+    let wf = Reducer.apply (Focus(ById 2)) w1 |> fst      // focus the FLOATING window
+    Assert.Equal<int list>(order wf, order (Reducer.apply (SwapWith 1) wf |> fst)) // source floating -> no-op
+
+[<Fact>]
 let ``keybinding helpers build the expected commands`` () =
     // run-or-kill toggles by process name via a /bin/sh -c one-liner
     match runOrKill "firefox" with

@@ -78,8 +78,10 @@ type WorkspaceArranger = WorkspaceView -> (WindowId * Rect) list
 
 /// Named, pluggable workspace types — mirrors the layout `Registry`. The built-in
 /// "stack" is registered by `module World` (it needs the layout machinery). Plugin
-/// types register via `IWtfWorkspacePlugin`. `resolve` is TOTAL: an unknown name
-/// falls back to "stack" so a bad/absent type never drops the workspace.
+/// types register via `IWtfWorkspacePlugin`. Totality lives in the CALLER (`arrange`),
+/// not here: `tryResolve` returns `None` for an unknown name and a *throwing* plugin
+/// arranger is caught — both fall back to the built-in "stack" so a bad/absent/broken
+/// type never drops the workspace.
 module WorkspaceRegistry =
     let private table = System.Collections.Generic.Dictionary<string, WorkspaceArranger>()
 
@@ -139,6 +141,15 @@ module World =
 
     let focusedWindow w =
         (currentWorkspace w).Stack |> Option.map (fun s -> s.Focus)
+
+    /// True when `id` is a live window on the CURRENT workspace's stack. Callers
+    /// use this to reject a swap whose source/target has drifted off the current
+    /// workspace (e.g. a workspace switch mid-drag) before it swaps two unrelated
+    /// windows.
+    let isOnCurrent w (id: WindowId) : bool =
+        match (currentWorkspace w).Stack with
+        | Some s -> Stack.toList s |> List.contains id
+        | None -> false
 
     /// Map a transformation over the current workspace.
     let private updateCurrent f w =
@@ -201,13 +212,17 @@ module World =
           Width = width
           Height = height }
 
-    /// Set a workspace's TYPE (the workspace model). Switching type resets its
-    /// per-type State to "" — the old state is meaningless to a different type.
+    /// Set a workspace's TYPE (the workspace model). Switching to a DIFFERENT type
+    /// resets its per-type State to "" (the old state is meaningless to a different
+    /// type); re-asserting the SAME type keeps State — so an agent or config reload
+    /// that re-issues the current type doesn't silently discard live per-type data.
     let setTypeOf tag ty w =
         { w with
             Workspaces =
                 w.Workspaces
-                |> List.map (fun ws -> if ws.Tag = tag then { ws with Type = ty; State = "" } else ws) }
+                |> List.map (fun ws ->
+                    if ws.Tag = tag then { ws with Type = ty; State = (if ws.Type = ty then ws.State else "") }
+                    else ws) }
 
     /// Set a workspace's per-type State (the serializable escape-hatch data). The
     /// active workspace type reads this in its arranger; only this mutator writes it.
@@ -298,12 +313,16 @@ module World =
     /// (resolved from `WorkspaceRegistry`; TOTAL — an unknown/plugin-absent type
     /// falls back to "stack" rather than dropping the workspace). Windows the type
     /// omits are hidden by the host, so the type owns visibility. A plugin arranger
-    /// is arbitrary user code, so a throw is swallowed to []-placement rather than
-    /// unwinding into the C->F# callback that invoked it.
+    /// is arbitrary user code, so a throw is caught and we fall back to the built-in
+    /// "stack" arranger — NOT []-placement, which the host reads as "hide every
+    /// window" and would blank the workspace. This keeps the no-loss invariant
+    /// uniform: a broken plugin degrades to stack, exactly like an unknown name.
     let arrange w : (WindowId * Rect) list =
         let ws = currentWorkspace w
         let arranger =
             WorkspaceRegistry.tryResolve ws.Type
             |> Option.defaultValue stackArranger
         try arranger (viewOf ws w)
-        with ex -> eprintfn "WTF: workspace type '%s' threw (fell back to []): %O" ws.Type ex; []
+        with ex ->
+            eprintfn "WTF: workspace type '%s' threw (fell back to stack): %O" ws.Type ex
+            try stackArranger (viewOf ws w) with _ -> []
