@@ -97,6 +97,15 @@ module Ffi =
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_glass(int enabled, double tintAlpha, double refraction, int frost)
 
+    /// Liquid Glass (#7): the richer rim effect layered on the watercolor
+    /// refraction shader. `refractionIndex` scales the watercolor bend (1.0 =
+    /// unchanged, backed by the shipped shader). `chromaticAberration`/`noise`/
+    /// `specular`/`surface` are the advanced shader knobs (0/off = watercolor
+    /// baseline); they take visible effect once the scenefx GLSL patch grows them.
+    /// `surface`: 0 convex_circle | 1 convex_squircle | 2 concave | 3 lip.
+    [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
+    extern void wtf_set_liquid_glass(int enabled, double refractionIndex, double chromaticAberration, double noise, int specular, int surface)
+
     /// macOS-style drop shadow under every window (scenefx shadow nodes).
     [<DllImport(Lib, CallingConvention = CallingConvention.Cdecl)>]
     extern void wtf_set_shadow(int enabled, double sigma, double r, double g, double b, double a, int dx, int dy)

@@ -220,6 +220,7 @@ module Protocol =
             | Some "wallpaper" -> str o "path" |> Option.map SetWallpaper
             | Some "toggle-blur" -> Some ToggleBlur
             | Some "toggle-watercolor" -> Some ToggleWatercolor
+            | Some "toggle-glass" -> Some ToggleGlass
             | Some "toggle-shadows" -> Some ToggleShadows
             | Some "toggle-glow" -> Some ToggleGlow
             | Some "workspace" ->

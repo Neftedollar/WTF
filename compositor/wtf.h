@@ -106,6 +106,13 @@ void wtf_set_blur(int enabled, int radius, int passes);
 /* Frosted-glass frames: the window border blurs the backdrop behind it, tinted
  * translucent. tint_alpha in [0,1] scales the tint (out of range keeps current). */
 void wtf_set_glass(int enabled, double tint_alpha, double refraction, int frost);
+/* Liquid Glass (#7): richer rim effect layered on the watercolor refraction.
+ * refraction_index scales the watercolor bend (1.0 = unchanged, shipped shader).
+ * chromatic_aberration / noise / specular / surface are the advanced shader
+ * knobs (0/off = baseline) that light up once the scenefx GLSL patch grows them.
+ * surface: 0 convex_circle | 1 convex_squircle | 2 concave | 3 lip. */
+void wtf_set_liquid_glass(int enabled, double refraction_index,
+		double chromatic_aberration, double noise, int specular, int surface);
 /* macOS-style drop shadow under every window (scenefx shadow nodes). sigma =
  * blur spread in px (<=0 keeps current), color RGBA in 0..1, (dx,dy) = offset
  * in px (macOS look: dx=0, dy>0 -- light from above). */

@@ -67,6 +67,7 @@ let ``run-or-raise and wallpaper commands parse`` () =
     // eye-candy toggles are socket-addressable too (agent ricing parity)
     Assert.Equal(Some(Protocol.Act ToggleBlur), Protocol.parseRequest """{"cmd":"toggle-blur"}""")
     Assert.Equal(Some(Protocol.Act ToggleWatercolor), Protocol.parseRequest """{"cmd":"toggle-watercolor"}""")
+    Assert.Equal(Some(Protocol.Act ToggleGlass), Protocol.parseRequest """{"cmd":"toggle-glass"}""")
     Assert.Equal(Some(Protocol.Act ToggleShadows), Protocol.parseRequest """{"cmd":"toggle-shadows"}""")
     Assert.Equal(Some(Protocol.Act ToggleGlow), Protocol.parseRequest """{"cmd":"toggle-glow"}""")
 

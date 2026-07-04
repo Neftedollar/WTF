@@ -359,6 +359,15 @@ static bool g_glass_enabled = false;      /* frosted-glass frames: backdrop blur
 static double g_glass_alpha = 0.35;       /* border tint alpha over the blur when glass is on */
 static double g_glass_refraction = 0.0;   /* px the glass rim lenses the backdrop (0 = flat frost) */
 static bool g_glass_frost = false;         /* true = lens the frosted blur; false = clear water-drop lens */
+/* Liquid Glass (#7): scales the watercolor refraction (index) + advanced shader
+ * knobs stored for when the scenefx GLSL patch grows them (aberration/noise/
+ * specular/surface). Off => byte-identical to the watercolor-only path. */
+static bool   g_lg_enabled = false;
+static double g_lg_refraction_index = 1.0;      /* multiplies g_glass_refraction */
+static double g_lg_chromatic_aberration = 0.0;  /* px R/B split at the rim (shader TODO) */
+static double g_lg_noise = 0.0;                 /* frosted micro-noise 0..1 (shader TODO) */
+static bool   g_lg_specular = true;             /* glossy crown highlight (shader TODO) */
+static int    g_lg_surface = 0;                 /* 0 convex_circle .. 3 lip (shader TODO) */
 /* macOS-style drop shadow (scenefx shadow node per toplevel, below border). */
 static bool  g_shadow_enabled = false;
 static float g_shadow_sigma = 24.0f;      /* blur spread in px */
@@ -571,8 +580,15 @@ static void apply_border(struct wtf_toplevel *t, const float base[4]) {
 	 * path explicitly (passing "optimized" here would only be a no-op that also
 	 * risks stale wallpaper-only blur if an optimized node ever appears). */
 	wlr_scene_rect_set_backdrop_blur_optimized(t->border, false);
-	wlr_scene_rect_set_refraction(t->border,
-		g_glass_enabled ? (float)g_glass_refraction : 0.0f);
+	/* Liquid Glass scales the watercolor bend by the refraction index (off = x1,
+	 * so this stays byte-identical to the watercolor-only path). The advanced
+	 * knobs (aberration/noise/specular/surface) are stored globally and light up
+	 * once the scenefx GLSL patch grows the matching uniforms. */
+	float refr = g_glass_enabled ? (float)g_glass_refraction : 0.0f;
+	if (g_lg_enabled) {
+		refr *= (float)g_lg_refraction_index;
+	}
+	wlr_scene_rect_set_refraction(t->border, refr);
 	wlr_scene_rect_set_refraction_frost(t->border, g_glass_frost);
 }
 
@@ -3039,6 +3055,38 @@ void wtf_set_glass(int enabled, double tint_alpha, double refraction, int frost)
 		apply_border(t, t->border_base);
 		border_apply_clip(t);  /* glass toggled: (un)cut the ring hole */
 		border_restack(t);     /* glass toggled: move ring above/below window */
+	}
+	schedule_frame();
+}
+
+/* Liquid Glass (#7): layer the richer rim effect on the watercolor refraction.
+ * PART 1 (shipped shader): `refraction_index` scales the watercolor bend, so
+ * `wtf_set_glass` must have set a base refraction for this to show. PART 2 (needs
+ * the scenefx GLSL patch + GPU QA): chromatic_aberration / noise / specular /
+ * surface are stored here and forwarded to the border rects, but stay no-ops
+ * visually until the fragment shader grows the matching uniforms. */
+void wtf_set_liquid_glass(int enabled, double refraction_index,
+		double chromatic_aberration, double noise, int specular, int surface) {
+	g_lg_enabled = (enabled != 0);
+	if (refraction_index >= 0.0) {
+		g_lg_refraction_index = refraction_index;
+	} else {
+		wlr_log(WLR_INFO, "wtf_set_liquid_glass: refractionIndex %.3f < 0; keeping %.3f",
+			refraction_index, g_lg_refraction_index);
+	}
+	g_lg_chromatic_aberration = chromatic_aberration >= 0.0 ? chromatic_aberration : 0.0;
+	g_lg_noise = (noise >= 0.0 && noise <= 1.0) ? noise : g_lg_noise;
+	g_lg_specular = (specular != 0);
+	g_lg_surface = (surface >= 0 && surface <= 3) ? surface : g_lg_surface;
+	if (g_lg_enabled && (g_lg_chromatic_aberration > 0.0 || g_lg_noise > 0.0)) {
+		wlr_log(WLR_INFO, "wtf_set_liquid_glass: advanced shader knobs "
+			"(aberration=%.2f noise=%.2f specular=%d surface=%d) are stored but "
+			"await the scenefx GLSL patch (#7 part 2)",
+			g_lg_chromatic_aberration, g_lg_noise, g_lg_specular, g_lg_surface);
+	}
+	struct wtf_toplevel *t;
+	wl_list_for_each(t, &server.toplevels, link) {
+		apply_border(t, t->border_base);
 	}
 	schedule_frame();
 }
