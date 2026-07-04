@@ -269,12 +269,14 @@ module Reducer =
     let nearestInDirection (w: World) (dir: Dir) (fromId: WindowId) : WindowId option =
         nearestInDirectionWhere w dir fromId (fun _ -> true)
 
-    /// True when `id` is TILED on the current workspace (not in the floating set).
-    /// Swaps are only meaningful between tiled windows: a floating window keeps its
-    /// own float rect, so swapping stack slots would leave it put and silently
-    /// reshuffle unrelated tiles.
+    /// True when `id` is TILED on the current workspace: not floating AND not the
+    /// fullscreen window — exactly the set `stackArranger` places as tiles. Swaps
+    /// are only meaningful between those: a floating/fullscreen window keeps its own
+    /// (float / full-screen) rect, so swapping stack slots would leave it put and
+    /// silently reshuffle unrelated tiles.
     let isTiledCurrent (w: World) (id: WindowId) : bool =
-        not (Map.containsKey id (World.currentWorkspace w).Floating)
+        let ws = World.currentWorkspace w
+        not (Map.containsKey id ws.Floating) && ws.Fullscreen <> Some id
 
     let private resolveSelector (w: World) sel (st: Stack<WindowId>) =
         match sel with
