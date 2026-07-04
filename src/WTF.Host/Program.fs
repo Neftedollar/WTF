@@ -250,6 +250,17 @@ let private applyEffects effects =
 // ---- undo/redo history (Core owns the logic, Host owns the cell) ----
 let mutable history = History.create cfg.HistoryLimit world
 
+/// Fold an out-of-band `world` mutation that is NOT an undo point (a surface
+/// mapping/unmapping, a monitor resize) into the undo timeline: apply the SAME
+/// pure delta to every historical snapshot and re-anchor Present on the now-live
+/// `world`. Result: Undo/Redo rewind the user's layout deltas without ever
+/// rewinding the live window set (orphaning a surface the brain then can't manage)
+/// or the physical screen. `history` is recorded ONLY here and in dispatch, so the
+/// two together keep it from desyncing. Must run AFTER `world` is updated.
+let private rebaseHistory (delta: World -> World) =
+    history <- History.map delta history
+    history <- { history with Present = world }
+
 // ---- E1: per-window dynamic appearance (border color + opacity) ----
 // De-dup caches so re-evaluating on focus/map/arrange does not spam the FFI. Only
 // touched when a borderColor/windowOpacity FUNCTION is configured (gated below).
@@ -359,6 +370,23 @@ let private resync (w: World) =
     applyEffects [ Arrange(World.arrange w) ]
     World.focusedWindow w |> Option.iter Ffi.wtf_focus
     restyleWindows w
+
+/// The fullscreen PROTOCOL flag lives ONLY on the C side (flipped by
+/// wtf_set_fullscreen: the xdg/xwayland fullscreen state + a force-hidden border),
+/// so an undo/redo that swaps the World out-of-band must re-emit the delta — the
+/// Arrange alone carries only geometry, not the protocol flag. This mirrors how
+/// restyleWindows reconciles the sibling out-of-World `floating` flag on resync;
+/// fullscreen had no such reconciliation, so undoing a fullscreen toggle left the
+/// client's protocol flag (and its hidden border) desynced from the brain. Diff
+/// the fullscreen id set across ALL workspaces (fullscreen is per-workspace and an
+/// undo can also switch workspace) and emit only the changes.
+let private reconcileFullscreen (before: World) (after: World) =
+    let fsIds (w: World) =
+        w.Workspaces |> List.choose (fun ws -> ws.Fullscreen) |> Set.ofList
+    let b = fsIds before
+    let a = fsIds after
+    for id in Set.difference b a do Ffi.wtf_set_fullscreen (id, 0)
+    for id in Set.difference a b do Ffi.wtf_set_fullscreen (id, 1)
 
 /// Settings-only restore: adopt a saved session's Current / Nmaster / Ratio /
 /// Gaps and per-workspace layout names, but keep the *live* window set — a fresh
@@ -617,8 +645,8 @@ let mutable private batchDirty = false
 
 let rec private dispatch (cmd: Command) : unit =
     match cmd with
-    | Undo -> History.undo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
-    | Redo -> History.redo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
+    | Undo -> History.undo history |> Option.iter (fun (h, w') -> reconcileFullscreen world w'; history <- h; world <- w'; resync w')
+    | Redo -> History.redo history |> Option.iter (fun (h, w') -> reconcileFullscreen world w'; history <- h; world <- w'; resync w')
     | ReloadConfig -> reloadConfigFromDisk ()
     | SaveDefault -> saveDefaultToDisk ()
     | SwapMode -> SwapModeUI.start world
@@ -696,8 +724,17 @@ let onViewMap (id: int) (appId: nativeint) (title: nativeint) : unit =
     eprintfn "WTF: map   id=%d app=%s title=%s" id info.AppId info.Title
     let w', effects = Manage.onAdd cfg info world
     world <- w'
+    // A map is NOT an undo point (AddWindow is excluded from isUndoable): fold the
+    // new surface into EVERY undo snapshot instead of pushing a step, so an Undo can
+    // never rewind to a pre-map snapshot and orphan a window the brain can no longer
+    // manage. See rebaseHistory / History.map.
+    rebaseHistory (fun w -> fst (Reducer.apply (AddWindow info) w))
     applyEffects effects
-    Ffi.wtf_focus id
+    // Focus what the WORLD now focuses, not `id` unconditionally: a manage rule
+    // (e.g. ShiftToWorkspace) may have moved this surface to another workspace and
+    // left focus on a neighbour — focusing the moved (now-hidden) id would send
+    // keyboard input to an off-screen window. Mirrors onViewUnmap.
+    World.focusedWindow world |> Option.iter Ffi.wtf_focus
     restyleWindows world
     for (wid, r) in World.arrange world do
         eprintfn "WTF:   tile id=%d -> %d,%d %dx%d" wid r.X r.Y r.Width r.Height
@@ -705,6 +742,11 @@ let onViewMap (id: int) (appId: nativeint) (title: nativeint) : unit =
 let onViewUnmap (id: int) : unit =
     let w', effects = Reducer.apply (RemoveWindow id) world
     world <- w'
+    // Symmetric to onViewMap: an unmap is not an undo point, so purge the dead id
+    // from EVERY undo snapshot — otherwise an Undo could restore a snapshot that
+    // still contains it and the brain would try to focus/configure a destroyed
+    // surface (a ghost in the focus ring).
+    rebaseHistory (fun w -> fst (Reducer.apply (RemoveWindow id) w))
     applyEffects effects
     forgetStyle id
     match World.focusedWindow world with
@@ -715,9 +757,11 @@ let onViewUnmap (id: int) : unit =
 /// A view became focused in the compositor — notably pointer click-to-focus, which
 /// is entirely C-driven and would otherwise leave the brain's focus (and thus any
 /// focus-dependent dynamic border/opacity) stale. Sync the brain's focus so the
-/// dynamic style re-evaluates. Guard: if the brain already focuses `id` (e.g. this
-/// fired as an echo of a host-initiated wtf_focus) it's a no-op. dispatch(Focus …)
-/// never calls wtf_focus, so there is no C<->host focus loop.
+/// dynamic style re-evaluates. The `<> Some id` guard is what breaks the C<->host
+/// focus loop: dispatch(Focus …) DOES call wtf_focus (below), which echoes back
+/// here as onViewFocus; because the brain now already focuses `id`, this re-entry
+/// is a no-op. Do not remove the guard trusting that dispatch abstains — it does
+/// not.
 let onViewFocus (id: int) : unit =
     if World.focusedWindow world <> Some id then
         dispatch (Focus(ById id))
@@ -794,7 +838,11 @@ let onOutputResize (x: int) (y: int) (width: int) (height: int) : unit =
     // so the brain stays in its single `lpx` coordinate space. x,y may be
     // non-zero for a top/left bar.
     let toL (v: int) : int = Px.rawL (Px.toLogical cfg.Scale (v * 1<ppx>))
-    world <- { world with Screen = Rect.create (toL x) (toL y) (toL width) (toL height) }
+    let screen = Rect.create (toL x) (toL y) (toL width) (toL height)
+    world <- { world with Screen = screen }
+    // A monitor/bar resize is not an undo point: rebase the new Screen into every
+    // snapshot so an Undo can't revert to a stale resolution (and mis-arrange).
+    rebaseHistory (fun w -> { w with Screen = screen })
     applyEffects [ Arrange(World.arrange world) ]
     restyleWindows world
     // Re-scale the wallpaper to the new output size (image re-scales from the
