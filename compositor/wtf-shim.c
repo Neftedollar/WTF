@@ -581,15 +581,22 @@ static void apply_border(struct wtf_toplevel *t, const float base[4]) {
 	 * risks stale wallpaper-only blur if an optimized node ever appears). */
 	wlr_scene_rect_set_backdrop_blur_optimized(t->border, false);
 	/* Liquid Glass scales the watercolor bend by the refraction index (off = x1,
-	 * so this stays byte-identical to the watercolor-only path). The advanced
-	 * knobs (aberration/noise/specular/surface) are stored globally and light up
-	 * once the scenefx GLSL patch grows the matching uniforms. */
+	 * so this stays byte-identical to the watercolor-only path). */
 	float refr = g_glass_enabled ? (float)g_glass_refraction : 0.0f;
 	if (g_lg_enabled) {
 		refr *= (float)g_lg_refraction_index;
 	}
 	wlr_scene_rect_set_refraction(t->border, refr);
 	wlr_scene_rect_set_refraction_frost(t->border, g_glass_frost);
+	/* Liquid Glass part 2 advanced rim knobs. When LG is off we feed the neutral
+	 * values (aberration/noise 0, specular 0.9 = the part-1 crown, surface circle),
+	 * so the watercolor-only path is unchanged. When on, the config drives them;
+	 * g_lg_specular is a bool, mapped to the crown intensity (0.9 on / 0.0 off). */
+	wlr_scene_rect_set_liquid_glass(t->border,
+		g_lg_enabled ? (float)g_lg_chromatic_aberration : 0.0f,
+		g_lg_enabled ? (float)g_lg_noise : 0.0f,
+		(g_lg_enabled && !g_lg_specular) ? 0.0f : 0.9f,
+		g_lg_enabled ? g_lg_surface : 0);
 }
 
 /* Glass makes the border an HONEST frame: a ring sitting ABOVE the window so its
@@ -3078,10 +3085,10 @@ void wtf_set_liquid_glass(int enabled, double refraction_index,
 	g_lg_noise = (noise >= 0.0 && noise <= 1.0) ? noise : g_lg_noise;
 	g_lg_specular = (specular != 0);
 	g_lg_surface = (surface >= 0 && surface <= 3) ? surface : g_lg_surface;
-	if (g_lg_enabled && (g_lg_chromatic_aberration > 0.0 || g_lg_noise > 0.0)) {
-		wlr_log(WLR_INFO, "wtf_set_liquid_glass: advanced shader knobs "
-			"(aberration=%.2f noise=%.2f specular=%d surface=%d) are stored but "
-			"await the scenefx GLSL patch (#7 part 2)",
+	if (g_lg_enabled) {
+		wlr_log(WLR_INFO, "wtf_set_liquid_glass: rim knobs live "
+			"(aberration=%.2f noise=%.2f specular=%d surface=%d); visible with "
+			"watercolor + a corner radius (#7 part 2)",
 			g_lg_chromatic_aberration, g_lg_noise, g_lg_specular, g_lg_surface);
 	}
 	struct wtf_toplevel *t;
