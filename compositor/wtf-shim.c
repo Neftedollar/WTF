@@ -2960,9 +2960,17 @@ void wtf_clear_window_style(int id) {
 void wtf_set_corner_radius(int radius) {
 	if (radius < 0) radius = 0;
 	g_corner_radius = radius;
+	/* The radius is baked into more than the window/border rects (style_toplevel):
+	 * the glass clip hole (border_apply_clip), the drop shadow, and the focus glow
+	 * all derive their corner radius from g_corner_radius. Re-derive them too — the
+	 * same dependent-refresh wtf_set_border_width does — or a runtime radius change
+	 * leaves square-cornered clip/shadow/glow around now-rounded windows. */
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		style_toplevel(t);
+		border_apply_clip(t);
+		sync_shadow(t);
+		sync_glow(t);
 	}
 	schedule_frame();
 }
@@ -2977,10 +2985,22 @@ void wtf_set_shadow(int enabled, double sigma, double r, double g, double b,
 	g_shadow_color[3] = (float)a;
 	g_shadow_dx = dx;
 	g_shadow_dy = dy;
-	/* Re-sync every mapped toplevel (create/resize/drop its shadow node). */
+	/* Re-sync every mapped toplevel (create/resize/drop its shadow node). A
+	 * freshly-CREATED shadow node is placed just below the border by sync_shadow,
+	 * but under the glass ring the border sits ABOVE the window — so "below the
+	 * border" is above the window content. border_restack re-asserts the correct
+	 * bottom-to-top order (shadow, glow, window, ring); without it, toggling the
+	 * shadow on while glass is active paints the drop shadow over the window.
+	 * Trade-off (same as wtf_set_glass / wtf_set_liquid_glass, which restack the
+	 * same way): border_restack's raise_to_top also lifts each toplevel above its
+	 * siblings, so after this loop cross-window stacking momentarily follows list
+	 * order. Invisible for non-overlapping tiles; for overlapping floating/
+	 * fullscreen it self-corrects on the next focus/arrange (focus_toplevel /
+	 * wtf_configure re-raise in the authoritative order). */
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		sync_shadow(t);
+		border_restack(t);
 	}
 	schedule_frame();
 }
