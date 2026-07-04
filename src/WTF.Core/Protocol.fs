@@ -259,6 +259,7 @@ module Protocol =
                 else None
             | Some "reload" -> Some ReloadConfig
             | Some "save-default" -> Some SaveDefault
+            | Some "swap-mode" -> Some SwapMode
             | Some "toggle-omnibox" -> Some ToggleOmnibox
             | Some "toggle-overlay" ->
                 // {"cmd":"toggle-overlay","name":"omnibox"} — a bare toggle-overlay

@@ -38,6 +38,7 @@ let private baseKeys =
         bind "M-S-Return" SwapMaster
         bind "M-S-j"     SwapNext
         bind "M-S-k"     SwapPrev
+        bind "M-x"       SwapMode
         bind "M-S-c"     CloseFocused
         bind "M-space"   NextLayout
         bind "M-t"       (SetLayout "tall")
@@ -417,6 +418,65 @@ let private toggleOverlay (name: string) : unit = Overlays.toggle name
 let private toggleOverlay (_name: string) : unit = ()   // no in-process overlay under AOT
 #endif
 
+// COSMIC-style modal SWAP MODE (host UI, like Overlays — NOT WTF.Client, so it
+// works in every build). Enter with the `SwapMode` command; the focused window is
+// the "source". Arrow keys (or h/j/k/l) walk a highlighted SELECTION across the
+// tiled layout via the same spatial primitive as directional focus; Return swaps
+// source<->selection (dispatching `SwapWith`); Escape cancels. The highlight is a
+// per-window border override (no new shim code); it's cleared on exit. All entry
+// points run on the loop thread (dispatch/onKey), so the direct Ffi calls are safe.
+module private SwapModeUI =
+    // Selection highlight (warm yellow) — distinct from active/inactive borders.
+    let private hlR, hlG, hlB = 0.98, 0.89, 0.69
+    let mutable private on = false
+    let mutable private src = 0
+    let mutable private sel = 0
+
+    let active () : bool = on
+    let private highlight id = Ffi.wtf_set_window_border_color (id, hlR, hlG, hlB, 1.0)
+    let private unhighlight id = Ffi.wtf_clear_window_style id
+    let private leave () =
+        if on then unhighlight sel
+        on <- false
+
+    /// Enter swap mode with the focused window as the source (no-op if none).
+    let start (w: World) : unit =
+        match World.focusedWindow w with
+        | Some f ->
+            on <- true
+            src <- f
+            sel <- f
+            highlight sel
+        | None -> ()
+
+    /// One key while modal. Returns Some cmd for the host to dispatch (the final
+    /// swap), else None (key consumed). `w` is the live world for geometry.
+    let handleKey (w: World) (sym: uint32) : Command option =
+        if not on then
+            None
+        else
+            let move dir =
+                match Reducer.nearestInDirection w dir sel with
+                | Some t when t <> sel ->
+                    unhighlight sel
+                    sel <- t
+                    highlight sel
+                | _ -> ()
+                None
+            match sym with
+            | 0xff51u | 0x68u -> move DirLeft // Left / h
+            | 0xff53u | 0x6cu -> move DirRight // Right / l
+            | 0xff52u | 0x6bu -> move DirUp // Up / k
+            | 0xff54u | 0x6au -> move DirDown // Down / j
+            | 0xff0du -> // Return: commit
+                let target = sel
+                leave ()
+                if target <> src then Some(SwapWith target) else None
+            | 0xff1bu -> // Escape: cancel
+                leave ()
+                None
+            | _ -> None // swallow every other key while modal
+
 // ---- runtime eye-candy toggles ----
 // The renderer's blur/glass/shadow/glow on-state is not in World, so the host
 // tracks it (seeded by applyConfig) and the Toggle* commands flip it, re-applying
@@ -464,6 +524,7 @@ let rec private dispatch (cmd: Command) : unit =
     | Redo -> History.redo history |> Option.iter (fun (h, w') -> history <- h; world <- w'; resync w')
     | ReloadConfig -> reloadConfigFromDisk ()
     | SaveDefault -> saveDefaultToDisk ()
+    | SwapMode -> SwapModeUI.start world
     | ToggleOmnibox -> toggleOverlay "omnibox"
     | ToggleOverlay name -> toggleOverlay name
     | SetWallpaper path -> applyWallpaperPath path
@@ -551,6 +612,15 @@ let private wtfDebugKeys =
     not (System.String.IsNullOrEmpty(System.Environment.GetEnvironmentVariable "WTF_DEBUG_KEYS"))
 
 let onKey (mods: uint32) (sym: uint32) (cp: uint32) : int =
+    // Modal SWAP MODE is checked FIRST (available in every build): while active it
+    // swallows every key — arrows/hjkl move the selection, Return dispatches the
+    // swap, Escape cancels. Independent of WTF.Client (highlight is a border FFI).
+    if SwapModeUI.active () then
+        (match SwapModeUI.handleKey world sym with
+         | Some cmd -> dispatch cmd
+         | None -> ())
+        1
+    else
     // An open in-process overlay (omnibox/spotlight) is MODAL: every key goes to
     // it (typed text uses the utf32 `cp`), swallowed from the focused window.
     // Esc/Enter dismiss it (OnKey -> OverlayClose). Checked FIRST so a launcher

@@ -86,6 +86,8 @@ type Command =
                                      // overlay (equivalent to ToggleOverlay "omnibox")
     | ToggleOverlay of string        // open/close a named overlay surface (a built-in
                                      // or an IWtfOverlayPlugin registered by name)
+    | SwapMode                       // enter the modal COSMIC-style swap mode (host UI:
+                                     // arrow-keys pick a tile, Return swaps via SwapWith)
     // emitted by the compositor, not the agent:
     | AddWindow of WindowInfo        // a surface was mapped
     | RemoveWindow of WindowId       // a surface was unmapped
@@ -159,6 +161,10 @@ module CommandHelpers =
     let swapUp : Command = SwapDir DirUp
     let swapDown : Command = SwapDir DirDown
 
+    /// Enter the modal COSMIC-style swap mode: `bind "M-x" swapMode`. Arrow keys
+    /// (or h/j/k/l) move a highlighted selection; Return swaps, Escape cancels.
+    let swapMode : Command = SwapMode
+
     /// Launch a program inside a terminal emulator: `inTerm "kitty" "htop"`.
     let inTerm (term: string) (cmd: string) : Command = Spawn(sprintf "%s -e %s" term cmd)
 
@@ -215,7 +221,7 @@ module Reducer =
         | SetBorderColor _ | SetCornerRadius _ | SetBlur _ | SetWallpaper _ | CycleWallpaper _
         | ToggleBlur | ToggleWatercolor | ToggleShadows | ToggleGlow | Batch _
         | Undo | Redo | SaveSession | LoadSession | ReloadConfig | SaveDefault
-        | ToggleOmnibox | ToggleOverlay _
+        | ToggleOmnibox | ToggleOverlay _ | SwapMode
         | AddWindow _ | RemoveWindow _ -> false
 
     /// SPATIAL targeting: the window nearest to `fromId` in screen direction
@@ -225,7 +231,7 @@ module Reducer =
     /// offset) so it favours the tile directly in line. `None` if nothing lies
     /// that way (edge of the layout) — callers then no-op. Pure: reads geometry
     /// the reducer already computes, no float drift (ints throughout).
-    let internal nearestInDirection (w: World) (dir: Dir) (fromId: WindowId) : WindowId option =
+    let nearestInDirection (w: World) (dir: Dir) (fromId: WindowId) : WindowId option =
         let rects = World.arrange w
         let centre (r: Rect) = int (r.X + r.Width / 2), int (r.Y + r.Height / 2)
         match rects |> List.tryFind (fun (id, _) -> id = fromId) with
@@ -511,7 +517,7 @@ module Reducer =
         // (Batch is folded command-by-command by the host, so the reducer never sees
         // its members here.)
         | Undo | Redo | SaveSession | LoadSession | ReloadConfig | SaveDefault
-        | ToggleOmnibox | ToggleOverlay _ | SetWallpaper _ | CycleWallpaper _
+        | ToggleOmnibox | ToggleOverlay _ | SwapMode | SetWallpaper _ | CycleWallpaper _
         | ToggleBlur | ToggleWatercolor | ToggleShadows | ToggleGlow | Batch _ -> w, []
 
         | AddWindow info ->

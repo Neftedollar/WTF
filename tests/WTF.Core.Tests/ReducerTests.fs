@@ -142,7 +142,7 @@ let ``surface toggle commands are pure host-handled no-ops`` () =
     let w = worldWith 3
     // The reducer leaves World untouched and emits no effects (the host owns the
     // real overlay surface); and they never record an undo point.
-    for cmd in [ ToggleOmnibox; ToggleOverlay "omnibox"; ToggleOverlay "spotlight" ] do
+    for cmd in [ ToggleOmnibox; ToggleOverlay "omnibox"; ToggleOverlay "spotlight"; SwapMode ] do
         let w', effects = Reducer.apply cmd w
         Assert.Equal(w, w')
         Assert.Empty(effects)

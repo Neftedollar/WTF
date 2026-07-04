@@ -82,6 +82,18 @@ bind "M-S-Right" swapRight
 `SwapWith n` swaps the focused window with window `n` directly (the primitive
 behind pick-a-tile swapping); `SwapDir` is `SwapWith` aimed by direction.
 
+**Swap mode** (COSMIC-style, default `M-x`) — a modal way to swap the focused
+window with *any* tile you pick:
+
+```fsharp
+bind "M-x" swapMode     // = SwapMode
+```
+
+Press it, and the focused window becomes the "source". Arrow keys (or `h`/`j`/`k`/`l`)
+move a **highlighted selection** across the layout; **Return** swaps source↔selection,
+**Escape** cancels. While the mode is active every key is captured. (You can also
+enter it over the socket: `wtfctl swap-mode`.)
+
 ### Layouts
 
 | Chord | Command |
