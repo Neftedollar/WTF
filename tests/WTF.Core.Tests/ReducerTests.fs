@@ -33,6 +33,19 @@ let ``FocusOrSpawn raises an existing app window, else spawns`` () =
     Assert.Contains(SpawnProcess "chromium --incognito", e2)
 
 [<Fact>]
+let ``FocusOrSpawn jumps to another workspace to raise the app (no spurious spawn)`` () =
+    // app1 lives on workspace "1"; we are viewing workspace "2".
+    let w = worldWith 1 |> Reducer.apply (SwitchWorkspace "2") |> fst
+    Assert.Equal("2", w.Current)
+    // Run-or-raise must switch to "1" and focus window 1 — NOT no-op, NOT spawn a
+    // second instance (the regression: a global existence check + current-stack-only
+    // focus silently did nothing here).
+    let w', e = Reducer.apply (FocusOrSpawn("app1", "app1")) w
+    Assert.Equal("1", w'.Current)
+    Assert.Equal(Some 1, World.focusedWindow w')
+    Assert.DoesNotContain(SpawnProcess "app1", e)
+
+[<Fact>]
 let ``keybinding helpers build the expected commands`` () =
     // run-or-kill toggles by process name via a /bin/sh -c one-liner
     match runOrKill "firefox" with

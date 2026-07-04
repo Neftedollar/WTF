@@ -308,14 +308,31 @@ module Reducer =
         | SpawnOnce prog -> w, [ SpawnProcessOnce prog ]
 
         | FocusOrSpawn(app, launch) ->
-            // Run-or-raise: if a window of this app is already mapped, focus it;
-            // otherwise launch. Purely a function of the current World, so it lives
-            // in the reducer (unlike Spawn's blind launch).
-            if w.Windows |> Map.exists (fun _ info -> info.AppId = app) then
-                let w' = World.mapStack (resolveSelector w (ByApp app)) w
-                w', arrangeOf w'
-            else
-                w, [ SpawnProcess launch ]
+            // Run-or-raise: focus an existing window of this app ANYWHERE — raising
+            // in place if it is on the current workspace, else switching to the
+            // workspace it lives on and focusing it there; otherwise launch. Purely
+            // a function of the current World, so it lives in the reducer. (The
+            // existence check MUST agree in scope with the focus action: a global
+            // `w.Windows` check with a current-stack-only focus would no-op AND skip
+            // the spawn for an app open on another workspace.)
+            let hasApp (ws: Workspace) =
+                match ws.Stack with
+                | Some st ->
+                    Stack.toList st
+                    |> List.exists (fun id ->
+                        match Map.tryFind id w.Windows with
+                        | Some info -> info.AppId = app
+                        | None -> false)
+                | None -> false
+            let target =
+                if hasApp (World.currentWorkspace w) then Some(World.currentWorkspace w)
+                else w.Workspaces |> List.tryFind hasApp
+            match target with
+            | Some ws ->
+                let w' = { w with Current = ws.Tag }
+                let w'' = World.mapStack (resolveSelector w' (ByApp app)) w'
+                w'', arrangeOf w''
+            | None -> w, [ SpawnProcess launch ]
 
         | SwitchWorkspace tag ->
             if List.exists (fun ws -> ws.Tag = tag) w.Workspaces then
