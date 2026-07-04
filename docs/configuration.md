@@ -130,7 +130,7 @@ keymap {
 }
 ```
 
-- `ToggleBlur` / `ToggleGlass` / `ToggleShadows` / `ToggleGlow` — flip the current
+- `ToggleBlur` / `ToggleWatercolor` / `ToggleShadows` / `ToggleGlow` — flip the current
   renderer state (re-applying your configured tint/sigma/… parameters), like
   `ToggleFloat` does for a window.
 - `cycleWallpaper [paths]` — advance one step per press (the WM remembers the ring
