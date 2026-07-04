@@ -359,15 +359,19 @@ static bool g_glass_enabled = false;      /* frosted-glass frames: backdrop blur
 static double g_glass_alpha = 0.35;       /* border tint alpha over the blur when glass is on */
 static double g_glass_refraction = 0.0;   /* px the glass rim lenses the backdrop (0 = flat frost) */
 static bool g_glass_frost = false;         /* true = lens the frosted blur; false = clear water-drop lens */
-/* Liquid Glass (#7): scales the watercolor refraction (index) + advanced shader
- * knobs stored for when the scenefx GLSL patch grows them (aberration/noise/
- * specular/surface). Off => byte-identical to the watercolor-only path. */
+/* Liquid Glass (#7): the index scales the rim bend; the advanced knobs
+ * (aberration/noise/specular/surface) drive the scenefx GLSL shader. Off =>
+ * byte-identical to the watercolor-only path. */
 static bool   g_lg_enabled = false;
-static double g_lg_refraction_index = 1.0;      /* multiplies g_glass_refraction */
-static double g_lg_chromatic_aberration = 0.0;  /* px R/B split at the rim (shader TODO) */
-static double g_lg_noise = 0.0;                 /* frosted micro-noise 0..1 (shader TODO) */
-static bool   g_lg_specular = true;             /* glossy crown highlight (shader TODO) */
-static int    g_lg_surface = 0;                 /* 0 convex_circle .. 3 lip (shader TODO) */
+static double g_lg_refraction_index = 1.0;      /* scales the glass base bend */
+static double g_lg_chromatic_aberration = 0.0;  /* px R/B split at the rim */
+static double g_lg_noise = 0.0;                 /* frosted micro-noise 0..1 */
+static bool   g_lg_specular = true;             /* glossy crown highlight */
+static int    g_lg_surface = 0;                 /* 0 convex_circle .. 3 lip */
+/* Base rim bend (px) that glassRefractionIndex scales when the user has not
+ * dialed watercolorRefraction of their own — so `glass true` refracts visibly
+ * standalone rather than multiplying a zero. ~8px reads on a thin rounded frame. */
+#define WTF_GLASS_BASE_REFRACTION_PX 8.0f
 /* macOS-style drop shadow (scenefx shadow node per toplevel, below border). */
 static bool  g_shadow_enabled = false;
 static float g_shadow_sigma = 24.0f;      /* blur spread in px */
@@ -568,23 +572,38 @@ static void apply_border(struct wtf_toplevel *t, const float base[4]) {
 	 * alpha, over the blurred backdrop. Focus stays visible (the focused frame
 	 * keeps its colour, unfocused go grey) AND the frame stays see-through —
 	 * glassTint sets how strongly the colour reads (0 = pure backdrop). */
-	float a = g_glass_enabled ? base[3] * tint : base[3];
+	/* Liquid Glass is a SUPERSET of watercolor: enabling it turns on the same
+	 * blurred-translucent-border rendering base even when `watercolor` is off on
+	 * its own, so `glass true` works standalone (it needs the translucent tint +
+	 * backdrop-blur pass to have anything to lens). When both are off this is
+	 * exactly the old `g_glass_enabled` gate, so the plain-border path is
+	 * unchanged. */
+	bool base_enabled = g_glass_enabled || g_lg_enabled;
+	float a = base_enabled ? base[3] * tint : base[3];
 	/* wlroots rect colours are PREMULTIPLIED: rgb must be scaled by alpha, or a
 	 * translucent tint renders as an additive glow (an opaque-looking white/pale
 	 * frame instead of see-through glass). */
 	float col[4] = { base[0] * a, base[1] * a, base[2] * a, a };
 	wlr_scene_rect_set_color(t->border, col);
-	wlr_scene_rect_set_backdrop_blur(t->border, g_glass_enabled);
+	wlr_scene_rect_set_backdrop_blur(t->border, base_enabled);
 	/* We never create a WLR_SCENE_NODE_OPTIMIZED_BLUR node, so the optimized
 	 * whole-screen blur buffer is never populated; request the per-rect blur
 	 * path explicitly (passing "optimized" here would only be a no-op that also
 	 * risks stale wallpaper-only blur if an optimized node ever appears). */
 	wlr_scene_rect_set_backdrop_blur_optimized(t->border, false);
-	/* Liquid Glass scales the watercolor bend by the refraction index (off = x1,
-	 * so this stays byte-identical to the watercolor-only path). */
-	float refr = g_glass_enabled ? (float)g_glass_refraction : 0.0f;
+	/* Refraction px at the rim. Liquid Glass sets its OWN base bend that the index
+	 * scales, so `glassRefractionIndex` is meaningful standalone (watercolor's own
+	 * refraction defaults to 0, which would otherwise leave index*0 == 0). If the
+	 * user has dialed watercolorRefraction, that is honoured as the base instead.
+	 * With LG off this reduces to the plain watercolor bend (0 when watercolor is
+	 * also off), so the non-glass path stays byte-identical. */
+	float refr;
 	if (g_lg_enabled) {
-		refr *= (float)g_lg_refraction_index;
+		float glass_base = g_glass_refraction > 0.0 ? (float)g_glass_refraction
+			: WTF_GLASS_BASE_REFRACTION_PX;
+		refr = glass_base * (float)g_lg_refraction_index;
+	} else {
+		refr = g_glass_enabled ? (float)g_glass_refraction : 0.0f;
 	}
 	wlr_scene_rect_set_refraction(t->border, refr);
 	wlr_scene_rect_set_refraction_frost(t->border, g_glass_frost);

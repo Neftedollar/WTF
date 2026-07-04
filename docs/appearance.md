@@ -76,9 +76,8 @@ mode with the rest of the eye-candy.
 ## Liquid Glass (`glass`)
 
 ```fsharp
-watercolor true             // Liquid Glass layers ON the watercolor refraction
-glass true                  // enable the Liquid Glass rim
-glassRefractionIndex 1.4    // refraction strength ×; 1.0 = watercolor baseline
+glass true                  // enable the Liquid Glass rim (self-contained)
+glassRefractionIndex 1.4    // rim bend strength (1.0 ≈ 8px base; >1 bends harder)
 glassChromaticAberration 2.0 // px the R/B channels split at the rim
 glassNoise 0.3              // frosted micro-noise 0..1
 glassSpecular true         // glossy specular crown highlight
@@ -86,16 +85,17 @@ glassSurface "convex_circle" // bead profile: convex_circle | convex_squircle | 
 cornerRadius 12            // Liquid Glass wants rounded corners
 ```
 
-`glass` is the richer rim effect layered on the `watercolor` refraction shader
-(so it needs `watercolor true` + a `cornerRadius` to be visible). It is a
-**superset**: with `glass true` and everything at its default, the rim is
-byte-identical to `watercolor` — turning it on changes nothing until you push a
-knob. Toggle it live with a `ToggleGlass` binding or `wtfctl`
-`{"cmd":"toggle-glass"}`. The knobs:
+`glass` is a **superset of `watercolor`**: turning it on enables the same
+translucent blurred-frame base on its own — you do **not** need `watercolor true`
+as well (though the two compose fine if you want watercolor's tint knobs). It
+does need a **`cornerRadius`** — the bead is shaped along the rounded rim. Toggle
+it live with a `ToggleGlass` binding or `wtfctl` `{"cmd":"toggle-glass"}`. The
+knobs:
 
-- **`glassRefractionIndex`** — scales the edge bend: `1.0` = the watercolor
-  baseline, `>1` lenses the backdrop harder at the rim (`1.3–1.6` is a good start
-  with a thin frame).
+- **`glassRefractionIndex`** — the rim bend strength. `1.0` scales an ~8px base
+  bend so `glass true` refracts visibly on its own; `>1` lenses harder
+  (`1.3–1.6` is a good start on a thin frame). If you have separately dialed
+  `watercolorRefraction`, that becomes the base the index scales instead.
 - **`glassChromaticAberration`** — splits the red/blue channels by N px along the
   rim normal, strongest where the bead bends hardest and fading to nothing at the
   crown (`~1–4` for a visible prismatic fringe; `0` = off).

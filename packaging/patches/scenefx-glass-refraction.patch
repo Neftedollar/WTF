@@ -113,7 +113,7 @@ index f190801..9370068 100644
   * Add a node displaying a shadow to the scene-graph.
   */
 diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
-index 0592c4d..4837ab4 100644
+index 0592c4d..eb8840e 100644
 --- a/render/fx_renderer/fx_pass.c
 +++ b/render/fx_renderer/fx_pass.c
 @@ -376,6 +376,34 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
@@ -151,7 +151,7 @@ index 0592c4d..4837ab4 100644
  
  	set_proj_matrix(shader->proj, pass->projection_matrix, &dst_box);
  	set_tex_matrix(shader->tex_proj, options->transform, &src_fbox);
-@@ -859,6 +887,34 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
+@@ -859,6 +887,41 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
  	// Artifacts with NEAREST filter
  	fx_options->tex_options.base.filter_mode = WLR_SCALE_FILTER_BILINEAR;
  
@@ -169,8 +169,15 @@ index 0592c4d..4837ab4 100644
 +		// that margin so every displaced sample lands on real copied content
 +		// instead of stale/uninitialised effects-buffer pixels (which read as
 +		// white blow-outs along straight edges).
-+		int lens_margin = (int)fx_options->tex_options.refraction + 4;
-+		wlr_region_expand(&damage, &damage, lens_margin);
++		// Peak bend is |slope|*refraction; the chromatic split adds
++			// |slope|*chromatic_aberration, and the steepest profile (`lip`) drives
++			// |slope| to ~1.4 — so scale BOTH by that before the +4 cushion, else a
++			// high CA or the lip surface samples past the copied margin (stale px).
++			float lg_max_slope = 1.4f;
++			float lens_disp = lg_max_slope * (fx_options->tex_options.refraction
++					+ fx_options->tex_options.chromatic_aberration);
++			int lens_margin = (int)lens_disp + 4;
++			wlr_region_expand(&damage, &damage, lens_margin);
 +		fx_framebuffer_bind(pass->fx_effect_framebuffers->effects_buffer);
 +		fx_options->tex_options.base.clip = &damage;
 +		fx_options->tex_options.base.texture = fx_texture_from_buffer(
@@ -186,7 +193,7 @@ index 0592c4d..4837ab4 100644
  	// Downscale
  	for (int i = 0; i < blur_data->num_passes; ++i) {
  		wlr_region_scale(&scaled_damage, &damage, 1.0f / (1 << (i + 1)));
-@@ -929,7 +985,17 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
+@@ -929,7 +992,17 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
  	struct fx_framebuffer *buffer = pass->fx_effect_framebuffers->optimized_blur_buffer;
  	if (!buffer || !fx_options->use_optimized_blur) {
  		if (!buffer) {

@@ -100,7 +100,10 @@ let wtfConfig =
         defaultLayout Layouts.Tall   // typo-proof layout name from the Type Provider
         keys (myKeys @ workspaceKeys)
         manageHook myManage
-        startup [ "wtf-bar"; "foot" ]
+        startup [ "foot" ]   // the bar is embedded (in-process) by default; do NOT
+                             // also launch "wtf-bar" here or you get two overlapping
+                             // bars. Set `embedded false` on a bar to use standalone
+                             // wtf-bar, and only THEN add it to startup.
 
         // ---- ricing: appearance (all also live-tunable via wtfctl) ----
         gaps 8
