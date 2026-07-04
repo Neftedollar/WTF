@@ -1473,12 +1473,24 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
 		 * in the reducer). Then reset; the next arrange (or the snap-back if no
 		 * swap) repositions the ghost via animate_toplevels. */
 		if (srv->cursor_mode == WTF_CURSOR_TILE_DRAG && srv->grabbed_toplevel) {
-			int dragged = srv->grabbed_toplevel->id;
-			int target = (toplevel && toplevel != srv->grabbed_toplevel)
-				? toplevel->id : 0;
+			struct wtf_toplevel *g = srv->grabbed_toplevel;
+			/* Seed the animation origin at the DROP position so the window slides
+			 * from where it was released to its destination tile — whether that's
+			 * the swapped tile (brain re-configures target on SwapWith) or a
+			 * snap-back to its own tile (no swap → target unchanged). Without this
+			 * the stale anim_x would make it jump to the old tile first. */
+			if (g->scene_tree != NULL) {
+				g->anim_x = g->scene_tree->node.x;
+				g->anim_y = g->scene_tree->node.y;
+			}
+			int dragged = g->id;
+			int target = (toplevel && toplevel != g) ? toplevel->id : 0;
 			if (g_cb.tile_drop) {
 				g_cb.tile_drop(dragged, target);
 			}
+			/* No-swap path (target 0 / self): the brain won't re-configure, so
+			 * nudge a frame to run animate_toplevels and slide the ghost home. */
+			schedule_frame();
 		}
 		reset_cursor_mode(srv);
 	} else {
