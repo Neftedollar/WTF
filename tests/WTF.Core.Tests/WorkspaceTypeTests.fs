@@ -24,6 +24,15 @@ let private worldWith n =
         w <- fst (Reducer.apply (AddWindow(win i (sprintf "app%d" i))) w)
     w
 
+/// Force the current workspace's Layout name directly, bypassing SetLayout's
+/// registered-name guard — the only way to exercise the arrange unknown-layout
+/// fallback (a hot-reloaded config could leave such a name behind).
+let private forceLayout name (w: World) =
+    { w with
+        Workspaces =
+            w.Workspaces
+            |> List.map (fun ws -> if ws.Tag = w.Current then { ws with Layout = name } else ws) }
+
 // --- the built-in "stack" type is registered and dogfooded ------------------
 
 [<Fact>]
@@ -115,6 +124,28 @@ let ``a throwing workspace-type arranger falls back to stack, not a blank worksp
     finally
         WorkspaceRegistry.clear ()
         WorkspaceRegistry.register "stack" World.stackArranger
+
+[<Fact>]
+let ``a null-returning workspace-type arranger falls back to stack, not a blank workspace`` () =
+    // A reflectively-loaded .NET plugin can RETURN null where F# expects a list.
+    // Like a throw, that must degrade to the built-in stack, never [] (blank) or NRE.
+    WorkspaceRegistry.register "nullarr" (fun _ -> Unchecked.defaultof<(WindowId * Rect) list>)
+    try
+        let w = World.setTypeOf "1" "nullarr" (worldWith 3)
+        Assert.Equal(3, (World.arrange w).Length)   // stack placed all three, not zero
+    finally
+        WorkspaceRegistry.clear ()
+        WorkspaceRegistry.register "stack" World.stackArranger
+
+[<Fact>]
+let ``an unknown layout name falls back to tall, not the alphabetically-first name`` () =
+    // A workspace carrying an unresolvable layout (e.g. from a hot-reload that
+    // bypassed SetLayout) must arrange via the conventional "tall" default — the
+    // old `List.sort |> List.tryHead` silently picked "bsp".
+    let w = worldWith 3
+    Assert.Equal<(WindowId * Rect) list>(
+        World.arrange (forceLayout "tall" w),
+        World.arrange (forceLayout "does-not-exist" w))
 
 [<Fact>]
 let ``re-asserting the SAME workspace type keeps its State; a real switch clears it`` () =

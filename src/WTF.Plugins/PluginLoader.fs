@@ -195,11 +195,22 @@ type ReflectionPluginLoader(pluginDir: string) =
                                     t.FullName (Path.GetFileName file))
                         else
                             let instance = Activator.CreateInstance t
-                            match instance with :? IWtfLayoutPlugin as p -> registerPlugin file p | _ -> ()
-                            match instance with :? IWtfBarPlugin as p -> registerBar file p | _ -> ()
-                            match instance with :? IWtfOverlayPlugin as p -> registerOverlay file p | _ -> ()
-                            match instance with :? IWtfEffectPlugin as p -> registerEffect file p | _ -> ()
-                            match instance with :? IWtfWorkspacePlugin as p -> registerWorkspace file p | _ -> ()
+                            // Per-FACET try/with: a type may satisfy several interfaces
+                            // (a layout that is also a bar); one facet's registration
+                            // throwing — e.g. a user `Layouts` getter that raises — must
+                            // not suppress the OTHERS, which the single outer try would
+                            // (it skips the whole type). Extends the existing per-assembly
+                            // / per-type graceful discipline one level down.
+                            let facet kind (reg: unit -> unit) =
+                                try reg ()
+                                with ex ->
+                                    log (sprintf "skipped %s facet of %s in %s: %s"
+                                            kind t.FullName (Path.GetFileName file) ex.Message)
+                            match instance with :? IWtfLayoutPlugin as p -> facet "layout" (fun () -> registerPlugin file p) | _ -> ()
+                            match instance with :? IWtfBarPlugin as p -> facet "bar" (fun () -> registerBar file p) | _ -> ()
+                            match instance with :? IWtfOverlayPlugin as p -> facet "overlay" (fun () -> registerOverlay file p) | _ -> ()
+                            match instance with :? IWtfEffectPlugin as p -> facet "effect" (fun () -> registerEffect file p) | _ -> ()
+                            match instance with :? IWtfWorkspacePlugin as p -> facet "workspace" (fun () -> registerWorkspace file p) | _ -> ()
                 with ex ->
                     log (sprintf "skipped type %s in %s: %s" t.FullName (Path.GetFileName file) ex.Message)
         with ex ->

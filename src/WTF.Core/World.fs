@@ -279,6 +279,15 @@ module World =
     /// The three id-sets partition the stack, so every id gets exactly one rect.
     /// Extracted VERBATIM from the old `arrange` — it dogfoods the workspace-type
     /// seam (core is no longer special-cased). Ignores State (stateless).
+
+    /// Coalesce a NULL list returned by an arbitrary reflectively-loaded plugin fn
+    /// (a .NET plugin can hand back `null` where F# expects an empty list) to [].
+    /// The existing seams already catch a plugin THROW; a null RETURN is the other
+    /// half — left unguarded it NREs the first consumer (`@` / `List.map`) inside
+    /// the C->F# callbacks. Cheap and total.
+    let private orEmpty (xs: 'a list) : 'a list =
+        if System.Object.ReferenceEquals(xs, null) then [] else xs
+
     let stackArranger : WorkspaceArranger =
         fun v ->
             match v.Stack with
@@ -297,14 +306,17 @@ module World =
                     | Some sub ->
                         // Resolve the workspace's layout; if its name is unknown (e.g. set
                         // by a hot-reloaded config that bypassed SetLayout's guard), fall
-                        // back to the first registered layout rather than silently dropping
-                        // every tiled window from arrange (no-loss / bijection invariant).
+                        // back to the built-in "tall" (or, failing that, the first
+                        // registered layout) rather than silently dropping every tiled
+                        // window from arrange (no-loss / bijection invariant). "tall" is
+                        // the conventional default; the old `List.tryHead` picked the
+                        // alphabetically-first name ("bsp"), a surprising silent default.
                         let layoutOpt =
                             match Registry.resolve v.Layout v.Nmaster v.Ratio with
                             | Some l -> Some l
                             | None ->
-                                Registry.names ()
-                                |> List.tryHead
+                                let names = Registry.names ()
+                                (if List.contains "tall" names then Some "tall" else List.tryHead names)
                                 |> Option.bind (fun n -> Registry.resolve n v.Nmaster v.Ratio)
                         match layoutOpt with
                         | Some layout ->
@@ -313,7 +325,7 @@ module World =
                             // (arbitrary user assembly). A throw here runs inside the C->F#
                             // callbacks (map/unmap/key/resize), so swallow to []-tiling rather
                             // than unwind into native code and abort the session.
-                            (try layout v.Screen sub
+                            (try orEmpty (layout v.Screen sub)
                              with ex -> eprintfn "WTF: layout '%s' threw (skipped): %O" v.Layout ex; [])
                         | None -> []
                 // LAYER 2 — FLOATING: stack order = z; skip the fs id; clamp on-screen.
@@ -349,16 +361,25 @@ module World =
     /// (resolved from `WorkspaceRegistry`; TOTAL — an unknown/plugin-absent type
     /// falls back to "stack" rather than dropping the workspace). Windows the type
     /// omits are hidden by the host, so the type owns visibility. A plugin arranger
-    /// is arbitrary user code, so a throw is caught and we fall back to the built-in
-    /// "stack" arranger — NOT []-placement, which the host reads as "hide every
-    /// window" and would blank the workspace. This keeps the no-loss invariant
-    /// uniform: a broken plugin degrades to stack, exactly like an unknown name.
+    /// is arbitrary user code, so a throw OR a null return is caught and we fall
+    /// back to the built-in "stack" arranger — NOT []-placement, which the host
+    /// reads as "hide every window" and would blank the workspace. This keeps the
+    /// no-loss invariant uniform: a broken plugin degrades to stack, exactly like
+    /// an unknown name.
     let arrange w : (WindowId * Rect) list =
         let ws = currentWorkspace w
         let arranger =
             WorkspaceRegistry.tryResolve ws.Type
             |> Option.defaultValue stackArranger
-        try arranger (viewOf ws w)
-        with ex ->
-            eprintfn "WTF: workspace type '%s' threw (fell back to stack): %O" ws.Type ex
-            try stackArranger (viewOf ws w) with _ -> []
+        // A null RETURN is treated identically to a THROW (both → stack fallback):
+        // a plugin arranger is arbitrary .NET, and [] here would blank the workspace.
+        let attempt =
+            try
+                let r = arranger (viewOf ws w)
+                if System.Object.ReferenceEquals(r, null) then None else Some r
+            with ex ->
+                eprintfn "WTF: workspace type '%s' threw (fell back to stack): %O" ws.Type ex
+                None
+        match attempt with
+        | Some rects -> rects
+        | None -> try orEmpty (stackArranger (viewOf ws w)) with _ -> []
