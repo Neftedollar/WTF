@@ -1,3 +1,7 @@
+// Joins the "WorkspaceRegistry" collection: the byte-exact snapshot below reads
+// the global WorkspaceRegistry (`workspaceTypes`), so it must not run in parallel
+// with WorkspaceTypeTests, which register/clear types.
+[<Xunit.Collection("WorkspaceRegistry")>]
 module WTF.Core.Tests.GeometryTests
 
 open Xunit
@@ -33,7 +37,7 @@ let ``snapshotLine is byte-identical to the pre-UoM baseline`` () =
             (World.empty (Rect.create 0 0 1920 1080))
         |> fst
     let expected =
-        """{"current":"1","nmaster":1,"ratio":0.5,"gaps":6,"screen":{"x":0,"y":0,"w":1920,"h":1080},"layouts":["bsp","full","grid","tall","wide"],"workspaces":[{"tag":"1","layout":"tall","windows":[2,1],"focused":2,"floating":[],"fullscreen":null},{"tag":"2","layout":"tall","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"3","layout":"tall","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"4","layout":"tall","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"5","layout":"tall","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"6","layout":"tall","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"7","layout":"tall","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"8","layout":"tall","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"9","layout":"tall","windows":[],"focused":null,"floating":[],"fullscreen":null}],"windows":{"1":{"appId":"foot","title":"shell","floating":false},"2":{"appId":"firefox","title":"web","floating":false}},"arrange":[{"id":2,"x":6,"y":6,"w":948,"h":1068},{"id":1,"x":966,"y":6,"w":948,"h":1068}]}"""
+        """{"current":"1","nmaster":1,"ratio":0.5,"gaps":6,"screen":{"x":0,"y":0,"w":1920,"h":1080},"layouts":["bsp","full","grid","tall","wide"],"workspaceTypes":["stack"],"workspaces":[{"tag":"1","layout":"tall","type":"stack","state":"","windows":[2,1],"focused":2,"floating":[],"fullscreen":null},{"tag":"2","layout":"tall","type":"stack","state":"","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"3","layout":"tall","type":"stack","state":"","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"4","layout":"tall","type":"stack","state":"","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"5","layout":"tall","type":"stack","state":"","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"6","layout":"tall","type":"stack","state":"","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"7","layout":"tall","type":"stack","state":"","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"8","layout":"tall","type":"stack","state":"","windows":[],"focused":null,"floating":[],"fullscreen":null},{"tag":"9","layout":"tall","type":"stack","state":"","windows":[],"focused":null,"floating":[],"fullscreen":null}],"windows":{"1":{"appId":"foot","title":"shell","floating":false},"2":{"appId":"firefox","title":"web","floating":false}},"arrange":[{"id":2,"x":6,"y":6,"w":948,"h":1068},{"id":1,"x":966,"y":6,"w":948,"h":1068}]}"""
     Assert.Equal(expected, Protocol.snapshotLine w)
 
 // ---- (2) lpx <-> ppx conversion ------------------------------------

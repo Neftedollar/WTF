@@ -21,6 +21,16 @@ let ``focus selectors decode correctly`` () =
     Assert.Equal(Some(Focus(ById 7)), Protocol.parse """{"cmd":"focus","id":7}""")
 
 [<Fact>]
+let ``workspace-type and workspace-state verbs parse (#5)`` () =
+    Assert.Equal(Some(SetWorkspaceType "paperwm"),
+        Protocol.parse """{"cmd":"workspace-type","name":"paperwm"}""")
+    Assert.Equal(Some(SetWorkspaceState "viewport:3"),
+        Protocol.parse """{"cmd":"workspace-state","value":"viewport:3"}""")
+    // missing payloads -> None (not a partial command)
+    Assert.Equal(None, Protocol.parse """{"cmd":"workspace-type"}""")
+    Assert.Equal(None, Protocol.parse """{"cmd":"workspace-state"}""")
+
+[<Fact>]
 let ``garbage and unknown commands return None`` () =
     Assert.Equal(None, Protocol.parse "not json")
     Assert.Equal(None, Protocol.parse """{"cmd":"explode"}""")

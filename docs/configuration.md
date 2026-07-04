@@ -350,6 +350,46 @@ Registry.register "mytall" (fun nmaster ratio -> Layout.tall nmaster ratio)
 // then: defaultLayout "mytall", bind "M-y" (SetLayout "mytall"), wtfctl layout mytall
 ```
 
+## Custom workspace types
+
+A **layout** decides where the current windows go on one screen. A **workspace
+type** is one level up: it owns *how a workspace organises windows over time* — it
+reads the real focus, decides which windows are on-screen at all (the rest are
+hidden), and may carry its own serializable state. The tag/stack model you use by
+default is just the built-in `"stack"` type; others (a PaperWM-style scrolling
+strip, an infinite 2-D canvas, an i3-style tree) are plugins that coexist —
+**different workspaces can run different types at the same time**.
+
+A type is a function `WorkspaceView -> (WindowId * Rect) list` — it returns the
+on-screen placements (windows it omits are hidden, so it controls visibility by
+choosing what to place). `WorkspaceView` carries the screen, layout params, the
+real `Stack` (with its true `Focus`), the floating/fullscreen sets, and the
+per-workspace `State` string. Ship one from `~/.config/wtf/plugins/` by
+implementing **`IWtfWorkspacePlugin`** (same loader / `<Private>false</Private>`
+rule as layouts):
+
+```fsharp
+type MyWorkspaces() =
+    interface IWtfWorkspacePlugin with
+        member _.Name = "MyWorkspaces"
+        member _.WorkspaceTypes =
+            [ // a minimal "focus fills the screen, hide the rest" type
+              "zoom", (fun v ->
+                  match v.Stack with Some s -> [ s.Focus, v.Screen ] | None -> []) ]
+```
+
+Switch a workspace's type at runtime — `SetWorkspaceType "zoom"` (a keybind or
+`wtfctl workspace-type zoom`); unknown names are ignored. A type's optional state
+is plain serializable data threaded by the reducer (so it saves/restores and an
+agent can drive it): read `v.State` in the arranger, set it with
+`SetWorkspaceState "..."` (`wtfctl workspace-state ...`). Switching type clears the
+old state. This keeps every transition replayable — the state is never a hidden
+mutable object.
+
+> v1 ships the seam + the built-in `"stack"` type. `SetWorkspaceState` is the
+> low-level state channel; higher-level typed intents (e.g. scroll/pan verbs) can
+> be layered on later without changing the ABI.
+
 ## Custom surfaces — bar & overlay plugins
 
 The same compiled-plugin mechanism that ships custom **layouts** also ships

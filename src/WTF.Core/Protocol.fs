@@ -32,11 +32,20 @@ module Protocol =
             layouts.Add(JsonValue.Create n)
         root["layouts"] <- layouts
 
+        // Available workspace TYPES (#5) — so an agent can discover what it can set
+        // via {"cmd":"workspace-type","name":...}, exactly like the layouts list.
+        let workspaceTypes = JsonArray()
+        for n in WorkspaceRegistry.names () do
+            workspaceTypes.Add(JsonValue.Create n)
+        root["workspaceTypes"] <- workspaceTypes
+
         let workspaces = JsonArray()
         for ws in w.Workspaces do
             let wo = JsonObject()
             wo["tag"] <- JsonValue.Create ws.Tag
             wo["layout"] <- JsonValue.Create ws.Layout
+            wo["type"] <- JsonValue.Create ws.Type
+            wo["state"] <- JsonValue.Create ws.State
             let ids = JsonArray()
             let focusedId =
                 match ws.Stack with
@@ -224,6 +233,10 @@ module Protocol =
                 match str o "name" with
                 | Some n -> Some(SetLayout n)
                 | None -> if flag "next" then Some NextLayout else None
+            // {"cmd":"workspace-type","name":"paperwm"} — set the current workspace's
+            // TYPE (#5). {"cmd":"workspace-state","value":"..."} — set its per-type state.
+            | Some "workspace-type" -> str o "name" |> Option.map SetWorkspaceType
+            | Some "workspace-state" -> str o "value" |> Option.map SetWorkspaceState
             | Some "master" ->
                 if flag "inc" then Some IncMaster
                 elif flag "dec" then Some DecMaster

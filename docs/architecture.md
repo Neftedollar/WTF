@@ -129,6 +129,19 @@ this byte-for-byte today's behavior; only the *composition/targeting* of the
 per-window primitives (opacity, border color) is pluggable — the atomic GPU
 effects stay fixed in C/scenefx.
 
+A fourth extension interface, `IWtfWorkspacePlugin`, makes the **workspace type**
+pluggable — one level up from a layout. `World.arrange` no longer bakes in the
+tag/stack model: it resolves the current workspace's `Type` from
+`WorkspaceRegistry` and delegates to that type's `WorkspaceView -> placements`
+arranger (falling back to the built-in `"stack"` type, which is the old logic
+extracted verbatim — core dogfoods its own seam). A type reads the *real* focus
+(a bare layout only sees a focus-less sub-stack) and controls visibility by
+choosing which windows to place (the host hides the rest); its optional
+per-workspace `State` is plain serializable data threaded by the reducer
+(`SetWorkspaceState`), never a hidden mutable tree — so PaperWM/canvas/tree types
+stay replayable and agent-drivable. Different workspaces can run different types
+at once.
+
 ## Builds
 
 Two flavors from one tree:

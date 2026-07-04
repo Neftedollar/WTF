@@ -9,6 +9,8 @@ module wtfctl.Program
 //   wtfctl layout bsp|tall|grid|...  set the current workspace's layout
 //   wtfctl workspace 2               switch to workspace 2
 //   wtfctl move 2                    send the focused window to workspace 2
+//   wtfctl workspace-type paperwm    set the current workspace's type (model)
+//   wtfctl workspace-state <data>    set the current workspace's per-type state
 //   wtfctl spawn kitty               launch a program
 //   wtfctl swap next|prev            move the focused window in the stack
 //   wtfctl master 2 | ratio 0.6      tweak the master area
@@ -51,6 +53,9 @@ let toJson (args: string list) : string option =
     | [ "workspace"; "prev" ] -> Some """{"cmd":"workspace","prev":true}"""
     | [ "workspace"; tag ] -> Some(sprintf """{"cmd":"workspace","switch":"%s"}""" (jsonEsc tag))
     | [ "move"; tag ] -> Some(sprintf """{"cmd":"workspace","move":"%s"}""" (jsonEsc tag))
+    // #5: set the current workspace's TYPE (the workspace model) / its per-type state.
+    | [ "workspace-type"; name ] -> Some(sprintf """{"cmd":"workspace-type","name":"%s"}""" (jsonEsc name))
+    | [ "workspace-state"; value ] -> Some(sprintf """{"cmd":"workspace-state","value":"%s"}""" (jsonEsc value))
     | "spawn" :: rest -> Some(sprintf """{"cmd":"spawn","run":"%s"}""" (jsonEsc (String.Join(" ", rest))))
     | [ "master"; "inc" ] -> Some """{"cmd":"master","inc":true}"""
     | [ "master"; "dec" ] -> Some """{"cmd":"master","dec":true}"""

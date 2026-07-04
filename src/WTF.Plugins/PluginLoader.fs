@@ -135,6 +135,19 @@ type ReflectionPluginLoader(pluginDir: string) =
         SurfaceRegistry.registerOverlay p
         log (sprintf "loaded overlay surface \"%s\" from %s" p.Name (Path.GetFileName file))
 
+    /// Register a WORKSPACE-TYPE plugin (#5): its named types flow into
+    /// WorkspaceRegistry (which the reducer resolves per workspace). Same
+    /// last-wins-with-warning discipline; collision key is the type name. NOTE:
+    /// "stack" is a built-in and overriding it warns like any other.
+    let registerWorkspace (file: string) (p: IWtfWorkspacePlugin) =
+        for (name, arranger) in p.WorkspaceTypes do
+            if WorkspaceRegistry.has name then
+                log (sprintf "WARNING: workspace type \"%s\" from %s overrides an existing type (last wins)"
+                        name (Path.GetFileName file))
+            WorkspaceRegistry.register name arranger
+            log (sprintf "loaded workspace type \"%s\" from %s (plugin: %s)"
+                    name (Path.GetFileName file) p.Name)
+
     /// Register an in-process EFFECT plugin (#6): its named strategies flow into
     /// EffectRegistry (which the host resolves by the config's `effectStrategy`
     /// name). Same last-wins-with-warning discipline; collision key is the strategy
@@ -169,7 +182,8 @@ type ReflectionPluginLoader(pluginDir: string) =
                     let isBar = typeof<IWtfBarPlugin>.IsAssignableFrom t
                     let isOverlay = typeof<IWtfOverlayPlugin>.IsAssignableFrom t
                     let isEffect = typeof<IWtfEffectPlugin>.IsAssignableFrom t
-                    if (isLayout || isBar || isOverlay || isEffect)
+                    let isWorkspace = typeof<IWtfWorkspacePlugin>.IsAssignableFrom t
+                    if (isLayout || isBar || isOverlay || isEffect || isWorkspace)
                        && not t.IsAbstract
                        && not t.IsInterface then
                         // A plugin type with NO public parameterless ctor can't be
@@ -185,6 +199,7 @@ type ReflectionPluginLoader(pluginDir: string) =
                             match instance with :? IWtfBarPlugin as p -> registerBar file p | _ -> ()
                             match instance with :? IWtfOverlayPlugin as p -> registerOverlay file p | _ -> ()
                             match instance with :? IWtfEffectPlugin as p -> registerEffect file p | _ -> ()
+                            match instance with :? IWtfWorkspacePlugin as p -> registerWorkspace file p | _ -> ()
                 with ex ->
                     log (sprintf "skipped type %s in %s: %s" t.FullName (Path.GetFileName file) ex.Message)
         with ex ->

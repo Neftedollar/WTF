@@ -41,6 +41,10 @@ module Session =
             let wo = JsonObject()
             wo["tag"] <- JsonValue.Create ws.Tag
             wo["layout"] <- JsonValue.Create ws.Layout
+            // Workspace TYPE (#5) + its serializable per-type state. Emitted so a
+            // non-"stack" workspace and a stateful type's data survive a restore.
+            wo["type"] <- JsonValue.Create ws.Type
+            wo["state"] <- JsonValue.Create ws.State
             // Never serialize the Up/Down zipper literally: emit visual order +
             // the focused id; the split is fully recoverable on load.
             match ws.Stack with
@@ -130,8 +134,17 @@ module Session =
                               match wn["fullscreen"] with
                               | null -> None
                               | v -> Some(v.GetValue<int>())
+                          // Type/State are optional: a session written before #5
+                          // (or by a "stack" workspace) omits them -> default
+                          // "stack"/"" so old session files still load.
+                          let wsType =
+                              match wn["type"] with null -> "stack" | v -> v.GetValue<string>()
+                          let wsState =
+                              match wn["state"] with null -> "" | v -> v.GetValue<string>()
                           { Tag = wn["tag"].GetValue<string>()
                             Layout = wn["layout"].GetValue<string>()
+                            Type = wsType
+                            State = wsState
                             Stack = stack
                             Floating = floating
                             Fullscreen = fullscreen } ]

@@ -32,6 +32,37 @@ let ``empty workspaces round-trip with null stacks`` () =
     Assert.Equal(Some w, Session.ofJson (Session.toJson w))
 
 [<Fact>]
+let ``workspace Type and per-type State round-trip (#5)`` () =
+    // Non-default Type + State must survive save/restore (a stateful plugin type's
+    // data is persisted). Set them directly (session doesn't validate type names).
+    let w =
+        worldWith 2
+        |> World.setTypeOf "1" "paperwm"
+        |> World.setStateOf "1" "viewport:120"
+    match Session.ofJson (Session.toJson w) with
+    | Some w' ->
+        let ws = World.currentWorkspace w'
+        Assert.Equal("paperwm", ws.Type)
+        Assert.Equal("viewport:120", ws.State)
+        Assert.Equal(Some w, Some w')
+    | None -> failwith "should round-trip"
+
+[<Fact>]
+let ``a pre-#5 session without type/state loads with defaults`` () =
+    // Backward compat: a workspace object missing "type"/"state" must default to
+    // "stack"/"" rather than fail the whole parse.
+    let full = Session.toJson (World.empty screen)
+    // Drop the key:value tokens (trailing commas kept the objects valid); the
+    // leftover indentation is just whitespace the JSON parser ignores.
+    let stripped = full.Replace("\"type\": \"stack\",", "").Replace("\"state\": \"\",", "")
+    match Session.ofJson stripped with
+    | Some w ->
+        let ws = World.currentWorkspace w
+        Assert.Equal("stack", ws.Type)
+        Assert.Equal("", ws.State)
+    | None -> failwith "a pre-#5 session should still load"
+
+[<Fact>]
 let ``the Windows map round-trips`` () =
     let w = worldWith 3
     match Session.ofJson (Session.toJson w) with

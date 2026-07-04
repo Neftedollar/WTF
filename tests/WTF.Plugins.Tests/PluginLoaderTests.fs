@@ -307,6 +307,39 @@ let ``fixture assembly registers effect strategies (#6) into EffectRegistry`` ()
         Directory.Delete(dir, true)
 
 [<Fact>]
+let ``fixture assembly registers workspace types (#5) into WorkspaceRegistry`` () =
+    let dir = freshDir ()
+    File.Copy(fixtureDllPath (), Path.Combine(dir, "FixturePlugins.dll"))
+    let loader = PluginLoader.createForPath dir
+    try
+        let ex = Record.Exception(fun () -> loader.LoadAll())
+        Assert.Null(ex)
+
+        // 1) BOTH plugin types registered into the LIVE registry.
+        Assert.Contains("fixture_focus_only", WorkspaceRegistry.names ())
+        Assert.Contains("fixture_all", WorkspaceRegistry.names ())
+
+        // 2) "fixture_focus_only" resolves and places ONLY the focused window
+        //    (proving a plugin type reads the real focus + reaches the host registry).
+        let arranger = (WorkspaceRegistry.tryResolve "fixture_focus_only").Value
+        let stack = Stack.ofList [ 10; 20; 30 ] |> Option.map (Stack.focus 20)
+        let view : WorkspaceView =
+            { Screen = Rect.create 0 0 800 600; Nmaster = 1; Ratio = 0.5; Gaps = 0
+              Layout = "tall"; State = ""; Stack = stack
+              Floating = Map.empty; Fullscreen = None }
+        Assert.Equal<(WindowId * Rect) list>([ 20, Rect.create 0 0 800 600 ], arranger view)
+
+        // 3) the "stack" collision: last-registered (the plugin marker, 3x3@0,0) wins.
+        let overridden = (WorkspaceRegistry.tryResolve "stack").Value
+        Assert.Equal<(WindowId * Rect) list>(
+            [ 10, Rect.create 0 0 3 3; 20, Rect.create 0 0 3 3; 30, Rect.create 0 0 3 3 ],
+            overridden view)
+    finally
+        // RESTORE the built-in "stack" so the process-global override can't leak.
+        WorkspaceRegistry.register "stack" World.stackArranger
+        Directory.Delete(dir, true)
+
+[<Fact>]
 let ``PluginPath.resolve honours XDG_CONFIG_HOME and falls back to ~/.config`` () =
     let prev = Environment.GetEnvironmentVariable "XDG_CONFIG_HOME"
     try
