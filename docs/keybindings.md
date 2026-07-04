@@ -148,7 +148,8 @@ Anything bindable is also scriptable via [wtfctl](wtfctl.md). Commands:
 `SwapDir (DirLeft|DirRight|DirUp|DirDown)` · `ToggleFloat` · `ToggleFullscreen` ·
 `SinkAll` · `CloseFocused` · `Spawn cmd` · `SpawnOnce cmd` ·
 `SwitchWorkspace tag` · `MoveToWorkspace tag` · `NextWorkspace` ·
-`PrevWorkspace` · `SetLayout name` · `NextLayout` · `SetMaster n` ·
+`PrevWorkspace` · `SetLayout name` · `NextLayout` · `SetWorkspaceType name` ·
+`SetWorkspaceState data` · `SetMaster n` ·
 `IncMaster` · `DecMaster` · `SetRatio f` · `SetGaps n` · `IncGaps` ·
 `DecGaps` · `SetInactiveOpacity f` · `SetAnimationSpeed f` ·
 `SetBorderWidth n` · `SetBorderColor …` · `SetCornerRadius n` ·

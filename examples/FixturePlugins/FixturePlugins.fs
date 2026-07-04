@@ -119,3 +119,38 @@ type OverrideNoneEffectPlugin() =
     interface IWtfEffectPlugin with
         member _.Name = "OverrideNone"
         member _.Strategies = [ "none", (fun _ -> [ WindowEffect.SetBorderColor "#ff0000" ]) ]
+
+// --- workspace-type plugins (#5): the loader must discover IWtfWorkspacePlugin in
+//     the SAME scan and feed WorkspaceRegistry. -------------------------------
+
+/// A plugin exposing MULTIPLE distinctive workspace types. "fixture_focus_only"
+/// places ONLY the focused window full-screen (proving a type reads the REAL focus
+/// and controls visibility by omitting the rest — the host hides them). "fixture_all"
+/// stacks every window at the origin (a trivial always-visible marker).
+type WorkspacePlugin() =
+    interface IWtfWorkspacePlugin with
+        member _.Name = "FixtureWorkspaces"
+        member _.WorkspaceTypes =
+            [ "fixture_focus_only",
+                (fun (v: WorkspaceView) ->
+                    match v.Stack with
+                    | Some s -> [ s.Focus, v.Screen ]   // only the focused id, full screen
+                    | None -> [])
+              "fixture_all",
+                (fun (v: WorkspaceView) ->
+                    match v.Stack with
+                    | Some s -> Stack.toList s |> List.map (fun id -> id, Rect.create 0 0 5 5)
+                    | None -> []) ]
+
+/// A plugin whose type name COLLIDES with the built-in "stack" — last wins, so
+/// after load WorkspaceRegistry.tryResolve "stack" yields THIS marker (every window
+/// at 3x3@0,0), proving the override reaches the LIVE registry.
+type OverrideStackPlugin() =
+    interface IWtfWorkspacePlugin with
+        member _.Name = "OverrideStack"
+        member _.WorkspaceTypes =
+            [ "stack",
+                (fun (v: WorkspaceView) ->
+                    match v.Stack with
+                    | Some s -> Stack.toList s |> List.map (fun id -> id, Rect.create 0 0 3 3)
+                    | None -> []) ]

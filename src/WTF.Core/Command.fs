@@ -46,6 +46,8 @@ type Command =
     | PrevWorkspace
     | SetLayout of string            // by registry name
     | NextLayout                     // cycle the registry layouts
+    | SetWorkspaceType of string     // set the current workspace's TYPE (#5), by registry name
+    | SetWorkspaceState of string    // set the current workspace's per-type State (serializable data)
     | SetMaster of int
     | IncMaster                      // nmaster +/- 1
     | DecMaster
@@ -213,6 +215,7 @@ module Reducer =
         | ToggleFloat | ToggleFullscreen | SinkAll
         | SwitchWorkspace _ | MoveToWorkspace _ | NextWorkspace | PrevWorkspace
         | SetLayout _ | NextLayout
+        | SetWorkspaceType _ | SetWorkspaceState _
         | SetMaster _ | IncMaster | DecMaster
         | SetRatio _
         | SetGaps _ | IncGaps | DecGaps -> true
@@ -463,6 +466,23 @@ module Reducer =
                                 if ws.Tag = w.Current then { ws with Layout = name } else ws) }
                 w', arrangeOf w'
             else w, []
+
+        // Switch the current workspace's TYPE (the workspace model, #5). Guarded on
+        // the type being registered — an unknown name is a no-op (mirrors SetLayout),
+        // so a typo can't leave the workspace on a phantom type. Re-arranges via the
+        // new type; setTypeOf resets the per-type State (meaningless across types).
+        | SetWorkspaceType name ->
+            if WorkspaceRegistry.has name then
+                let w' = World.setTypeOf w.Current name w
+                w', arrangeOf w'
+            else w, []
+
+        // Set the current workspace's per-type State (serializable escape-hatch data
+        // the active type reads in its arranger). The reducer just threads the data;
+        // the TYPE gives it meaning. Re-arranges so a viewport/pan change takes effect.
+        | SetWorkspaceState st ->
+            let w' = World.setStateOf w.Current st w
+            w', arrangeOf w'
 
         | NextWorkspace -> cycleWorkspace 1
         | PrevWorkspace -> cycleWorkspace -1

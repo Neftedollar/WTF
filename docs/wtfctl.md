@@ -18,6 +18,8 @@ wtfctl layout bsp               # tall|wide|bsp|grid|full|<your custom>
 wtfctl layout next
 wtfctl workspace 2              # switch workspace (also: next|prev)
 wtfctl move 2                   # send focused window to workspace 2
+wtfctl workspace-type paperwm   # set the current workspace's TYPE (model); "stack" is built-in
+wtfctl workspace-state <data>   # set the current workspace's per-type state (serializable)
 wtfctl float                    # toggle floating
 wtfctl fullscreen               # toggle fullscreen
 wtfctl sinkall                  # un-float everything on this workspace

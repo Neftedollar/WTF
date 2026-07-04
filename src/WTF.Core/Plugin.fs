@@ -36,3 +36,14 @@ type IWtfLayoutPlugin =
     /// factory is `nmaster -> ratio -> Layout<WindowId>`; gaps are applied by
     /// `World.arrange` (Layout.withGaps), so plugins need no gap handling.
     abstract member Layouts: (string * LayoutFactory) list
+
+/// A WORKSPACE-TYPE plugin (#5): one level up from a layout — it contributes named
+/// workspace TYPES (models of how a workspace organises windows over time). Frozen
+/// ABI, sibling of `IWtfLayoutPlugin`; discovered by the SAME loader scan and fed
+/// into `WorkspaceRegistry`. `WorkspaceArranger = WorkspaceView -> placements` is
+/// defined in World.fs, so this file stays Compile-included AFTER World.fs.
+type IWtfWorkspacePlugin =
+    /// Human-readable plugin name, for logging / diagnostics only.
+    abstract member Name: string
+    /// The (name, arranger) pairs the loader will `WorkspaceRegistry.register`.
+    abstract member WorkspaceTypes: (string * WorkspaceArranger) list
