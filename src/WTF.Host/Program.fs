@@ -554,10 +554,19 @@ let private glassSurfaceCode (s: string) =
 let private applyBlur (on: bool) =
     fxBlur <- on
     Ffi.wtf_set_blur ((if on then 1 else 0), 0, 0)
+// Toggling watercolor/glass flips the border's honest-ring stacking (ring above vs
+// below the window). The shim re-restacks by iterating `server.toplevels` in wl_list
+// (map-insertion) order, NOT the brain's z-order — fine for non-overlapping tiles,
+// but it would reorder overlapping floating/fullscreen windows on a toggle. So after
+// the toggle we re-issue an Arrange: `wtf_configure` restacks each window in the
+// Arrange list's ascending-z order, re-imposing the authoritative stacking.
+let private rearrangeForRingToggle () =
+    applyEffects [ Arrange(World.arrange world) ]
 let private applyWatercolor (on: bool) =
     fxWatercolor <- on
     // C ABI symbol stays `wtf_set_glass` (renamed on the F# side only, no shim churn).
     Ffi.wtf_set_glass ((if on then 1 else 0), cfg.WatercolorTint, cfg.WatercolorRefraction, (if cfg.WatercolorFrost then 1 else 0))
+    rearrangeForRingToggle ()
 let private applyGlass (on: bool) =
     fxGlass <- on
     // Liquid Glass (#7): index-scaled refraction layered on the watercolor rim.
@@ -570,6 +579,7 @@ let private applyGlass (on: bool) =
         cfg.GlassNoise,
         (if cfg.GlassSpecular then 1 else 0),
         glassSurfaceCode cfg.GlassSurface)
+    rearrangeForRingToggle ()
 let private applyShadow (on: bool) =
     fxShadow <- on
     let sdx, sdy = cfg.ShadowOffset
@@ -599,6 +609,11 @@ let mutable private wallpaperCycleIdx = -1
 // snapshot at the end. This makes a drag (Focus + SwapWith) or a swap-mode commit
 // undo in one step, and lets those paths safely re-anchor focus before swapping.
 let mutable private inBatch = false
+// Set by the reducer arm when a member makes a genuine undoable World change, so
+// the Batch only pushes when a per-command push WOULD have fired — a Batch that
+// contains only host-handled commands (e.g. `batch [Undo]`) must NOT push, or it
+// would clobber the redo branch and duplicate a Past entry.
+let mutable private batchDirty = false
 
 let rec private dispatch (cmd: Command) : unit =
     match cmd with
@@ -623,15 +638,22 @@ let rec private dispatch (cmd: Command) : unit =
     | ToggleGlow -> applyGlow (not fxGlow)
     | Batch cmds ->
         // Atomic history: drain every member with per-command pushes suppressed,
-        // then push a single snapshot if the World actually moved. Nested batches
-        // collapse into the outermost one (the flag is restored, not blindly cleared).
+        // then push a SINGLE snapshot iff a member actually made an undoable World
+        // change (batchDirty) and the net World moved. try/finally so a throwing
+        // member (downstream FFI / user appearance fn — the guarded C->F# entry
+        // points swallow it) can't leave `inBatch` stuck true, which would silently
+        // stop ALL undo recording for the rest of the session. Only the OUTERMOST
+        // batch resets/reads the flags; nested batches just contribute members.
         let before = world
         let outer = not inBatch
+        if outer then batchDirty <- false
         inBatch <- true
-        List.iter dispatch cmds
-        if outer then
-            inBatch <- false
-            if world <> before then history <- History.push world history
+        try
+            List.iter dispatch cmds
+        finally
+            if outer then inBatch <- false
+        if outer && batchDirty && world <> before then
+            history <- History.push world history
     | SaveSession -> SessionIO.save world
     | LoadSession ->
         match SessionIO.load () with
@@ -644,9 +666,11 @@ let rec private dispatch (cmd: Command) : unit =
         let prevFocus = World.focusedWindow world
         let w', effects = Reducer.apply cmd world
         // Inside a Batch the push is deferred to the Batch arm (one entry for the
-        // whole group); a lone command still records its own step.
-        if Reducer.isUndoable cmd && w' <> world && not inBatch then
-            history <- History.push w' history
+        // whole group); flag that an undoable change happened so the Batch knows to
+        // push. A lone command records its own step immediately.
+        if Reducer.isUndoable cmd && w' <> world then
+            if inBatch then batchDirty <- true
+            else history <- History.push w' history
         world <- w'
         applyEffects effects
         // A command that MOVED the focus (Focus/FocusMaster/Swap*/CloseFocused/

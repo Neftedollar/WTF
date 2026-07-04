@@ -114,6 +114,16 @@ let ``SwapWith only swaps TILED windows — a floating source or target is a no-
     Assert.Equal<int list>(order wf, order (Reducer.apply (SwapWith 1) wf |> fst)) // source floating -> no-op
 
 [<Fact>]
+let ``SwapWith does not target the FULLSCREEN window (it isn't a tile)`` () =
+    // A fullscreen window keeps the whole screen; stackArranger drops it from the
+    // tiles, so swapping onto it must not reshuffle the remaining tiled windows.
+    let w1 = worldWith 3 |> fun w -> Reducer.apply (Focus(ById 2)) w |> fst
+    let w1 = Reducer.apply ToggleFullscreen w1 |> fst     // window 2 is now fullscreen
+    let w = Reducer.apply (Focus(ById 1)) w1 |> fst       // focus a tiled window
+    let before = order w
+    Assert.Equal<int list>(before, order (Reducer.apply (SwapWith 2) w |> fst)) // fullscreen target -> no-op
+
+[<Fact>]
 let ``keybinding helpers build the expected commands`` () =
     // run-or-kill toggles by process name via a /bin/sh -c one-liner
     match runOrKill "firefox" with
