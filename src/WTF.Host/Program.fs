@@ -255,8 +255,11 @@ let mutable history = History.create cfg.HistoryLimit world
 /// pure delta to every historical snapshot and re-anchor Present on the now-live
 /// `world`. Result: Undo/Redo rewind the user's layout deltas without ever
 /// rewinding the live window set (orphaning a surface the brain then can't manage)
-/// or the physical screen. `history` is recorded ONLY here and in dispatch, so the
-/// two together keep it from desyncing. Must run AFTER `world` is updated.
+/// or the physical screen. Must run AFTER `world` is updated. (Two other
+/// out-of-band world writes — LoadSession and a config reload's Gaps — do NOT
+/// rebase: they change only settings/scalars, never the window set, so they can't
+/// orphan a surface; the accepted cost is that a later Undo also reverts them,
+/// a pre-existing limitation distinct from the orphan/ghost class this guards.)
 let private rebaseHistory (delta: World -> World) =
     history <- History.map delta history
     history <- { history with Present = world }
@@ -727,8 +730,18 @@ let onViewMap (id: int) (appId: nativeint) (title: nativeint) : unit =
     // A map is NOT an undo point (AddWindow is excluded from isUndoable): fold the
     // new surface into EVERY undo snapshot instead of pushing a step, so an Undo can
     // never rewind to a pre-map snapshot and orphan a window the brain can no longer
-    // manage. See rebaseHistory / History.map.
-    rebaseHistory (fun w -> fst (Reducer.apply (AddWindow info) w))
+    // manage. Pin it to the workspace it ACTUALLY mapped on (a manage rule may have
+    // shifted it elsewhere or floated it) and mirror its float state — both derived
+    // from the LIVE world — so undo restores it in place instead of teleporting it
+    // to each snapshot's Current (which an undoable SwitchWorkspace can diverge).
+    world.Workspaces
+    |> List.tryFind (fun ws ->
+        match ws.Stack with
+        | Some s -> List.contains id (Stack.toList s)
+        | None -> false)
+    |> Option.iter (fun landed ->
+        let floatRect = Map.tryFind id landed.Floating
+        rebaseHistory (World.graftWindowAt landed.Tag info floatRect))
     applyEffects effects
     // Focus what the WORLD now focuses, not `id` unconditionally: a manage rule
     // (e.g. ShiftToWorkspace) may have moved this surface to another workspace and
