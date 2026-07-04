@@ -723,7 +723,7 @@ index 2686a5b..f6af5db 100644
  	return true;
  }
 diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
-index c8f84fc..8f58f0d 100644
+index c8f84fc..a695d4b 100644
 --- a/types/scene/wlr_scene.c
 +++ b/types/scene/wlr_scene.c
 @@ -803,6 +803,12 @@ struct wlr_scene_rect *wlr_scene_rect_create(struct wlr_scene_tree *parent,
@@ -853,3 +853,33 @@ index c8f84fc..8f58f0d 100644
  				.ignore_transparent = false,
  			};
  			// Render the actual blur behind the surface
+@@ -2942,6 +3023,29 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
+ 		struct blur_data *blur_data = &scene_output->scene->blur_data;
+ 		pixman_region32_t *damage = &render_data.damage;
+ 
++		// WTF: keep per-rect backdrop-blur / refraction lenses (Liquid Glass
++		// rings) live. A lens samples a footprint LARGER than its own rect — every
++		// source pixel within blur_data_calc_size (and the smaller refraction
++		// offset) contributes to what it shows. scenefx otherwise only re-renders
++		// the sub-area of a lens that already intersects the incoming frame damage,
++		// so when content the lens REFLECTS changes without the lens's own rect
++		// being damaged — e.g. a window repainting just inside a ring that sits over
++		// the gap — the lens keeps its last sample and freezes with a stale, phantom
++		// reflection. Re-add the whole lens region to the damage whenever the
++		// incoming damage lands inside the lens's sampling footprint, forcing it to
++		// re-sample the fresh backdrop. Only fires when there is already damage in
++		// range, so a fully idle output still does no extra work.
++		pixman_region32_t lens_footprint;
++		pixman_region32_init(&lens_footprint);
++		pixman_region32_copy(&lens_footprint, &blur_region);
++		wlr_region_expand(&lens_footprint, &lens_footprint,
++			blur_data_calc_size(blur_data));
++		pixman_region32_intersect(&lens_footprint, &lens_footprint, damage);
++		if (!pixman_region32_empty(&lens_footprint)) {
++			pixman_region32_union(damage, damage, &blur_region);
++		}
++		pixman_region32_fini(&lens_footprint);
++
+ 		// ensure that the damage isn't expanding past the output's size
+ 		int32_t damage_width = damage->extents.x2 - damage->extents.x1;
+ 		int32_t damage_height = damage->extents.y2 - damage->extents.y1;
