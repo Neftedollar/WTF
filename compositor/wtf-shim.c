@@ -47,6 +47,7 @@
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_pointer.h>
+#include <linux/input-event-codes.h>   /* BTN_LEFT for the tiled-drag gesture */
 #include <scenefx/types/wlr_scene.h>
 #include <scenefx/types/fx/blur_data.h>
 #include <scenefx/types/fx/corner_location.h>
@@ -88,6 +89,12 @@ enum wtf_cursor_mode {
 	WTF_CURSOR_PASSTHROUGH,
 	WTF_CURSOR_MOVE,
 	WTF_CURSOR_RESIZE,
+	/* Dragging a TILED window to rearrange it (mod+left-drag). The scene node
+	 * follows the pointer as a "ghost"; on release the brain swaps the dragged
+	 * window with the tile under the cursor. Distinct from MOVE (which is for
+	 * floating windows and writes geometry back) — here the tiler owns geometry,
+	 * so the ghost is purely visual and the layout is untouched until the drop. */
+	WTF_CURSOR_TILE_DRAG,
 };
 
 struct wtf_server {
@@ -633,6 +640,15 @@ static bool animate_toplevels(void) {
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		if (!t->mapped || !t->anim_init) {
+			continue;
+		}
+		/* While a tile is being dragged its scene node is driven by the pointer
+		 * (process_cursor_tile_drag), so the layout lerp must not fight it. Its
+		 * anim_x/anim_y are left stale; on release cursor_mode returns to
+		 * PASSTHROUGH and this resumes, sliding it to its (possibly swapped)
+		 * target. */
+		if (t == server.grabbed_toplevel &&
+				server.cursor_mode == WTF_CURSOR_TILE_DRAG) {
 			continue;
 		}
 		double dx = t->target_x - t->anim_x;
@@ -1320,6 +1336,34 @@ static void process_cursor_move(struct wtf_server *srv) {
 	toplevel->y = toplevel->scene_tree->node.y;
 }
 
+/* Move a dragged TILED window's scene node (and its border/shadow/glow siblings)
+ * to follow the pointer as a ghost. Unlike process_cursor_move this does NOT
+ * write toplevel->x/y — the tiler still owns the window's authoritative geometry,
+ * so the layout is untouched until the drop swaps it. Mirrors the sibling-node
+ * offsets in animate_toplevels (which skips this window while TILE_DRAG). */
+static void process_cursor_tile_drag(struct wtf_server *srv) {
+	struct wtf_toplevel *t = srv->grabbed_toplevel;
+	if (t == NULL || t->scene_tree == NULL) {
+		return;
+	}
+	int px = (int)(srv->cursor->x - srv->grab_x);
+	int py = (int)(srv->cursor->y - srv->grab_y);
+	wlr_scene_node_set_position(&t->scene_tree->node, px, py);
+	if (t->border != NULL) {
+		wlr_scene_node_set_position(&t->border->node,
+			px - g_border_width, py - g_border_width);
+	}
+	if (t->shadow != NULL) {
+		int m = (int)ceilf(g_shadow_sigma);
+		wlr_scene_node_set_position(&t->shadow->node,
+			px - m + g_shadow_dx, py - m + g_shadow_dy);
+	}
+	if (t->glow != NULL) {
+		int gm = (int)ceilf(g_glow_sigma) + g_border_width;
+		wlr_scene_node_set_position(&t->glow->node, px - gm, py - gm);
+	}
+}
+
 static void process_cursor_resize(struct wtf_server *srv) {
 	struct wtf_toplevel *toplevel = srv->grabbed_toplevel;
 	/* Grabs can only start from the xdg request_move/resize listeners today —
@@ -1378,6 +1422,9 @@ static void process_cursor_motion(struct wtf_server *srv, uint32_t time) {
 	} else if (srv->cursor_mode == WTF_CURSOR_RESIZE) {
 		process_cursor_resize(srv);
 		return;
+	} else if (srv->cursor_mode == WTF_CURSOR_TILE_DRAG) {
+		process_cursor_tile_drag(srv);
+		return;
 	}
 
 	double sx, sy;
@@ -1421,11 +1468,42 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
 	struct wtf_toplevel *toplevel = desktop_toplevel_at(srv,
 		srv->cursor->x, srv->cursor->y, &surface, &sx, &sy);
 	if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+		/* A tiled drag ends here: tell the brain to swap the dragged window with
+		 * the tile under the cursor (0 = dropped on empty space / itself → no-op
+		 * in the reducer). Then reset; the next arrange (or the snap-back if no
+		 * swap) repositions the ghost via animate_toplevels. */
+		if (srv->cursor_mode == WTF_CURSOR_TILE_DRAG && srv->grabbed_toplevel) {
+			int dragged = srv->grabbed_toplevel->id;
+			int target = (toplevel && toplevel != srv->grabbed_toplevel)
+				? toplevel->id : 0;
+			if (g_cb.tile_drop) {
+				g_cb.tile_drop(dragged, target);
+			}
+		}
 		reset_cursor_mode(srv);
 	} else {
 		/* Focus-on-click kept as a convenience; the brain may still override
 		 * focus at any time via wtf_focus(). */
 		focus_toplevel(toplevel);
+		/* Mod+left-drag on a TILED window begins a tiled-drag-to-rearrange grab
+		 * (the floating-window move path is client-driven via request_move and is
+		 * left untouched). The modifier is the logo/Super key — matching the
+		 * default config modKey. The ghost follows the pointer; the layout is
+		 * untouched until release. */
+		struct wlr_keyboard *kb = wlr_seat_get_keyboard(srv->seat);
+		uint32_t mods = kb ? wlr_keyboard_get_modifiers(kb) : 0;
+		if (event->button == BTN_LEFT && (mods & WLR_MODIFIER_LOGO) &&
+				toplevel != NULL && !toplevel->floating &&
+				toplevel->scene_tree != NULL) {
+			srv->grabbed_toplevel = toplevel;
+			srv->cursor_mode = WTF_CURSOR_TILE_DRAG;
+			srv->grab_x = srv->cursor->x - toplevel->scene_tree->node.x;
+			srv->grab_y = srv->cursor->y - toplevel->scene_tree->node.y;
+			/* Raise the ghost so it stays visible over neighbouring tiles while
+			 * dragging (tiled windows don't overlap once dropped, so post-drop
+			 * z-order is immaterial). */
+			wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+		}
 	}
 }
 

@@ -100,6 +100,15 @@ delivers every key to the brain via the `key` callback (now carrying the utf32
 codepoint for text entry), so while an overlay is shown the host routes keys to
 it instead of matching keybinds. Esc/Enter dismiss it.
 
+The pointer is otherwise **C-driven** (click-to-focus happens in the shim), with
+one exception: **tiled-drag-to-swap**. `Super`+left-drag on a tiled window enters
+a `WTF_CURSOR_TILE_DRAG` cursor mode — the scene node follows the pointer as a
+ghost while the layout is left untouched — and on release the shim fires the
+`tile_drop(draggedId, targetId)` callback, the *first* pointer→brain event. The
+host turns it into a `SwapWith` command (the same reducer primitive as keyboard
+swap mode), so the brain stays the single source of truth for window order; the C
+side never reorders. The callback is blittable (`int, int`), so it is AOT-safe.
+
 Both surfaces are also the USER extension point (the ".NET as a platform" story,
 generalized from layouts): a plugin implementing `IWtfBarPlugin` or
 `IWtfOverlayPlugin` is discovered by the SAME `PluginLoader` scan and registered

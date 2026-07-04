@@ -44,6 +44,12 @@ struct wtf_callbacks {
      * handler must NOT call wtf_focus in response (would loop); it guards on the
      * brain already focusing `id`. Appended last to keep prior field offsets. */
     void (*view_focus)(int id);
+    /* A TILED window was dragged with the pointer (mod+left-drag) and dropped
+     * onto another tile. `dragged_id` is the grabbed window, `target_id` is the
+     * tile under the cursor at release (0 if none / dropped on empty space). The
+     * brain swaps them (SwapWith) — the C side never reorders. Appended last to
+     * keep prior field offsets stable for the F# Sequential-layout mirror. */
+    void (*tile_drop)(int dragged_id, int target_id);
 };
 
 /* Register callbacks and run the compositor event loop. Blocks until quit.
