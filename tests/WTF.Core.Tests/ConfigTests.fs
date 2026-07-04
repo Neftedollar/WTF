@@ -151,6 +151,7 @@ let ``WtfConfig.defaults pins every default value`` () =
     Assert.False(d.Blur)
     Assert.Equal(1.0, d.Scale)
     Assert.Equal(64, d.HistoryLimit)
+    Assert.Equal("none", d.EffectStrategy)   // #6: default = the built-in no-op
     Assert.Empty(d.Keys)
     Assert.Empty(d.ManageHook)
     Assert.Empty(d.StartupApps)
@@ -171,6 +172,7 @@ let ``each ConfigBuilder appearance op writes its own field`` () =
             inactiveBorder "#222222"
             cornerRadius 9
             blur true
+            effectStrategy "dim-unfocused"
             scale 2.0
             historyLimit 7
             workspaces [ "a"; "b" ]
@@ -182,6 +184,7 @@ let ``each ConfigBuilder appearance op writes its own field`` () =
     Assert.Equal("#222222", c.InactiveBorder)
     Assert.Equal(9, c.CornerRadius)
     Assert.True(c.Blur)
+    Assert.Equal("dim-unfocused", c.EffectStrategy)
     Assert.Equal(2.0, c.Scale)
     Assert.Equal(7, c.HistoryLimit)
     Assert.Equal<string list>([ "a"; "b" ], c.Workspaces)

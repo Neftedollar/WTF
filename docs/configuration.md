@@ -66,6 +66,7 @@ With `open WTF.TypeProviders`, three providers turn *your machine* into types:
 | `activeBorder` / `inactiveBorder` | hex | blue / gray | border colors |
 | `borderColor` | function | — | *dynamic* per-window border color (below) |
 | `windowOpacity` | function | — | *dynamic* per-window opacity |
+| `effectStrategy` | string | `"none"` | pluggable per-window effect strategy (below) |
 | `cornerRadius` | int | `0` | rounded corners, px (scenefx) |
 | `blur` | bool | `false` | backdrop blur behind translucent windows |
 | `shadow` + `shadowSigma/Color/Opacity/Offset` | — | off | drop shadows — see [Appearance](appearance.md) |
@@ -371,6 +372,48 @@ reference rule as a layout plugin — see `examples/`.)
 Colliding names replace last-wins (logged), so a plugin overlay named `"omnibox"`
 overrides the built-in launcher. Third-party bars/launchers can instead stay
 external layer-shell clients over the agent socket — both paths are supported.
+
+## Custom effect strategies
+
+`borderColor` / `windowOpacity` are the *built-in* per-window appearance hooks.
+An **effect strategy** is the pluggable version: a named function
+`RenderContext -> WindowEffect list` that decides which per-window effects apply,
+selected by name so a plugin can ship it:
+
+```fsharp
+effectStrategy "dim-unfocused"    // default is "none" (no extra effects)
+```
+
+The name resolves against the effect registry, which always has the built-in
+`"none"` (identity — this is byte-for-byte today's behavior) plus any strategies
+contributed by plugins. An unknown name degrades to `"none"`. A strategy returns
+zero or more `WindowEffect`s per window, layered **on top of** the static
+appearance (a window that stops matching reverts cleanly):
+
+- **`SetOpacity f`** — window opacity `0..1` (clamped).
+- **`SetBorderColor "#hex"`** — border color (bad hex is ignored, keeping the
+  static color).
+
+Ship one from `~/.config/wtf/plugins/` by implementing **`IWtfEffectPlugin`**
+(same loader / `<Private>false</Private>` rule as layouts and surfaces):
+
+```fsharp
+type MyEffects() =
+    interface IWtfEffectPlugin with
+        member _.Name = "MyEffects"
+        member _.Strategies =
+            [ "dim-unfocused",
+                (fun ctx -> if ctx.Focused then [] else [ SetOpacity 0.6 ])
+              "paint-firefox",
+                (fun ctx ->
+                    if ctx.Window.AppId = "firefox" then [ SetBorderColor "#ff8800" ] else []) ]
+```
+
+**Honest scope:** GPU effects (blur, shadow, corner radius) are fixed in the C /
+scenefx layer and are *not* expressed here — a strategy composes the per-window
+primitives the WM can already drive per window (opacity, border color). New
+primitives are added additively as new `WindowEffect` cases. A throwing strategy
+contributes no effects (logged, never fatal), like the appearance functions.
 
 ## Safe mode
 

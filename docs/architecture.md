@@ -111,6 +111,15 @@ The standalone exes are thin layer-shell wrappers around the *same* shared
 render, so both paths look identical. Under NativeAOT the host has no embedded
 surface (it uses the external `wtf-bar` / `wtf-omnibox`).
 
+The SAME loader scan carries a third extension interface, `IWtfEffectPlugin`
+(alongside `IWtfLayoutPlugin` and the surfaces): its named strategies flow into
+`EffectRegistry`, and the host resolves the config's `effectStrategy` name to a
+`RenderContext -> WindowEffect list` applied per window in the restyle path,
+layered on top of the static appearance. The built-in `"none"` strategy keeps
+this byte-for-byte today's behavior; only the *composition/targeting* of the
+per-window primitives (opacity, border color) is pluggable — the atomic GPU
+effects stay fixed in C/scenefx.
+
 ## Builds
 
 Two flavors from one tree:

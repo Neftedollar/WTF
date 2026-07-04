@@ -113,7 +113,9 @@ animSpeed 0.30          // window slide/fade easing; 1.0 = instant
 ```
 
 Windows ease into their tile positions and fade on open. Per-window opacity
-rules use the `windowOpacity` function.
+rules use the `windowOpacity` function; for reusable, plugin-shippable per-window
+effects (opacity + border color, selected by name) see **effect strategies** and
+`effectStrategy` in [Configuration](configuration.md#custom-effect-strategies).
 
 ## Wallpapers
 

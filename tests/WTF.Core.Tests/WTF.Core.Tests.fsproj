@@ -27,6 +27,7 @@
     <Compile Include="WallpaperTests.fs" />
     <Compile Include="WallpaperPaletteTests.fs" />
     <Compile Include="SurfaceTests.fs" />
+    <Compile Include="EffectTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
