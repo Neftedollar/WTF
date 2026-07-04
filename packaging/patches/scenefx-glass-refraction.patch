@@ -113,7 +113,7 @@ index f190801..9370068 100644
   * Add a node displaying a shadow to the scene-graph.
   */
 diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
-index 0592c4d..eb8840e 100644
+index 0592c4d..cee63cb 100644
 --- a/render/fx_renderer/fx_pass.c
 +++ b/render/fx_renderer/fx_pass.c
 @@ -376,6 +376,34 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
@@ -170,14 +170,14 @@ index 0592c4d..eb8840e 100644
 +		// instead of stale/uninitialised effects-buffer pixels (which read as
 +		// white blow-outs along straight edges).
 +		// Peak bend is |slope|*refraction; the chromatic split adds
-+			// |slope|*chromatic_aberration, and the steepest profile (`lip`) drives
-+			// |slope| to ~1.4 — so scale BOTH by that before the +4 cushion, else a
-+			// high CA or the lip surface samples past the copied margin (stale px).
-+			float lg_max_slope = 1.4f;
-+			float lens_disp = lg_max_slope * (fx_options->tex_options.refraction
-+					+ fx_options->tex_options.chromatic_aberration);
-+			int lens_margin = (int)lens_disp + 4;
-+			wlr_region_expand(&damage, &damage, lens_margin);
++		// |slope|*chromatic_aberration, and the steepest profile (`lip`) drives
++		// |slope| to ~1.4 — so scale BOTH by that before the +4 cushion, else a
++		// high CA or the lip surface samples past the copied margin (stale px).
++		float lg_max_slope = 1.4f;
++		float lens_disp = lg_max_slope * (fx_options->tex_options.refraction
++			+ fx_options->tex_options.chromatic_aberration);
++		int lens_margin = (int)lens_disp + 4;
++		wlr_region_expand(&damage, &damage, lens_margin);
 +		fx_framebuffer_bind(pass->fx_effect_framebuffers->effects_buffer);
 +		fx_options->tex_options.base.clip = &damage;
 +		fx_options->tex_options.base.texture = fx_texture_from_buffer(

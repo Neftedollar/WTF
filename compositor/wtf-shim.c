@@ -372,6 +372,16 @@ static int    g_lg_surface = 0;                 /* 0 convex_circle .. 3 lip */
  * dialed watercolorRefraction of their own — so `glass true` refracts visibly
  * standalone rather than multiplying a zero. ~8px reads on a thin rounded frame. */
 #define WTF_GLASS_BASE_REFRACTION_PX 8.0f
+
+/* The border becomes the "honest glass ring" — window interior clipped OUT and the
+ * ring raised ABOVE the window so the bead lenses BOTH sides (inner window edge +
+ * outer wallpaper) — when EITHER watercolor OR standalone Liquid Glass is on. This
+ * MUST match the base_enabled gate in apply_border; keying clip/restack off
+ * g_glass_enabled alone left standalone glass as an un-clipped rect below the
+ * window, refracting only the outer band (a subset of watercolor). */
+static inline bool glass_ring_wanted(void) {
+	return g_glass_enabled || g_lg_enabled;
+}
 /* macOS-style drop shadow (scenefx shadow node per toplevel, below border). */
 static bool  g_shadow_enabled = false;
 static float g_shadow_sigma = 24.0f;      /* blur spread in px */
@@ -540,7 +550,7 @@ static void sync_glow(struct wtf_toplevel *t) {
 	 * window/border is lower. Re-assert every sync: restacks happen around us. */
 	if (t->shadow != NULL) {
 		wlr_scene_node_place_above(&t->glow->node, &t->shadow->node);
-	} else if (g_glass_enabled || t->border == NULL) {
+	} else if (glass_ring_wanted() || t->border == NULL) {
 		wlr_scene_node_place_below(&t->glow->node, &t->scene_tree->node);
 	} else {
 		wlr_scene_node_place_below(&t->glow->node, &t->border->node);
@@ -578,7 +588,7 @@ static void apply_border(struct wtf_toplevel *t, const float base[4]) {
 	 * backdrop-blur pass to have anything to lens). When both are off this is
 	 * exactly the old `g_glass_enabled` gate, so the plain-border path is
 	 * unchanged. */
-	bool base_enabled = g_glass_enabled || g_lg_enabled;
+	bool base_enabled = glass_ring_wanted();
 	float a = base_enabled ? base[3] * tint : base[3];
 	/* wlroots rect colours are PREMULTIPLIED: rgb must be scaled by alpha, or a
 	 * translucent tint renders as an additive glow (an opaque-looking white/pale
@@ -629,7 +639,7 @@ static void border_apply_clip(struct wtf_toplevel *t) {
 		return;
 	}
 	struct clipped_region clip;
-	if (g_glass_enabled) {
+	if (glass_ring_wanted()) {
 		clip.area = (struct wlr_box){ g_border_width, g_border_width, t->cw, t->ch };
 		clip.corner_radius = g_corner_radius;
 		clip.corners = CORNER_LOCATION_ALL;
@@ -652,7 +662,7 @@ static void border_restack(struct wtf_toplevel *t) {
 		/* Glow above the drop shadow, below the frame: light hugging the border. */
 		wlr_scene_node_raise_to_top(&t->glow->node);
 	}
-	if (g_glass_enabled) {
+	if (glass_ring_wanted()) {
 		wlr_scene_node_raise_to_top(&t->scene_tree->node);
 		if (t->border != NULL) {
 			wlr_scene_node_raise_to_top(&t->border->node);
@@ -3085,12 +3095,12 @@ void wtf_set_glass(int enabled, double tint_alpha, double refraction, int frost)
 	schedule_frame();
 }
 
-/* Liquid Glass (#7): layer the richer rim effect on the watercolor refraction.
- * PART 1 (shipped shader): `refraction_index` scales the watercolor bend, so
- * `wtf_set_glass` must have set a base refraction for this to show. PART 2 (needs
- * the scenefx GLSL patch + GPU QA): chromatic_aberration / noise / specular /
- * surface are stored here and forwarded to the border rects, but stay no-ops
- * visually until the fragment shader grows the matching uniforms. */
+/* Liquid Glass (#7): the richer rim effect over the refraction shader. It is a
+ * SUPERSET of watercolor and self-contained — `glass` alone gives the border its
+ * own ~8px base bend (WTF_GLASS_BASE_REFRACTION_PX) and the honest ring, so it
+ * refracts without `watercolor` also being on. `refraction_index` scales the base
+ * bend; chromatic_aberration / noise / specular / surface drive the Part-2 GLSL
+ * uniforms (all live in the shipped scenefx patch). */
 void wtf_set_liquid_glass(int enabled, double refraction_index,
 		double chromatic_aberration, double noise, int specular, int surface) {
 	g_lg_enabled = (enabled != 0);
@@ -3106,13 +3116,18 @@ void wtf_set_liquid_glass(int enabled, double refraction_index,
 	g_lg_surface = (surface >= 0 && surface <= 3) ? surface : g_lg_surface;
 	if (g_lg_enabled) {
 		wlr_log(WLR_INFO, "wtf_set_liquid_glass: rim knobs live "
-			"(aberration=%.2f noise=%.2f specular=%d surface=%d); visible with "
-			"watercolor + a corner radius (#7 part 2)",
+			"(aberration=%.2f noise=%.2f specular=%d surface=%d); needs a corner "
+			"radius to shape the bead (#7 part 2)",
 			g_lg_chromatic_aberration, g_lg_noise, g_lg_specular, g_lg_surface);
 	}
 	struct wtf_toplevel *t;
 	wl_list_for_each(t, &server.toplevels, link) {
 		apply_border(t, t->border_base);
+		/* Toggling standalone glass flips the honest-ring state too (clip hole +
+		 * raising the ring above the window), so re-run these like wtf_set_glass —
+		 * apply_border alone would leave a stale un-clipped rect below the window. */
+		border_apply_clip(t);
+		border_restack(t);
 	}
 	schedule_frame();
 }
