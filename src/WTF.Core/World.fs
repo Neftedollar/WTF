@@ -193,6 +193,42 @@ module World =
         | Some info -> { w with Windows = Map.add id { info with Floating = flag } w.Windows }
         | None -> w
 
+    /// Graft a window onto a SPECIFIC workspace (by tag), mirroring its floating
+    /// state (Some rect = floating at that rect; None = tiled). The host uses this
+    /// to fold a just-mapped surface into historical undo snapshots at the
+    /// workspace it ACTUALLY mapped on — NOT each snapshot's Current, which an
+    /// undoable SwitchWorkspace can leave pointing elsewhere, so a plain AddWindow
+    /// (which inserts into Current) would teleport the window to the wrong
+    /// workspace on undo. Pure and total: a window already stacked ANYWHERE is only
+    /// refreshed in `Windows` (never double-inserted — the stack-uniqueness
+    /// invariant holds); an unknown tag leaves the stacks untouched. Keeps the
+    /// Floating mirror in lockstep with the map it writes.
+    let graftWindowAt (tag: string) (info: WindowInfo) (floating: Rect option) (w: World) : World =
+        let alreadyStacked =
+            w.Workspaces
+            |> List.exists (fun ws ->
+                match ws.Stack with
+                | Some s -> List.contains info.Id (Stack.toList s)
+                | None -> false)
+        let w = { w with Windows = Map.add info.Id { info with Floating = Option.isSome floating } w.Windows }
+        if alreadyStacked then w
+        else
+            { w with
+                Workspaces =
+                    w.Workspaces
+                    |> List.map (fun ws ->
+                        if ws.Tag <> tag then ws
+                        else
+                            let stack =
+                                match ws.Stack with
+                                | Some s -> Stack.insertUp info.Id s
+                                | None -> Stack.singleton info.Id
+                            let floatMap =
+                                match floating with
+                                | Some r -> Map.add info.Id r ws.Floating
+                                | None -> ws.Floating
+                            { ws with Stack = Some stack; Floating = floatMap }) }
+
     /// Default geometry for a newly-floated window: centered, ~60% of the screen.
     let defaultFloatRect (screen: Rect) : Rect =
         let width = screen.Width * 3 / 5
