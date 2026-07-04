@@ -206,10 +206,10 @@ index 0592c4d..4837ab4 100644
  		pixman_region32_translate(&translucent_region, dst_box.x, dst_box.y);
  		pixman_region32_intersect(&translucent_region, &translucent_region, options->clip);
 diff --git a/render/fx_renderer/gles2/shaders/tex.frag b/render/fx_renderer/gles2/shaders/tex.frag
-index 08ad3a1..9cec429 100644
+index 08ad3a1..f632b0c 100644
 --- a/render/fx_renderer/gles2/shaders/tex.frag
 +++ b/render/fx_renderer/gles2/shaders/tex.frag
-@@ -37,18 +37,185 @@ uniform float radius_bottom_right;
+@@ -37,18 +37,191 @@ uniform float radius_bottom_right;
  
  uniform bool discard_transparent;
  
@@ -288,9 +288,15 @@ index 08ad3a1..9cec429 100644
 +	return -s;                               // 0 convex_circle (part-1 default)
 +}
 +
-+// Cheap hash noise in [0,1] for the frosted micro-grain (glass_noise).
++// Cheap hash noise in [0,1] for the frosted micro-grain (glass_noise). `p` is
++// raw gl_FragCoord (hundreds..thousands); dotting that with a big constant would
++// overflow fp16 on mediump-only GLES2 (Inf -> sin NaN -> speckle on the rim, the
++// same fp16 trap SD_SCALE guards for the distance field). Fold the coord to a
++// small tile with fract() first so every term stays well inside fp16 while still
++// varying per pixel.
 +float glass_hash(vec2 p) {
-+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
++	vec2 hp = fract(p * 0.017);
++	return fract(sin(dot(hp, vec2(127.1, 311.7))) * 43758.5453);
 +}
 +
 +// Convex glass bead: model a lens cross-section ACROSS the ring width. `t` runs
@@ -399,7 +405,7 @@ index 08ad3a1..9cec429 100644
          size - 0.5,
          position + 0.25,
          radius_top_left,
-@@ -56,7 +223,39 @@ void main() {
+@@ -56,7 +229,39 @@ void main() {
          radius_bottom_left,
          radius_bottom_right
      );
@@ -441,10 +447,10 @@ index 08ad3a1..9cec429 100644
  	if (discard_transparent && gl_FragColor.a == 0.0) {
  		discard;
 diff --git a/render/fx_renderer/gles3/shaders/tex.frag b/render/fx_renderer/gles3/shaders/tex.frag
-index f8f7edf..b20afab 100644
+index f8f7edf..a0fe16d 100644
 --- a/render/fx_renderer/gles3/shaders/tex.frag
 +++ b/render/fx_renderer/gles3/shaders/tex.frag
-@@ -35,20 +35,175 @@ uniform float radius_bottom_right;
+@@ -35,20 +35,179 @@ uniform float radius_bottom_right;
  
  uniform bool discard_transparent;
  
@@ -515,9 +521,13 @@ index f8f7edf..b20afab 100644
 +	return -s;                               // 0 convex_circle (part-1 default)
 +}
 +
-+// Cheap hash noise in [0,1] for the frosted micro-grain (glass_noise).
++// Cheap hash noise in [0,1] for the frosted micro-grain (glass_noise). Fold the
++// raw gl_FragCoord to a small tile with fract() first: dotting hundreds..thousands
++// of px with a big constant overflows fp16 on mediump GPUs (Inf -> sin NaN). This
++// path is highp, but keep it identical to the gles2 version for one behaviour.
 +float glass_hash(vec2 p) {
-+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
++	vec2 hp = fract(p * 0.017);
++	return fract(sin(dot(hp, vec2(127.1, 311.7))) * 43758.5453);
 +}
 +
 +// Convex glass bead: model a lens cross-section ACROSS the ring width. `t` runs
@@ -624,7 +634,7 @@ index f8f7edf..b20afab 100644
          size - 0.5,
          position + 0.25,
          radius_top_left,
-@@ -56,7 +211,41 @@ void main() {
+@@ -56,7 +215,41 @@ void main() {
          radius_bottom_left,
          radius_bottom_right
      );
