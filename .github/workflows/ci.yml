@@ -47,12 +47,23 @@ jobs:
           sudo modprobe vgem || sudo modprobe vkms || true
           ls -la /dev/dri || echo "no /dev/dri — smoke will fail loudly"
       - name: build + install + smoke inside ${{ matrix.image }}
+        # Container package-repo pulls are occasionally flaky (network/mirror hiccups) —
+        # observed both attempt-1-fails-attempt-2-passes on identical commits. Retry
+        # before failing the job instead of relying on a manual re-run.
         run: |
-          docker run --rm --device /dev/dri \
-            -v "$PWD:/w" -w /w \
-            -e WTF_ALLOW_ROOT=1 \
-            ${{ matrix.image }} \
-            bash scripts/ci-inside.sh
+          for attempt in 1 2 3; do
+            if docker run --rm --device /dev/dri \
+              -v "$PWD:/w" -w /w \
+              -e WTF_ALLOW_ROOT=1 \
+              ${{ matrix.image }} \
+              bash scripts/ci-inside.sh; then
+              exit 0
+            fi
+            echo "smoke run failed (attempt $attempt/3), retrying in 5s..." >&2
+            sleep 5
+          done
+          echo "smoke run failed after 3 attempts" >&2
+          exit 1
       - name: upload smoke log on failure
         if: failure()
         uses: actions/upload-artifact@v4
