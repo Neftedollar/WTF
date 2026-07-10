@@ -129,7 +129,8 @@ if command -v dotnet >/dev/null 2>&1 || [ -x "$TARGET_HOME/.dotnet/dotnet" ]; th
 else
   echo ">> installing .NET 10 SDK into $TARGET_HOME/.dotnet (user $TARGET_USER)"
   TMP_DI="$(mktemp)"
-  curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$TMP_DI"
+  curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused \
+    https://dot.net/v1/dotnet-install.sh -o "$TMP_DI"
   chmod +x "$TMP_DI"
   if [ "$TARGET_USER" = "$(id -un)" ]; then
     bash "$TMP_DI" --channel 10.0 --install-dir "$TARGET_HOME/.dotnet"
